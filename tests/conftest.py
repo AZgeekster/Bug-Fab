@@ -140,12 +140,15 @@ def sqlite_storage_factory(
 def valid_metadata_dict() -> dict[str, Any]:
     """A canonical, all-fields-populated metadata dict (Python dict form)."""
     return {
+        "protocol_version": "0.1",
         "title": "Submit form does not clear after success",
+        "client_ts": "2026-04-29T12:00:00+00:00",
         "report_type": "bug",
         "description": "Steps: open page; submit; observe stale form fields.",
         "expected_behavior": "Form clears on successful submission.",
         "severity": "medium",
         "tags": ["regression", "ui"],
+        "reporter": {"name": "", "email": "", "user_id": ""},
         "context": {
             "url": "http://localhost/sample/path",
             "module": "sample",

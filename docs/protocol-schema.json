@@ -1,0 +1,467 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AZgeekster/Bug-Fab/blob/main/docs/protocol-schema.json",
+  "title": "Bug-Fab Wire Protocol v0.1",
+  "description": "Authoritative JSON Schema for the Bug-Fab v0.1 wire protocol. Auto-generated from bug_fab/schemas.py Pydantic models. If this disagrees with docs/PROTOCOL.md prose, this schema wins.",
+  "$defs": {
+    "BugReportContext": {
+      "additionalProperties": true,
+      "description": "Auto-captured browser context attached to every submission.\n\n`source_mapping` is consumer-supplied opaque metadata; the server does\nNOT compute URL\u2192file mappings (that responsibility moved to the client\nor to a consumer-provided resolver hook in v0.2+).\n\n`user_agent` here is the *client-reported* value, kept for diagnostics.\nThe adapter captures the request-header User-Agent separately as the\nsource of truth (`server_user_agent` on `BugReportDetail`).",
+      "properties": {
+        "url": {
+          "default": "",
+          "title": "Url",
+          "type": "string"
+        },
+        "module": {
+          "default": "",
+          "title": "Module",
+          "type": "string"
+        },
+        "user_agent": {
+          "default": "",
+          "title": "User Agent",
+          "type": "string"
+        },
+        "viewport_width": {
+          "default": 0,
+          "title": "Viewport Width",
+          "type": "integer"
+        },
+        "viewport_height": {
+          "default": 0,
+          "title": "Viewport Height",
+          "type": "integer"
+        },
+        "console_errors": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Console Errors",
+          "type": "array"
+        },
+        "network_log": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Network Log",
+          "type": "array"
+        },
+        "source_mapping": {
+          "additionalProperties": true,
+          "title": "Source Mapping",
+          "type": "object"
+        },
+        "app_version": {
+          "default": "",
+          "title": "App Version",
+          "type": "string"
+        },
+        "environment": {
+          "default": "",
+          "title": "Environment",
+          "type": "string"
+        }
+      },
+      "title": "BugReportContext",
+      "type": "object"
+    },
+    "BugReportCreate": {
+      "description": "Submission payload sent as a JSON string in the multipart `metadata` field.\n\n`report_type` is a `Literal` (not enum) because the protocol freezes the\ntwo values and there is no read-side deprecation concern.\n\n`protocol_version` is required and must equal `\"0.1\"`. Future versions\nbump this. Adapters MUST reject unknown values with `400 unsupported_protocol_version`.\n\n`client_ts` is a client-side ISO-8601 timestamp captured when the user\npressed Submit. Diagnostic only \u2014 the server's `received_at` /\n`created_at` is the authoritative timeline.",
+      "properties": {
+        "protocol_version": {
+          "const": "0.1",
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "client_ts": {
+          "minLength": 1,
+          "title": "Client Ts",
+          "type": "string"
+        },
+        "report_type": {
+          "default": "bug",
+          "enum": [
+            "bug",
+            "feature_request"
+          ],
+          "title": "Report Type",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "expected_behavior": {
+          "default": "",
+          "title": "Expected Behavior",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity",
+          "default": "medium"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "reporter": {
+          "$ref": "#/$defs/Reporter"
+        },
+        "context": {
+          "$ref": "#/$defs/BugReportContext"
+        }
+      },
+      "required": [
+        "protocol_version",
+        "title",
+        "client_ts"
+      ],
+      "title": "BugReportCreate",
+      "type": "object"
+    },
+    "BugReportDetail": {
+      "description": "Full report payload returned by detail/status endpoints.\n\nExtends `BugReportSummary` with everything the viewer detail panel\nneeds: free-text fields, tags, the captured context, lifecycle log,\nand the dual user-agent fields (server-captured + client-reported).\n\n`client_reported_user_agent` mirrors `context.user_agent` but is\nsurfaced at the top level so consumers and viewers do not have to\nreach into the nested context to compare them.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "report_type": {
+          "default": "bug",
+          "title": "Report Type",
+          "type": "string"
+        },
+        "severity": {
+          "default": "medium",
+          "title": "Severity",
+          "type": "string"
+        },
+        "status": {
+          "default": "open",
+          "title": "Status",
+          "type": "string"
+        },
+        "module": {
+          "default": "",
+          "title": "Module",
+          "type": "string"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "has_screenshot": {
+          "default": true,
+          "title": "Has Screenshot",
+          "type": "boolean"
+        },
+        "github_issue_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Github Issue Url"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "expected_behavior": {
+          "default": "",
+          "title": "Expected Behavior",
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "reporter": {
+          "$ref": "#/$defs/Reporter"
+        },
+        "context": {
+          "$ref": "#/$defs/BugReportContext"
+        },
+        "lifecycle": {
+          "items": {
+            "$ref": "#/$defs/LifecycleEvent"
+          },
+          "title": "Lifecycle",
+          "type": "array"
+        },
+        "server_user_agent": {
+          "default": "",
+          "title": "Server User Agent",
+          "type": "string"
+        },
+        "client_reported_user_agent": {
+          "default": "",
+          "title": "Client Reported User Agent",
+          "type": "string"
+        },
+        "environment": {
+          "default": "",
+          "title": "Environment",
+          "type": "string"
+        },
+        "client_ts": {
+          "default": "",
+          "title": "Client Ts",
+          "type": "string"
+        },
+        "protocol_version": {
+          "default": "0.1",
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "updated_at": {
+          "default": "",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "github_issue_number": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Github Issue Number"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "created_at"
+      ],
+      "title": "BugReportDetail",
+      "type": "object"
+    },
+    "BugReportListResponse": {
+      "description": "Pagination envelope for `GET /reports`.",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/BugReportSummary"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "total": {
+          "title": "Total",
+          "type": "integer"
+        },
+        "page": {
+          "default": 1,
+          "title": "Page",
+          "type": "integer"
+        },
+        "page_size": {
+          "default": 20,
+          "title": "Page Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items",
+        "total"
+      ],
+      "title": "BugReportListResponse",
+      "type": "object"
+    },
+    "BugReportStatusUpdate": {
+      "description": "Body of `PUT /reports/{id}/status` \u2014 strict severity-style validation.",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "fix_commit": {
+          "default": "",
+          "title": "Fix Commit",
+          "type": "string"
+        },
+        "fix_description": {
+          "default": "",
+          "title": "Fix Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "BugReportStatusUpdate",
+      "type": "object"
+    },
+    "BugReportSummary": {
+      "description": "Compact representation used by list views and the index.\n\n`module`, `github_issue_url`, and `has_screenshot` are denormalized\nonto the summary so listings render without re-reading every detail\nfile or row.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "report_type": {
+          "default": "bug",
+          "title": "Report Type",
+          "type": "string"
+        },
+        "severity": {
+          "default": "medium",
+          "title": "Severity",
+          "type": "string"
+        },
+        "status": {
+          "default": "open",
+          "title": "Status",
+          "type": "string"
+        },
+        "module": {
+          "default": "",
+          "title": "Module",
+          "type": "string"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "has_screenshot": {
+          "default": true,
+          "title": "Has Screenshot",
+          "type": "boolean"
+        },
+        "github_issue_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Github Issue Url"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "created_at"
+      ],
+      "title": "BugReportSummary",
+      "type": "object"
+    },
+    "LifecycleEvent": {
+      "additionalProperties": true,
+      "description": "One entry in a report's lifecycle audit log.\n\nField names lock to `action / by / at` per audit IF16 \u2014 the prior-art\ntemplate/service drift (`status / changed_by / timestamp`) is the\ncautionary tale that motivated the lock.",
+      "properties": {
+        "action": {
+          "title": "Action",
+          "type": "string"
+        },
+        "by": {
+          "default": "",
+          "title": "By",
+          "type": "string"
+        },
+        "at": {
+          "title": "At",
+          "type": "string"
+        },
+        "fix_commit": {
+          "default": "",
+          "title": "Fix Commit",
+          "type": "string"
+        },
+        "fix_description": {
+          "default": "",
+          "title": "Fix Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "at"
+      ],
+      "title": "LifecycleEvent",
+      "type": "object"
+    },
+    "Reporter": {
+      "description": "Optional submitter identity attached to a bug report.\n\nAll fields are opaque strings, capped at 256 characters per the\n2026-04-28 spec-gap decisions (per `docs/decisions.md`). The protocol\ndoes not validate the format of these values \u2014 consumer user IDs vary\nwidely (UUIDs, emails, integers-as-strings, SSO subjects).\n\nAdapters MAY override the client-supplied values with server-derived\nidentity when they have their own auth context.",
+      "properties": {
+        "name": {
+          "default": "",
+          "maxLength": 256,
+          "title": "Name",
+          "type": "string"
+        },
+        "email": {
+          "default": "",
+          "maxLength": 256,
+          "title": "Email",
+          "type": "string"
+        },
+        "user_id": {
+          "default": "",
+          "maxLength": 256,
+          "title": "User Id",
+          "type": "string"
+        }
+      },
+      "title": "Reporter",
+      "type": "object"
+    },
+    "Severity": {
+      "description": "Locked severity vocabulary \u2014 adapters MUST reject other values with 422.\n\nWHY str-Enum (not StrEnum): Python 3.10 support is required, and StrEnum\nwas added in 3.11. Subclassing both `str` and `Enum` produces equivalent\nJSON behavior on the older interpreter.",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "Status": {
+      "description": "Locked status vocabulary for the lifecycle workflow.\n\nWHY four values: matches every audited prior implementation. Deprecated\nvalues (e.g., legacy `resolved`) MUST still parse on read per protocol;\nwrite-side validation is strict.",
+      "enum": [
+        "open",
+        "investigating",
+        "fixed",
+        "closed"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  }
+}

@@ -26,6 +26,23 @@ from bug_fab.schemas import (
     Status,
 )
 
+
+def _create(**overrides) -> BugReportCreate:
+    """Build a BugReportCreate with required fields filled in.
+
+    Tests use this when they want to exercise a specific optional field
+    without re-typing the required ones every time. Tests that explicitly
+    target required-field validation call ``BugReportCreate(...)`` directly.
+    """
+    defaults = {
+        "protocol_version": "0.1",
+        "title": "t",
+        "client_ts": "2026-04-29T12:00:00+00:00",
+    }
+    defaults.update(overrides)
+    return BugReportCreate(**defaults)
+
+
 # -----------------------------------------------------------------------------
 # Severity / Status enum strictness
 # -----------------------------------------------------------------------------
@@ -33,14 +50,14 @@ from bug_fab.schemas import (
 
 @pytest.mark.parametrize("value", ["low", "medium", "high", "critical"])
 def test_severity_accepts_locked_values(value: str) -> None:
-    payload = BugReportCreate(title="t", severity=value)
+    payload = _create(severity=value)
     assert payload.severity.value == value
 
 
 @pytest.mark.parametrize("value", ["urgent", "minor", "MAJOR", "Low", "Medium", "", "  ", "med"])
 def test_severity_rejects_unknown_values(value: str) -> None:
     with pytest.raises(ValidationError):
-        BugReportCreate(title="t", severity=value)
+        _create(severity=value)
 
 
 @pytest.mark.parametrize("value", ["open", "investigating", "fixed", "closed"])
@@ -86,18 +103,18 @@ def test_title_empty_string_rejected() -> None:
 
 
 def test_title_min_length_one() -> None:
-    payload = BugReportCreate(title="a")
+    payload = _create(title="a")
     assert payload.title == "a"
 
 
 def test_title_max_length_two_hundred() -> None:
-    payload = BugReportCreate(title="x" * 200)
+    payload = _create(title="x" * 200)
     assert len(payload.title) == 200
 
 
 def test_title_over_max_length_rejected() -> None:
     with pytest.raises(ValidationError):
-        BugReportCreate(title="x" * 201)
+        _create(title="x" * 201)
 
 
 # -----------------------------------------------------------------------------
@@ -106,12 +123,12 @@ def test_title_over_max_length_rejected() -> None:
 
 
 def test_tags_default_empty_list() -> None:
-    payload = BugReportCreate(title="t")
+    payload = _create()
     assert payload.tags == []
 
 
 def test_tags_accepts_list_of_strings() -> None:
-    payload = BugReportCreate(title="t", tags=["regression", "viewer"])
+    payload = _create(tags=["regression", "viewer"])
     assert payload.tags == ["regression", "viewer"]
 
 
@@ -124,12 +141,12 @@ def test_tags_rejects_non_list_string() -> None:
     error, not a single-element list.
     """
     with pytest.raises(ValidationError):
-        BugReportCreate(title="t", tags="a,b,c")  # type: ignore[arg-type]
+        _create(tags="a,b,c")  # type: ignore[arg-type]
 
 
 def test_tags_coerces_each_entry_to_string() -> None:
     """List of mixed-type entries is coerced to str by Pydantic v2."""
-    payload = BugReportCreate(title="t", tags=["a", "b"])
+    payload = _create(tags=["a", "b"])
     assert all(isinstance(tag, str) for tag in payload.tags)
 
 
@@ -140,20 +157,19 @@ def test_tags_coerces_each_entry_to_string() -> None:
 
 def test_context_environment_optional_and_round_trips() -> None:
     """`environment` lives inside ``context`` and round-trips via model_dump."""
-    payload = BugReportCreate(title="t", context=BugReportContext(environment="staging"))
+    payload = _create(context=BugReportContext(environment="staging"))
     dumped = payload.model_dump()
     assert dumped["context"]["environment"] == "staging"
 
 
 def test_context_environment_default_empty() -> None:
-    payload = BugReportCreate(title="t")
+    payload = _create()
     assert payload.context.environment == ""
 
 
 def test_context_extra_keys_allowed() -> None:
     """``BugReportContext`` allows extra keys (consumer-defined diagnostics)."""
-    payload = BugReportCreate(
-        title="t",
+    payload = _create(
         context={
             "url": "/x",
             "module": "m",
@@ -207,13 +223,76 @@ def test_environment_round_trips_at_top_level() -> None:
 
 @pytest.mark.parametrize("value", ["bug", "feature_request"])
 def test_report_type_accepts_locked_literals(value: str) -> None:
-    payload = BugReportCreate(title="t", report_type=value)
+    payload = _create(report_type=value)
     assert payload.report_type == value
 
 
 def test_report_type_rejects_other_values() -> None:
     with pytest.raises(ValidationError):
-        BugReportCreate(title="t", report_type="incident")  # type: ignore[arg-type]
+        _create(report_type="incident")  # type: ignore[arg-type]
+
+
+# -----------------------------------------------------------------------------
+# protocol_version (locked literal "0.1")
+# -----------------------------------------------------------------------------
+
+
+def test_protocol_version_required() -> None:
+    """Submission without ``protocol_version`` MUST fail validation.
+
+    Pinned at the schema layer so the contract holds independent of any
+    adapter's request handler.
+    """
+    with pytest.raises(ValidationError):
+        BugReportCreate(title="t", client_ts="2026-04-29T12:00:00+00:00")  # type: ignore[call-arg]
+
+
+def test_protocol_version_only_accepts_v0_1() -> None:
+    """Unknown versions MUST be rejected — adapter layer maps to 400 unsupported_protocol_version."""
+    with pytest.raises(ValidationError):
+        BugReportCreate(
+            protocol_version="0.2",  # type: ignore[arg-type]
+            title="t",
+            client_ts="2026-04-29T12:00:00+00:00",
+        )
+
+
+def test_client_ts_required_non_empty() -> None:
+    """``client_ts`` is required and must be non-empty (any ISO string is fine here)."""
+    with pytest.raises(ValidationError):
+        BugReportCreate(protocol_version="0.1", title="t")  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        BugReportCreate(protocol_version="0.1", title="t", client_ts="")
+
+
+# -----------------------------------------------------------------------------
+# Reporter sub-fields (256-char cap each, opaque otherwise)
+# -----------------------------------------------------------------------------
+
+
+def test_reporter_default_empty_subfields() -> None:
+    payload = _create()
+    assert payload.reporter.name == ""
+    assert payload.reporter.email == ""
+    assert payload.reporter.user_id == ""
+
+
+def test_reporter_round_trips_through_dump() -> None:
+    payload = _create(reporter={"name": "alice", "email": "a@example.com", "user_id": "u-42"})
+    dumped = payload.model_dump()
+    assert dumped["reporter"] == {
+        "name": "alice",
+        "email": "a@example.com",
+        "user_id": "u-42",
+    }
+
+
+@pytest.mark.parametrize("field", ["name", "email", "user_id"])
+def test_reporter_subfield_caps_at_256_chars(field: str) -> None:
+    """All reporter sub-fields are opaque strings capped at 256 chars (per 2026-04-28 decisions)."""
+    overlong = "x" * 257
+    with pytest.raises(ValidationError):
+        _create(reporter={field: overlong})
 
 
 # -----------------------------------------------------------------------------

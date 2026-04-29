@@ -1200,7 +1200,9 @@
     errorBox.textContent = "";
 
     const metadata = {
+      protocol_version: "0.1",
       title,
+      client_ts: new Date().toISOString(),
       report_type: overlay.querySelector("#bug-fab-type").value,
       description: overlay.querySelector("#bug-fab-description").value.trim(),
       expected_behavior: overlay.querySelector("#bug-fab-expected").value.trim(),

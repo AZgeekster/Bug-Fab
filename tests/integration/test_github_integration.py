@@ -322,7 +322,16 @@ def test_submit_does_not_call_github_when_disabled(app_factory, tiny_png: bytes)
         client = app_factory(github_sync=None)
         response = client.post(
             "/bug-reports",
-            data={"metadata": json.dumps({"title": "no-github", "context": {}})},
+            data={
+                "metadata": json.dumps(
+                    {
+                        "protocol_version": "0.1",
+                        "title": "no-github",
+                        "client_ts": "2026-04-29T12:00:00+00:00",
+                        "context": {},
+                    }
+                )
+            },
             files={"screenshot": ("shot.png", tiny_png, "image/png")},
         )
         assert response.status_code == 201
@@ -341,7 +350,16 @@ def test_submit_succeeds_even_when_github_create_issue_errors(app_factory, tiny_
     client = app_factory(github_sync=sync)
     response = client.post(
         "/bug-reports",
-        data={"metadata": json.dumps({"title": "github fail", "context": {}})},
+        data={
+            "metadata": json.dumps(
+                {
+                    "protocol_version": "0.1",
+                    "title": "github fail",
+                    "client_ts": "2026-04-29T12:00:00+00:00",
+                    "context": {},
+                }
+            )
+        },
         files={"screenshot": ("shot.png", tiny_png, "image/png")},
     )
     assert response.status_code == 201

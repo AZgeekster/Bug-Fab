@@ -21,7 +21,9 @@ from bug_fab._rate_limit import RateLimiter
 
 def _baseline_metadata() -> dict[str, Any]:
     return {
+        "protocol_version": "0.1",
         "title": "Submit form does not clear after success",
+        "client_ts": "2026-04-29T12:00:00+00:00",
         "report_type": "bug",
         "description": "Steps: open page; submit; observe stale form fields.",
         "expected_behavior": "Form clears on successful submission.",

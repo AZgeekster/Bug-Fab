@@ -46,6 +46,25 @@ class Status(str, Enum):
     CLOSED = "closed"
 
 
+class Reporter(BaseModel):
+    """Optional submitter identity attached to a bug report.
+
+    All fields are opaque strings, capped at 256 characters per the
+    2026-04-28 spec-gap decisions (per `docs/decisions.md`). The protocol
+    does not validate the format of these values — consumer user IDs vary
+    widely (UUIDs, emails, integers-as-strings, SSO subjects).
+
+    Adapters MAY override the client-supplied values with server-derived
+    identity when they have their own auth context.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = Field(default="", max_length=256)
+    email: str = Field(default="", max_length=256)
+    user_id: str = Field(default="", max_length=256)
+
+
 class BugReportContext(BaseModel):
     """Auto-captured browser context attached to every submission.
 
@@ -77,16 +96,26 @@ class BugReportCreate(BaseModel):
 
     `report_type` is a `Literal` (not enum) because the protocol freezes the
     two values and there is no read-side deprecation concern.
+
+    `protocol_version` is required and must equal `"0.1"`. Future versions
+    bump this. Adapters MUST reject unknown values with `400 unsupported_protocol_version`.
+
+    `client_ts` is a client-side ISO-8601 timestamp captured when the user
+    pressed Submit. Diagnostic only — the server's `received_at` /
+    `created_at` is the authoritative timeline.
     """
 
     model_config = ConfigDict(extra="ignore")
 
+    protocol_version: Literal["0.1"]
     title: str = Field(min_length=1, max_length=200)
+    client_ts: str = Field(min_length=1)
     report_type: Literal["bug", "feature_request"] = "bug"
     description: str = ""
     expected_behavior: str = ""
     severity: Severity = Severity.MEDIUM
     tags: list[str] = Field(default_factory=list)
+    reporter: Reporter = Field(default_factory=Reporter)
     context: BugReportContext = Field(default_factory=BugReportContext)
 
 
@@ -153,11 +182,14 @@ class BugReportDetail(BugReportSummary):
     description: str = ""
     expected_behavior: str = ""
     tags: list[str] = Field(default_factory=list)
+    reporter: Reporter = Field(default_factory=Reporter)
     context: BugReportContext = Field(default_factory=BugReportContext)
     lifecycle: list[LifecycleEvent] = Field(default_factory=list)
     server_user_agent: str = ""
     client_reported_user_agent: str = ""
     environment: str = ""
+    client_ts: str = ""
+    protocol_version: str = "0.1"
     updated_at: str = ""
     github_issue_number: int | None = None
 

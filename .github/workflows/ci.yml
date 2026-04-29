@@ -57,6 +57,12 @@ jobs:
           coverage report --fail-under=85 --show-missing
           coverage xml
 
+      - name: Verify protocol-schema.json is up to date
+        # The JSON Schema is the authoritative wire-protocol contract.
+        # Fails the build if bug_fab/schemas.py changed without a corresponding
+        # `python scripts/generate_protocol_schema.py` regeneration.
+        run: python scripts/generate_protocol_schema.py --check
+
       - name: Upload coverage artifact
         if: matrix.python-version == '3.12'
         uses: actions/upload-artifact@v4

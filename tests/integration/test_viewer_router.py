@@ -21,7 +21,9 @@ import pytest
 
 def _baseline_metadata(**overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
+        "protocol_version": "0.1",
         "title": "Test viewer report",
+        "client_ts": "2026-04-29T12:00:00+00:00",
         "report_type": "bug",
         "description": "viewer test seed",
         "severity": "medium",
@@ -92,8 +94,18 @@ def test_list_filter_by_module_query_param(app_factory, tiny_png: bytes) -> None
     """The ``module`` query param filters list results."""
     client = app_factory()
     vp = _vp(client)
-    md_a = {"title": "a", "context": {"module": "alpha"}}
-    md_b = {"title": "b", "context": {"module": "beta"}}
+    md_a = {
+        "protocol_version": "0.1",
+        "title": "a",
+        "client_ts": "2026-04-29T12:00:00+00:00",
+        "context": {"module": "alpha"},
+    }
+    md_b = {
+        "protocol_version": "0.1",
+        "title": "b",
+        "client_ts": "2026-04-29T12:00:00+00:00",
+        "context": {"module": "beta"},
+    }
     client.post(
         "/bug-reports",
         data={"metadata": json.dumps(md_a)},
