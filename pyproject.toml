@@ -1,0 +1,169 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bug-fab"
+version = "0.1.0a1"
+description = "Framework-agnostic bug-reporting tool that overlays on web frontends to capture screenshots, annotations, and contextual data."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "AZgeekster", email = "110117402+AZgeekster@users.noreply.github.com" },
+]
+keywords = ["bug-report", "feedback", "screenshot", "annotation", "fastapi", "web"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Bug Tracking",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    "fastapi>=0.110",
+    "pydantic>=2.0",
+    "python-multipart",
+    "httpx",
+    "jinja2>=3.0",
+]
+
+[project.optional-dependencies]
+sqlite = [
+    "sqlalchemy>=2.0",
+    "alembic",
+]
+postgres = [
+    "sqlalchemy>=2.0",
+    "alembic",
+    "psycopg[binary]",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.5",
+    "pre-commit>=3.0",
+    "build",
+    "twine",
+]
+
+[project.urls]
+Homepage = "https://github.com/AZgeekster/Bug-Fab"
+Repository = "https://github.com/AZgeekster/Bug-Fab"
+Issues = "https://github.com/AZgeekster/Bug-Fab/issues"
+Changelog = "https://github.com/AZgeekster/Bug-Fab/blob/main/CHANGELOG.md"
+
+[project.entry-points.pytest11]
+bug-fab-conformance = "bug_fab.conformance.plugin"
+
+[tool.hatch.build.targets.wheel]
+packages = ["bug_fab"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"static" = "bug_fab/static"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/bug_fab",
+    "/static",
+    "/docs",
+    "/tests",
+    "/examples",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/pyproject.toml",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = [
+    "static/vendor",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",  # line too long — handled by formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["B011"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection system idiomatically uses callable defaults
+# (Depends, Query, Path, etc.) — B008 fires false-positives on every route
+# signature otherwise. List them here so the rule still catches genuine
+# misuse outside the FastAPI DI surface.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Header",
+    "fastapi.Cookie",
+    "fastapi.Body",
+    "fastapi.Form",
+    "fastapi.File",
+    "fastapi.Security",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+]
+markers = [
+    "integration: integration tests that exercise the full HTTP cycle",
+    "conformance: wire-protocol conformance tests",
+]
+
+[tool.coverage.run]
+source = ["bug_fab"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/conftest.py",
+]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
+
+[tool.coverage.paths]
+source = ["bug_fab", "*/site-packages/bug_fab"]

@@ -1,0 +1,48 @@
+# Pre-commit configuration for Bug-Fab.
+#
+# Install once after cloning:
+#   pre-commit install
+#
+# Hooks then run automatically on every `git commit`. To run them manually:
+#   pre-commit run --all-files
+#
+# See docs/CONTRIBUTING.md for the full contributor workflow.
+
+repos:
+  - repo: local
+    hooks:
+      - id: forbidden-strings
+        name: forbidden-strings (block private/internal references)
+        description: >
+          Scans staged content for strings listed in
+          .pre-commit-forbidden-strings.txt. Catches accidental leaks of
+          private project names, internal hostnames, or client identifiers
+          before they reach the public repo.
+        entry: python scripts/check_forbidden_strings.py
+        language: system
+        pass_filenames: true
+        types_or: [text]
+        exclude: |
+          (?x)^(
+            \.pre-commit-forbidden-strings\.txt
+            | scripts/check_forbidden_strings\.py
+          )$
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.5.7
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: mixed-line-ending
+        args: [--fix=lf]

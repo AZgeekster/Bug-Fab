@@ -1,0 +1,86 @@
+# Bug-Fab forbidden-strings list.
+#
+# One forbidden string per line. Lines starting with `#` are comments.
+# Matching is case-insensitive whole-substring. The pre-commit hook
+# refuses any commit whose staged content contains an entry below.
+#
+# This file is the *generated* artifact consumed by the git hook.
+# The canonical source — with rationale per entry — lives outside the
+# public repo at `docs/forbidden_strings.md` (private). When you add or
+# remove an entry, update both files.
+#
+# Categories:
+#   1. Client / employer name
+#   2. Consumer project names (private apps that integrate Bug-Fab)
+#   3. Internal hostnames and infrastructure
+#   4. Hardware / vendor model identifiers tied to private deployments
+
+# --- 1. Client / employer ---
+Shortridge
+Shortridge Instruments
+
+# --- 2. Consumer project names ---
+# Work projects (Shortridge):
+Inventory
+Cal-current
+Calibrations
+DynamicsExport
+Email-POC
+InspectionCamera
+HDM250
+HDM-250
+BatteryTester
+SI-SupplyChain
+Sub Hood
+MeterCode
+Eink_POC
+
+# Personal finance projects:
+TownHall
+DualBudgets
+Tree of Life
+Vaulted
+
+# Personal hobby projects:
+Hinge
+PieArtFrame
+Freematics
+ESPresence
+ESPresense
+Bricklens
+PoolControllerESP32
+Esparagus
+Neptune4Pro
+SC01_Display
+
+# Other personal projects:
+QGendaApp
+HomeLabManager
+proton-bridge-docker
+
+# --- 3. Internal hostnames and infrastructure ---
+EDATEC
+VM165
+parts.shortridge.local
+shortridge.local
+ShortridgeInventory
+ShortridgeInventoryDev
+NSSM
+hayellow
+
+# --- 4. Hardware / vendor identifiers tied to private deployments ---
+LilyGo
+GooDisplay
+GDEY029T94-FL03
+ST7796
+FT6336U
+Squeezelite-ESP32
+Traccar
+Moonraker
+Fluidd
+ESPHome
+Klipper
+mkspi
+Synology
+DS923
+Proxmox

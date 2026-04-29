@@ -1,0 +1,9 @@
+# Pinned-for-reference dependencies for the FastAPI minimal example.
+#
+# In practice, run `pip install -e "../..[sqlite]"` from this directory
+# so that the example tracks your local Bug-Fab checkout. The entries
+# below describe what the example needs in case you'd rather install
+# explicitly or build a deployment artifact from this folder.
+
+bug-fab[sqlite]
+uvicorn[standard]

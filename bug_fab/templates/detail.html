@@ -1,0 +1,236 @@
+{% extends "_base.html" %}
+
+{% block title %}{{ report.id }} - {{ report.title }}{% endblock %}
+
+{% block content %}
+  <div class="bug-fab-header">
+    <h1>
+      <span class="bug-fab-mono">{{ report.id }}</span>
+      &middot; {{ report.title }}
+    </h1>
+    <div class="bug-fab-actions">
+      <a class="bug-fab-button" href="./">&larr; Back to list</a>
+      {% if report.context and report.context.url %}
+        <a class="bug-fab-button" href="{{ report.context.url }}" target="_blank" rel="noopener">
+          Reproduce
+        </a>
+      {% endif %}
+      <button type="button" class="bug-fab-button" id="bug-fab-copy-path">
+        Copy Path for Claude
+      </button>
+      {% if report.github_issue_url %}
+        <a class="bug-fab-button" href="{{ report.github_issue_url }}" target="_blank" rel="noopener">
+          GitHub issue
+        </a>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="bug-fab-detail-grid">
+    <div class="bug-fab-card bug-fab-section">
+      <h2>Screenshot</h2>
+      <img
+        class="bug-fab-screenshot"
+        src="{{ report.id }}/screenshot"
+        alt="Screenshot for {{ report.id }}"
+      />
+
+      <h2>Description</h2>
+      <p>{{ report.description or "_No description provided._" }}</p>
+
+      {% if report.expected_behavior %}
+        <h2>Expected behavior</h2>
+        <p>{{ report.expected_behavior }}</p>
+      {% endif %}
+
+      {% if report.tags %}
+        <h2>Tags</h2>
+        <ul class="bug-fab-tag-list">
+          {% for tag in report.tags %}
+            <li>{{ tag }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </div>
+
+    <div class="bug-fab-card bug-fab-section">
+      <h2>Metadata</h2>
+      <dl class="bug-fab-meta-grid">
+        <dt>Severity</dt>
+        <dd><span class="bug-fab-badge bug-fab-sev-{{ report.severity }}">{{ report.severity }}</span></dd>
+        <dt>Status</dt>
+        <dd><span class="bug-fab-badge bug-fab-status-{{ report.status }}">{{ report.status }}</span></dd>
+        <dt>Type</dt>
+        <dd>{{ report.report_type }}</dd>
+        <dt>Module</dt>
+        <dd>{{ report.module or "-" }}</dd>
+        <dt>Environment</dt>
+        <dd>{{ report.environment or "-" }}</dd>
+        <dt>Created</dt>
+        <dd><span class="bug-fab-mono">{{ report.created_at }}</span></dd>
+        {% if report.updated_at %}
+          <dt>Updated</dt>
+          <dd><span class="bug-fab-mono">{{ report.updated_at }}</span></dd>
+        {% endif %}
+        {% if report.server_user_agent %}
+          <dt>Server UA</dt>
+          <dd><span class="bug-fab-mono">{{ report.server_user_agent }}</span></dd>
+        {% endif %}
+        {% if report.client_reported_user_agent %}
+          <dt>Client UA</dt>
+          <dd><span class="bug-fab-mono">{{ report.client_reported_user_agent }}</span></dd>
+        {% endif %}
+      </dl>
+
+      {% if permissions.get("can_edit_status") %}
+        <h2>Update status</h2>
+        <form class="bug-fab-status-form" id="bug-fab-status-form">
+          <label>
+            New status
+            <select name="status">
+              {% for value in ["open", "investigating", "fixed", "closed"] %}
+                <option value="{{ value }}" {% if report.status == value %}selected{% endif %}>{{ value|capitalize }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Fix commit (optional)
+            <input type="text" name="fix_commit" placeholder="abc1234 or PR link" />
+          </label>
+          <label>
+            Fix description (optional)
+            <textarea name="fix_description" rows="2" placeholder="What changed and why."></textarea>
+          </label>
+          <button type="submit" class="bug-fab-button bug-fab-button-primary">Update</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="bug-fab-card bug-fab-section">
+    <h2>Page context</h2>
+    <details class="bug-fab-collapsible">
+      <summary>URL, viewport, user agent</summary>
+      <dl class="bug-fab-meta-grid">
+        <dt>URL</dt>
+        <dd>{% if report.context.url %}<a href="{{ report.context.url }}" target="_blank" rel="noopener">{{ report.context.url }}</a>{% else %}-{% endif %}</dd>
+        <dt>Viewport</dt>
+        <dd>{{ report.context.viewport_width }}x{{ report.context.viewport_height }}</dd>
+        <dt>User agent</dt>
+        <dd><span class="bug-fab-mono">{{ report.context.user_agent or "-" }}</span></dd>
+      </dl>
+    </details>
+
+    {% if report.context.console_errors %}
+      <h2>Console errors ({{ report.context.console_errors|length }})</h2>
+      <details class="bug-fab-collapsible">
+        <summary>View console buffer</summary>
+        <pre class="bug-fab-pre">{% for entry in report.context.console_errors %}[{{ entry.get('level', 'log') }}] {{ entry.get('message', '') }}
+{% endfor %}</pre>
+      </details>
+    {% endif %}
+
+    {% if report.context.network_log %}
+      <h2>Network failures ({{ report.context.network_log|length }})</h2>
+      <details class="bug-fab-collapsible">
+        <summary>View network buffer</summary>
+        <pre class="bug-fab-pre">{% for entry in report.context.network_log %}{{ entry.get('method', '?') }} {{ entry.get('url', '') }} -> {{ entry.get('status', '?') }} ({{ entry.get('duration_ms', '?') }} ms)
+{% endfor %}</pre>
+      </details>
+    {% endif %}
+
+    {% if report.context.source_mapping %}
+      <h2>Source mapping</h2>
+      <details class="bug-fab-collapsible">
+        <summary>View resolved sources</summary>
+        <dl class="bug-fab-meta-grid">
+          {% for key, value in report.context.source_mapping.items() %}
+            <dt>{{ key }}</dt>
+            <dd><span class="bug-fab-mono">{{ value }}</span></dd>
+          {% endfor %}
+        </dl>
+      </details>
+    {% endif %}
+  </div>
+
+  <div class="bug-fab-card bug-fab-section">
+    <h2>Lifecycle</h2>
+    {% if report.lifecycle %}
+      <table class="bug-fab-lifecycle-table">
+        <thead>
+          <tr>
+            <th>Action</th>
+            <th>By</th>
+            <th>At</th>
+            <th>Fix commit</th>
+            <th>Fix description</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for event in report.lifecycle %}
+            <tr>
+              <td><span class="bug-fab-badge">{{ event.action }}</span></td>
+              <td>{{ event.by or "-" }}</td>
+              <td><span class="bug-fab-mono">{{ event.at }}</span></td>
+              <td>{% if event.fix_commit %}<span class="bug-fab-mono">{{ event.fix_commit }}</span>{% else %}-{% endif %}</td>
+              <td>{{ event.fix_description or "-" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No lifecycle events recorded.</p>
+    {% endif %}
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    (function () {
+      const reportId = {{ report.id|tojson }};
+
+      // "Copy Path for Claude" — gives the human-or-AI a path they can
+      // paste into a debugging session. The host can override the
+      // template via a query string today; v0.2 will surface a config
+      // hook on the viewer router.
+      const copyButton = document.getElementById("bug-fab-copy-path");
+      if (copyButton) {
+        copyButton.addEventListener("click", function () {
+          const text = "bug_reports/" + reportId + ".json";
+          window.BugFabViewer.copyText(text);
+        });
+      }
+
+      // Status form: posts JSON to the PUT endpoint and reloads on
+      // success. Errors surface in the toast so the user keeps their
+      // work-in-progress text on screen.
+      const form = document.getElementById("bug-fab-status-form");
+      if (form) {
+        form.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          const data = new FormData(form);
+          const payload = {
+            status: data.get("status"),
+            fix_commit: data.get("fix_commit") || "",
+            fix_description: data.get("fix_description") || "",
+          };
+          try {
+            const resp = await fetch("reports/" + reportId + "/status", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            if (!resp.ok) {
+              window.BugFabViewer.toast("Update failed (" + resp.status + ")");
+              return;
+            }
+            window.BugFabViewer.toast("Status updated");
+            setTimeout(function () { window.location.reload(); }, 600);
+          } catch (err) {
+            window.BugFabViewer.toast("Network error");
+          }
+        });
+      }
+    })();
+  </script>
+{% endblock %}

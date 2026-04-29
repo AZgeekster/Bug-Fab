@@ -1,0 +1,23 @@
+/*!
+ * Bug-Fab v0.1.0a1 — placeholder stylesheet.
+ *
+ * Decision: bug-fab.js injects all of its CSS into <head> at runtime
+ * (single <style id="bug-fab-styles">), with every selector prefixed
+ * `bug-fab-*` to avoid collision with host CSS frameworks (Bootstrap,
+ * Pico, MUI, Tailwind, plain). Consumers do NOT need to include this
+ * file — the bundle is self-contained.
+ *
+ * This file ships only so that:
+ *
+ *   1. Consumers who prefer to manage CSS themselves can pre-load it
+ *      (eliminating one inline <style> tag — small CSP win).
+ *   2. Anyone running CSS-only experiments has a clear hook to start
+ *      from.
+ *
+ * If you want a smaller bundle that does NOT inject styles, override
+ * `STYLES` in bug-fab.js to "" — but you must then ship this file
+ * yourself in production.
+ *
+ * Style content lives inline in bug-fab.js to keep the bundle truly
+ * single-file. Duplicating it here would create a drift hazard.
+ */

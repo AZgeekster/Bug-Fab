@@ -1,0 +1,50 @@
+# Force LF line endings for all text files so Windows contributors don't
+# accidentally check in CRLF. Per `docs/environment.md` § Platform Notes.
+* text=auto eol=lf
+
+# Explicit text classifications.
+*.py        text eol=lf diff=python
+*.pyi       text eol=lf diff=python
+*.js        text eol=lf
+*.mjs       text eol=lf
+*.cjs       text eol=lf
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.json      text eol=lf
+*.jsonc     text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.toml      text eol=lf
+*.md        text eol=lf
+*.markdown  text eol=lf
+*.html      text eol=lf
+*.htm       text eol=lf
+*.css       text eol=lf
+*.svg       text eol=lf
+*.sh        text eol=lf
+*.cfg       text eol=lf
+*.ini       text eol=lf
+LICENSE     text eol=lf
+
+# Binary assets — never diff or merge.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.webp      binary
+*.ico       binary
+*.pdf       binary
+*.zip       binary
+*.gz        binary
+*.tgz       binary
+*.whl       binary
+
+# Vendored JS bundles — pinned third-party code, not maintained inline.
+# Treating as binary keeps diffs from blowing up on minified output.
+static/vendor/*.js     binary
+static/vendor/*.min.js binary
+
+# Linguist hints — keep the language stats accurate on GitHub.
+static/vendor/* linguist-vendored
+docs/*          linguist-documentation
+examples/*      linguist-documentation=false

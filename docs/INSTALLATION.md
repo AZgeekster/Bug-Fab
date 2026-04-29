@@ -1,0 +1,274 @@
+# Installation
+
+Bug-Fab ships as a single Python package on PyPI. The package contains
+the FastAPI reference adapter, the Pydantic schemas, three storage
+backends behind a single `Storage` ABC, and the vanilla-JS frontend
+bundle (with `html2canvas` vendored at a pinned version — no CDN).
+
+This guide covers three install paths:
+
+1. [FastAPI consumer](#fastapi-consumer) — the canonical path.
+2. [Flask consumer](#flask-consumer) — protocol-only integration via
+   direct route handlers.
+3. [React / SPA consumer](#react--spa-consumer) — the JS bundle plus a
+   protocol-honoring backend (any language).
+
+## Requirements
+
+- Python **3.10**, **3.11**, or **3.12**.
+- A modern browser. Internet Explorer is not supported. The frontend
+  uses `fetch`, `Promise`, and standard ES2020 features.
+
+## Pre-release vs final
+
+Until `0.1.0` final ships, only the alpha is on PyPI:
+
+```bash
+pip install --pre bug-fab    # installs 0.1.0a1
+```
+
+Once `0.1.0` final lands, the `--pre` flag goes away:
+
+```bash
+pip install bug-fab          # post-0.1.0
+```
+
+`pip install bug-fab` without `--pre` skips the alpha by design — that
+prevents accidental pinning to a pre-release while the wire protocol is
+still being validated against real consumer integrations.
+
+## FastAPI consumer
+
+The FastAPI adapter is the reference implementation. It exposes two
+routers (intake + viewer) and a single configurable `Storage` instance.
+
+### 1. Install
+
+```bash
+# Default: file-based storage, zero external deps
+pip install --pre bug-fab
+
+# Or with SQLAlchemy + SQLite
+pip install --pre "bug-fab[sqlite]"
+
+# Or with SQLAlchemy + Postgres (psycopg)
+pip install --pre "bug-fab[postgres]"
+```
+
+### 2. Wire it into your app
+
+```python
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from importlib.resources import files
+import bug_fab
+from bug_fab.routers import submit as submit_module
+
+app = FastAPI()
+
+# Pick a storage backend
+storage = bug_fab.FileStorage(storage_dir="./bug_reports")
+# storage = bug_fab.SQLiteStorage(...)   # requires bug-fab[sqlite]
+# storage = bug_fab.PostgresStorage(...) # requires bug-fab[postgres]
+
+# Configure once at startup. The viewer reuses the same storage via
+# shared dependency providers from bug_fab.routers.submit, so there's
+# no separate viewer.configure() call.
+submit_module.configure(storage=storage)
+
+# Mount the routers. submit_router defines POST /bug-reports internally,
+# so mount it at the PARENT prefix (`/api`) — mounting at `/api/bug-reports`
+# would double-segment the URL to `/api/bug-reports/bug-reports`.
+app.include_router(bug_fab.submit_router, prefix="/api")
+app.include_router(bug_fab.viewer_router, prefix="/admin/bug-reports")
+
+# Serve the static bundle (FAB + overlay JS/CSS). Using importlib.resources
+# resolves the static dir correctly in BOTH editable installs (`<repo>/static/`)
+# and wheel installs (`<site-packages>/bug_fab/static/`). The `packages=`
+# shortcut for StaticFiles only works in wheel installs.
+static_dir = str(files("bug_fab").joinpath("static"))
+app.mount(
+    "/bug-fab/static",
+    StaticFiles(directory=static_dir),
+    name="bug-fab-static",
+)
+```
+
+### 3. Add the FAB to your pages
+
+In your base template (Jinja, HTMX, raw HTML — anything):
+
+```html
+<script src="/bug-fab/static/bug-fab.js" defer></script>
+<script>
+  // The bundle auto-inits on DOMContentLoaded with sensible defaults.
+  // To override config, disable auto-init and call init() yourself:
+  window.BugFabAutoInit = false;
+  window.addEventListener("DOMContentLoaded", () => {
+    window.BugFab.init({
+      submitUrl: "/api/bug-reports",
+      // headers: () => ({ "X-CSRF-Token": getCsrfToken() }),
+      // environment: "prod",
+      // appVersion: "1.2.3",
+    });
+  });
+</script>
+```
+
+That's the whole integration. Visit any page in your app, click the
+floating bug icon, and you're submitting reports.
+
+### 4. Configure via env vars (optional)
+
+All knobs have `BUG_FAB_*` env vars; the alternative is to build a
+`Settings` object explicitly.
+
+```bash
+BUG_FAB_STORAGE_DIR=/var/bug-fab/reports
+BUG_FAB_RATE_LIMIT_ENABLED=true
+BUG_FAB_RATE_LIMIT_MAX=50
+BUG_FAB_VIEWER_PAGE_SIZE=20
+BUG_FAB_GITHUB_ENABLED=false
+```
+
+```python
+from bug_fab.config import Settings
+settings = Settings.from_env()      # env vars
+settings = Settings.from_env(rate_limit_max=200)  # override at the call site
+```
+
+See [DEPLOYMENT_OPTIONS.md](DEPLOYMENT_OPTIONS.md) for the full env-var
+reference and recommended defaults per deployment shape.
+
+## Flask consumer
+
+Bug-Fab v0.1's reference adapter is FastAPI. A first-party Flask
+adapter is on the v0.2 roadmap. Today, integrating Bug-Fab into a Flask
+app means honoring the wire protocol with two route handlers and
+serving the static bundle. The frontend bundle is identical — it does
+not care which language is on the other side of the POST.
+
+### 1. Install
+
+```bash
+pip install --pre bug-fab
+```
+
+You still get the Pydantic schemas and the static bundle, even from a
+Flask process — they have no FastAPI runtime requirement.
+
+### 2. Implement the two routes
+
+```python
+from flask import Flask, request, jsonify, send_from_directory
+from importlib.resources import files
+from bug_fab import FileStorage, BugReportCreate
+import json
+
+app = Flask(__name__)
+storage = FileStorage(storage_dir="./bug_reports")
+
+@app.post("/api/bug-reports")
+def submit():
+    metadata_raw = request.form["metadata"]
+    metadata = BugReportCreate.model_validate_json(metadata_raw)
+    screenshot = request.files["screenshot"].read()
+    report_id = storage.save_report(metadata.model_dump(), screenshot)
+    return jsonify({
+        "id": report_id,
+        "received_at": "...",  # set with datetime.utcnow().isoformat()+"Z"
+        "stored_at": f"file://{storage.storage_dir}/{report_id}/",
+        "github_issue_url": None,
+    }), 201
+
+@app.get("/bug-fab/static/<path:asset>")
+def static_bundle(asset):
+    static_root = files("bug_fab").joinpath("static")
+    return send_from_directory(str(static_root), asset)
+```
+
+This is the bare minimum — strict severity validation, rate limiting,
+the viewer pages, status workflow, and bulk operations are not
+included in the snippet above. They're implemented in the FastAPI
+reference adapter; see [`PROTOCOL.md`](PROTOCOL.md) and
+[`CONFORMANCE.md`](CONFORMANCE.md) for what your handlers must do to
+pass the conformance suite.
+
+### 3. Add the FAB to your templates
+
+Same as the FastAPI path:
+
+```html
+<script src="/bug-fab/static/bug-fab.js" defer></script>
+```
+
+## React / SPA consumer
+
+If your frontend is a build-pipeline SPA (React, SvelteKit, Vue, etc.)
+your backend is probably written in something other than Python. The
+JS bundle is framework-agnostic — install it as a static asset and
+point it at any backend that honors the wire protocol.
+
+### 1. Get the bundle
+
+For v0.1 the JS bundle ships **inside** the Python package; an npm
+publish lands in v0.2. The two practical paths today:
+
+- **Backend is Python:** `pip install --pre bug-fab` and serve the
+  bundle from `bug_fab/static/`.
+- **Backend is anything else:** download `bug-fab-0.1.0.js` from the
+  GitHub Release page and serve it as a static asset from your CDN /
+  origin / build output.
+
+### 2. Drop in a `<script>` tag
+
+```html
+<script src="/static/bug-fab.js" defer></script>
+<script>
+  window.BugFabAutoInit = false;
+  window.addEventListener("DOMContentLoaded", () => {
+    window.BugFab.init({
+      submitUrl: "https://api.example.com/bug-reports",
+    });
+  });
+</script>
+```
+
+The bundle injects the FAB on `DOMContentLoaded`. There is no React
+component wrapper required — the overlay renders into a top-level
+container with isolated styles.
+
+A reference React component wrapper ships in
+[`examples/react-spa/`](../examples/react-spa) for SPA developers who
+prefer to import-and-mount rather than script-tag.
+
+### 3. Implement the protocol on your backend
+
+Any language that can accept a `multipart/form-data` POST and respond
+with the documented JSON shape will work. See [`PROTOCOL.md`](PROTOCOL.md)
+for the wire spec and [`ADAPTERS.md`](ADAPTERS.md) for sketches in
+Razor Pages, Express, SvelteKit, and Go.
+
+## Verifying the install
+
+After wiring it up, exercise the round-trip:
+
+1. Open any page in your app.
+2. Click the floating bug icon (default position: bottom-right).
+3. Type a title and description. Annotate the screenshot if you like.
+4. Click **Submit**.
+5. Confirm the report shows up:
+   - **File backend:** a new directory under `BUG_FAB_STORAGE_DIR`
+     containing `metadata.json` and `screenshot.png`.
+   - **SQL backends:** a new row in the `bug_reports` table plus a
+     screenshot file on disk at the configured path.
+   - **Viewer enabled?** The list view at your viewer mount-point now
+     shows the new report.
+
+## Next steps
+
+- [DEPLOYMENT_OPTIONS.md](DEPLOYMENT_OPTIONS.md) — pick the right
+  storage backend, set up auth, configure rate limiting and GitHub
+  sync.
+- [POC_HOSTING.md](POC_HOSTING.md) — deploy a public demo on Fly.io.
+- [FAQ.md](FAQ.md) — common adoption questions and gotchas.
