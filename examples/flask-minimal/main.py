@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -85,7 +85,7 @@ def _detect_image_kind(payload: bytes) -> str | None:
 
 def _now_iso() -> str:
     """UTC timestamp in ISO-8601 — server clock is authoritative."""
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def create_app() -> Flask:

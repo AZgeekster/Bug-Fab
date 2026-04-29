@@ -110,7 +110,7 @@ protocol directly using `bug_fab.FileStorage` plus the Pydantic schemas
 from flask import Flask, request, jsonify, send_from_directory
 from importlib.resources import files
 import asyncio, json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pydantic import ValidationError
 from bug_fab import FileStorage, BugReportCreate
 
@@ -135,7 +135,7 @@ def submit():
     report_id = asyncio.run(storage.save_report(metadata, screenshot_file.read()))
     return jsonify({
         "id": report_id,
-        "received_at": datetime.now(UTC).isoformat(),
+        "received_at": datetime.now(timezone.utc).isoformat(),
         "stored_at": f"file://{storage.storage_dir.as_posix()}/{report_id}/",
         "github_issue_url": None,
     }), 201

@@ -25,7 +25,7 @@ import asyncio
 import json
 import re
 import shutil
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +46,7 @@ _ARCHIVE_SUBDIR = "archive"
 
 def _now_iso() -> str:
     """UTC timestamp in ISO-8601 with timezone — server clock is authoritative."""
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _atomic_write_text(path: Path, payload: str) -> None:

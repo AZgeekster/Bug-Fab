@@ -46,12 +46,16 @@ jobs:
         run: ruff format --check .
 
       - name: Run tests with coverage
+        # WHY `coverage run -m pytest` instead of `pytest --cov`:
+        # the bug-fab-conformance pytest11 entry-point imports `bug_fab`
+        # before pytest-cov hooks in, so class-body statements (Pydantic
+        # models, ABCs) execute pre-coverage and don't get counted —
+        # which would silently undercount coverage by ~20pp.
+        # Driving coverage from outside pytest avoids the ordering bug.
         run: |
-          pytest \
-            --cov=bug_fab \
-            --cov-report=term-missing \
-            --cov-report=xml \
-            --cov-fail-under=85
+          coverage run --source=bug_fab --branch -m pytest
+          coverage report --fail-under=85 --show-missing
+          coverage xml
 
       - name: Upload coverage artifact
         if: matrix.python-version == '3.12'
