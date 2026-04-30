@@ -122,17 +122,17 @@ Mainstream stacks where adapter demand is likely from real consumers. Bug-Fab ac
 | Field | Value |
 |---|---|
 | Stack | Next.js ≥ 14 (App Router), TypeScript |
-| Status | ⚪ wanted |
+| Status | 🟡 sketch |
 | Tier | 1 |
-| Package | (none) |
+| Package | (sketch) |
 | Repository | — |
 | Language | TypeScript |
 | Tracks Bug-Fab | v0.1 |
-| Conformance | n/a |
-| Reference doc | (TBD — likely `docs/integrations/nextjs-route-handlers.md` once written) |
+| Conformance | untested |
+| Reference doc | [`docs/ADAPTERS.md#nextjs-route-handlers-typescript-nextjs--14-app-router`](./ADAPTERS.md#nextjs-route-handlers-typescript-nextjs--14-app-router) |
 | Last updated | 2026-04-30 |
-| Maintainer | (none) |
-| Notes | High-value because many Next.js apps don't want a separate Fastify backend. Route Handlers can wrap an `IStorage` directly. Good first contribution. |
+| Maintainer | (none — sketch only) |
+| Notes | Co-locates Bug-Fab with the Next.js app — no separate Fastify process. Real fit for Vercel / Cloudflare Pages deployments where serverless functions are the backend. Sketch covers all 8 endpoints; a full `examples/nextjs-minimal/` example app is still a v0.1.x backlog item. |
 
 ### Django (Python)
 

@@ -593,6 +593,224 @@ interface IStorage {
 
 ---
 
+## Next.js Route Handlers (TypeScript, Next.js ≥ 14 App Router)
+
+Next.js Route Handlers (`app/api/.../route.ts` files) let a Next.js app expose Bug-Fab's eight endpoints **without a separate backend process**. Drop the Route Handlers in, point the static bundle at them, and the Next.js app is its own Bug-Fab adapter.
+
+This is a real fit when:
+
+- The app is Next.js-only (no separate Fastify / Express / Django backend you'd rather mount Bug-Fab in).
+- Vercel / Cloudflare Pages / similar serverless deployment — no PM2, no long-running Fastify process.
+- You want the report-storage layer co-located with your Next.js data layer (e.g., the same Drizzle / Prisma client).
+
+### File layout
+
+```
+app/
+├── api/
+│   └── bug-reports/
+│       └── route.ts                 ← POST /api/bug-reports (intake)
+├── admin/
+│   └── bug-reports/
+│       ├── reports/
+│       │   ├── route.ts             ← GET /admin/bug-reports/reports
+│       │   └── [id]/
+│       │       ├── route.ts         ← GET / DELETE /admin/bug-reports/reports/{id}
+│       │       ├── status/
+│       │       │   └── route.ts     ← PUT /admin/bug-reports/reports/{id}/status
+│       │       └── screenshot/
+│       │           └── route.ts     ← GET /admin/bug-reports/reports/{id}/screenshot
+│       ├── bulk-close-fixed/
+│       │   └── route.ts             ← POST
+│       └── bulk-archive-closed/
+│           └── route.ts             ← POST
+└── layout.tsx                       ← <Script> tags load bug-fab.js
+```
+
+### Intake handler — `app/api/bug-reports/route.ts`
+
+```typescript
+import { NextRequest, NextResponse } from 'next/server'
+import { storage } from '@/lib/bug-fab/storage'
+import { validateSubmission, isValidImageBuffer } from '@/lib/bug-fab/validation'
+import { Errors } from '@/lib/bug-fab/errors'
+
+// Disable Next.js's default body parsing — we need the raw multipart.
+export const runtime = 'nodejs'   // Edge runtime cannot read large buffers
+
+export async function POST(req: NextRequest) {
+  // Native FormData parsing — Next.js 14 supports this in Route Handlers.
+  let form: FormData
+  try {
+    form = await req.formData()
+  } catch (err) {
+    return NextResponse.json(
+      Errors.validationError('Could not parse multipart body.'),
+      { status: 400 },
+    )
+  }
+
+  const metadataRaw = form.get('metadata')
+  const screenshotEntry = form.get('screenshot')
+  if (typeof metadataRaw !== 'string' || !(screenshotEntry instanceof File)) {
+    return NextResponse.json(
+      Errors.validationError('metadata and screenshot are both required'),
+      { status: 400 },
+    )
+  }
+
+  // 11 MiB total cap — Next.js's bodyParser.sizeLimit defaults to 1MB,
+  // which is too small. Configure in next.config.js, or check here.
+  const screenshotBuf = Buffer.from(await screenshotEntry.arrayBuffer())
+  if (screenshotBuf.length > 10 * 1024 * 1024) {
+    return NextResponse.json(
+      { ...Errors.payloadTooLarge(), limit_bytes: 10 * 1024 * 1024 },
+      { status: 413 },
+    )
+  }
+  if (!isValidImageBuffer(screenshotBuf)) {
+    return NextResponse.json(Errors.unsupportedMediaType(), { status: 415 })
+  }
+
+  let metadata: any
+  try { metadata = JSON.parse(metadataRaw) } catch {
+    return NextResponse.json(
+      Errors.validationError('metadata is not valid JSON'),
+      { status: 400 },
+    )
+  }
+
+  const result = validateSubmission(metadata)
+  if (!result.ok) {
+    const first = result.errors[0] ?? ''
+    if (first.startsWith('__unsupported_protocol_version__:')) {
+      const v = first.split(':')[1] ?? 'missing'
+      return NextResponse.json(Errors.unsupportedProtocolVersion(v), { status: 400 })
+    }
+    return NextResponse.json(Errors.schemaError(result.errors.join('; ')), { status: 422 })
+  }
+
+  // Server-side User-Agent — see PROTOCOL.md §User-Agent trust boundary.
+  const serverUA = req.headers.get('user-agent') ?? ''
+  const id = await storage.saveReport({ ...metadata, server_user_agent: serverUA }, screenshotBuf)
+
+  return NextResponse.json({
+    id,
+    received_at:      new Date().toISOString(),
+    stored_at:        `nextjs-route://bug-reports/${id}`,
+    github_issue_url: null,
+  }, { status: 201 })
+}
+```
+
+Configure `next.config.js` to allow the 11 MiB body:
+
+```javascript
+module.exports = {
+  experimental: {
+    serverActions: { bodySizeLimit: '11mb' },
+  },
+  // For Pages Router consumers — App Router Route Handlers ignore this:
+  api: { bodyParser: { sizeLimit: '11mb' } },
+}
+```
+
+### Viewer list — `app/admin/bug-reports/reports/route.ts`
+
+```typescript
+import { NextRequest, NextResponse } from 'next/server'
+import { storage } from '@/lib/bug-fab/storage'
+import { requireAdminSession } from '@/lib/auth'   // your existing auth helper
+
+export async function GET(req: NextRequest) {
+  await requireAdminSession(req)   // throw 401 / 403 inside if not authorized
+
+  const { searchParams } = new URL(req.url)
+  const page     = Number(searchParams.get('page') ?? '1')
+  const pageSize = Number(searchParams.get('page_size') ?? '20')
+  const filters  = {
+    status:           searchParams.get('status')   ?? undefined,
+    severity:         searchParams.get('severity') ?? undefined,
+    environment:      searchParams.get('environment') ?? undefined,
+    include_archived: searchParams.get('include_archived') === 'true',
+  }
+
+  const result = await storage.listReports(filters as any, page, Math.min(pageSize, 200))
+  return NextResponse.json(result)
+}
+```
+
+### Detail / status / delete — `app/admin/bug-reports/reports/[id]/route.ts`
+
+```typescript
+import { NextRequest, NextResponse } from 'next/server'
+import { storage } from '@/lib/bug-fab/storage'
+import { requireAdminSession } from '@/lib/auth'
+import { Errors } from '@/lib/bug-fab/errors'
+
+const ID_RE = /^bug-[A-Za-z]?\d{3,}$/
+
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  if (!ID_RE.test(params.id)) {
+    return NextResponse.json(Errors.notFound(params.id), { status: 404 })
+  }
+  await requireAdminSession(req)
+  const report = await storage.getReport(params.id)
+  if (!report) return NextResponse.json(Errors.notFound(params.id), { status: 404 })
+  return NextResponse.json(report)
+}
+
+export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+  if (!ID_RE.test(params.id)) {
+    return NextResponse.json(Errors.notFound(params.id), { status: 404 })
+  }
+  await requireAdminSession(req)
+  await storage.deleteReport(params.id)
+  return new NextResponse(null, { status: 204 })
+}
+```
+
+`PUT /status` lives in a sibling `[id]/status/route.ts` because Route Handlers route on filename, not on a method dispatcher inside one file.
+
+### Screenshot serve — `app/admin/bug-reports/reports/[id]/screenshot/route.ts`
+
+```typescript
+import { NextRequest, NextResponse } from 'next/server'
+import { readFile } from 'node:fs/promises'
+import { storage } from '@/lib/bug-fab/storage'
+import { requireAdminSession } from '@/lib/auth'
+
+export const runtime = 'nodejs'   // node:fs unavailable in Edge runtime
+
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  await requireAdminSession(req)
+  const path = await storage.getScreenshotPath(params.id)
+  if (!path) return new NextResponse(null, { status: 404 })
+  const bytes = await readFile(path)
+  return new NextResponse(bytes, {
+    status:  200,
+    headers: { 'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=300' },
+  })
+}
+```
+
+### Common pitfalls (Next.js Route Handlers)
+
+- **Edge runtime cannot do filesystem I/O.** `runtime = 'nodejs'` is mandatory on routes that touch `node:fs` (intake, screenshot serve). The default runtime in some Next.js configs is Edge.
+- **Body size limit.** Next.js defaults to 1 MB. Bug-Fab needs 11 MiB. Configure in `next.config.js` (App Router via `experimental.serverActions.bodySizeLimit`, Pages Router via `api.bodyParser.sizeLimit`). If you forget, intake silently 413s with a generic error.
+- **Auth on every viewer route.** Route Handlers don't share middleware the way Express does. Either factor `requireAdminSession()` into a single helper called at the top of every handler, OR use Next.js middleware (`middleware.ts`) with a path matcher for `/admin/bug-reports/*`.
+- **Snake_case JSON.** Same as Fastify — don't run a casing transform on Bug-Fab routes. Check your `next.config.js` and any global response middleware.
+- **Filesystem on serverless platforms.** Vercel / Cloudflare Pages serverless functions don't have a writable filesystem. If you deploy there, use S3 / R2 / Cloudflare KV for screenshots and override `IStorage.getScreenshotPath` accordingly. The `notes/` reference plugin in TKR's tree assumes a real disk; serverless deployments need an alternative storage class.
+- **Static bundle hosting.** Place `bug-fab.js` and `vendor/html2canvas.min.js` in `public/bug-fab/` — Next.js serves `public/` as static assets at the URL root. The `<Script>` tag in `app/layout.tsx` references `/bug-fab/bug-fab.js`.
+
+### Why this works without a separate Fastify process
+
+The Route Handler pattern is functionally equivalent to mounting Bug-Fab into a backend framework — Next.js IS the backend framework here. The same `IStorage` implementation runs; the only difference is that the request lifecycle is Next.js's (Server Components, edge functions optional, etc.) instead of Fastify's. The wire protocol doesn't care.
+
+A full Next.js-only example app belongs at `examples/nextjs-minimal/` — not yet built as of this writing. See [`docs/ADAPTERS_REGISTRY.md`](./ADAPTERS_REGISTRY.md) for status.
+
+---
+
 ## SvelteKit
 
 SvelteKit's `+server.ts` files are a natural fit for the protocol because they expose `RequestHandler` per HTTP method. Storage via Drizzle ORM keeps things idiomatic.
