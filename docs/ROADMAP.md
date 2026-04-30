@@ -39,7 +39,8 @@ The first publishable version. Establishes the wire protocol as the project's de
 - **Auth — mount-point delegation only.** v0.1 ships no auth abstraction; consumers protect routes by mounting Bug-Fab routers behind their existing auth middleware. The proper `AuthAdapter` ABC is v0.2.
 - **Conformance test plugin** — `pytest --bug-fab-conformance --base-url=...` validates any HTTP adapter against the protocol. Adapter under test can be in any language; only the test runner is Python in v0.1.
 - **Examples** — `examples/fastapi-minimal/` (10 LOC integration), `examples/flask-minimal/` (proves frontend is framework-agnostic), `examples/react-spa/` (React component wrapper around the vanilla bundle).
-- **Reference adapter sketches** — non-Python sketches in [`ADAPTERS.md`](./ADAPTERS.md) for ASP.NET Core / Razor Pages, Express / Node, SvelteKit, Go.
+- **Reference adapter sketches** — non-Python sketches in [`ADAPTERS.md`](./ADAPTERS.md) for ASP.NET Core / Razor Pages, Express / Node, Fastify / TypeScript, SvelteKit, Go.
+- **Adapters registry** — [`ADAPTERS_REGISTRY.md`](./ADAPTERS_REGISTRY.md) tracks every known adapter (reference, community-maintained, sketch, wanted) on a single 12-field schema, with priority tiers (T1–T4). Designed to make multi-adapter maintenance mechanical when the protocol bumps.
 - **Public POC** — `examples/fastapi-minimal/` deployed on Fly.io with persistent volume. Always-on free tier. URL linked from the README.
 - **CI / tooling** — GitHub Actions matrix on Python 3.10 / 3.11 / 3.12. Ruff lint + format + pytest with ≥85% coverage gate, 100% on protocol-validation. `pre-commit` framework with forbidden-strings hook.
 - **Docs** — README, INSTALLATION, DEPLOYMENT_OPTIONS, PROTOCOL, ADAPTERS, CONFORMANCE, FAQ, CONTRIBUTING, ROADMAP, POC_HOSTING, CHANGELOG.
