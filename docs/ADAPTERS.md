@@ -21,13 +21,13 @@ Before diving into stack-specific code, here is the universal checklist. Every e
 
 | Concern | Requirement |
 |---------|-------------|
-| Multipart parsing | Accept `multipart/form-data` with `metadata` (JSON string) and `screenshot` (PNG file). |
-| JSON validation | Reject invalid `severity` / `status` enum values with `422`. **Do not silently coerce.** |
+| Multipart parsing | Accept `multipart/form-data` with `metadata` (JSON string) and `screenshot` (PNG file). Enforce the 11 MiB total-body limit at the framework's parser-registration level (Fastify's `@fastify/multipart` `limits.fileSize`, ASP.NET's `[RequestSizeLimit]`, Express's `multer({ limits })`, etc.) — checking it inside the route handler is too late, the framework already buffered the bytes. |
+| JSON validation | Reject invalid `severity` / `status` enum values with `422`. **Do not silently coerce.** Required submission fields are `protocol_version`, `title`, `client_ts` — reject `422` on missing. |
 | Protocol versioning | Reject unknown `protocol_version` with `400 unsupported_protocol_version`. |
 | Deprecated values | Accept any deprecated enum value on **read** paths. Reject on write paths. |
 | User-Agent | Capture from request header (source of truth). Preserve client-supplied `client_reported_user_agent` separately. |
-| Storage | Persist atomically. Screenshots on disk; metadata in JSON file or DB row. Never blob-in-DB. |
-| GitHub sync | Best-effort — failures log, do not break intake. |
+| Storage | Persist atomically. Screenshots on disk; metadata in JSON file or DB row. Never blob-in-DB. If the storage layer uses an in-memory counter or index (file-backed default in the Python reference), document loudly that it is **not safe for multi-worker / cluster-mode deployments** and point users at a SQL backend. The reference `FileStorage` is single-process; `SQLiteStorage` is process-safe with WAL; `PostgresStorage` is freely multi-worker. |
+| GitHub sync | Best-effort — failures log, do not break intake. The submit flow is: (1) save report → get `id`; (2) call GitHub API; (3) **post-save update** the stored report's `github_issue_url` + `github_issue_number` fields once the issue resolves. Storage backends SHOULD expose a `set_github_link(id, issue_number, issue_url)` method for the post-save update; the Python reference adapter duck-types it via `getattr(storage, "set_github_link", None)` so adapters that want to skip it just don't implement it. |
 | Lifecycle audit log | Append `created` on intake. Append `status_changed` on every status update. Never mutate or remove entries. |
 | Bulk ops | `POST /bulk-close-fixed` and `POST /bulk-archive-closed` must return correct counts. |
 | Auth | Adapter exposes routes; consumer protects them at the mount point. v0.1 has no auth abstraction. |
@@ -404,6 +404,192 @@ async function handleIntake(req, res) {
 - **JSON parsing for `PUT /status`.** Default Express does not parse JSON bodies. Mount `express.json()` per-route on the status endpoint (as shown above), not globally — globally enabling it conflicts with `multer` on the intake route.
 - **`fetch` for GitHub.** `node-fetch` and Node 18+ native `fetch` differ in how they surface non-2xx responses. Always check `response.ok` explicitly; do not rely on a thrown error.
 - **Snake_case JSON.** Express does not enforce a naming convention. Use `JSON.stringify` with object keys exactly as documented in the protocol — do not convert.
+
+---
+
+## Fastify (TypeScript, Fastify ≥ 5)
+
+Fastify's plugin system makes Bug-Fab a natural drop-in: register a single plugin under two URL prefixes (intake + viewer) and the protocol's eight endpoints become wired automatically. The sketch below was validated against TKR's first integration consumer (Fastify 5 + Next.js + PostgreSQL + PM2).
+
+### Required peer dependencies
+
+```json
+{
+  "dependencies": { "fastify-plugin": "^5.0.0" },
+  "peerDependencies": {
+    "fastify":            ">=5.0.0",
+    "@fastify/multipart": ">=10.0.0"
+  }
+}
+```
+
+`fastify-plugin` is required because the plugin needs to break Fastify's default encapsulation — auth hooks added at the parent scope must fire for the plugin's routes too.
+
+### Multipart registration (do this first, exactly once)
+
+```typescript
+import multipart from '@fastify/multipart'
+
+await app.register(multipart, {
+  limits: { fileSize: 11 * 1024 * 1024 },  // 11 MiB total-body cap per PROTOCOL.md
+})
+```
+
+Register `@fastify/multipart` **before** the Bug-Fab plugin. Set the size limit at the registration level — checking inside the route handler is too late, Fastify will have already buffered the bytes and rejected larger ones with its own error envelope.
+
+If the host Fastify app already registers `@fastify/multipart` for unrelated routes (e.g., other file uploads) with a generous larger limit, do NOT re-register it. The existing larger limit covers Bug-Fab's 11 MiB.
+
+### Plugin shape
+
+```typescript
+import type { FastifyInstance } from 'fastify'
+import fp from 'fastify-plugin'
+
+interface BugFabPluginOptions {
+  storage:       IStorage          // required — see IStorage interface below
+  submitPrefix?: string            // default: "/api"
+  viewerPrefix?: string            // default: "/admin/bug-reports" — MUST be non-empty
+  github?: { enabled: boolean; pat: string; repo: string; apiBase?: string }
+  rateLimit?: { enabled: boolean; maxRequests: number; windowMs: number }
+}
+
+async function bugFabPlugin(fastify: FastifyInstance, opts: BugFabPluginOptions) {
+  if (!opts.storage) throw new Error('[bug-fab] opts.storage is required')
+
+  const submitPrefix = opts.submitPrefix ?? '/api'
+  const viewerPrefix = opts.viewerPrefix ?? '/admin/bug-reports'
+
+  // Enforce the viewer mount-prefix invariant (PROTOCOL.md §Viewer mount-prefix note).
+  if (!viewerPrefix || viewerPrefix === '/') {
+    throw new Error('[bug-fab] viewerPrefix must be non-empty and non-root.')
+  }
+
+  await fastify.register(async sub => {
+    await registerSubmitRoutes(sub, opts.storage, opts)
+  }, { prefix: submitPrefix })
+
+  await fastify.register(async sub => {
+    await registerViewerRoutes(sub, opts.storage)
+  }, { prefix: viewerPrefix })
+}
+
+export const bugFab = fp(bugFabPlugin, {
+  fastify: '>=5.0.0',
+  name:    'fastify-bug-fab',
+})
+```
+
+### Intake route — multipart parsing the Fastify way
+
+```typescript
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
+
+async function registerSubmitRoutes(
+  fastify: FastifyInstance,
+  storage: IStorage,
+  opts:    BugFabPluginOptions,
+) {
+  fastify.post('/bug-reports', async (req, reply) => {
+    let metadataRaw: string | undefined
+    let screenshotBuf: Buffer | undefined
+    let screenshotType: string | undefined
+
+    // request.parts() is an async iterator; iterate ONCE and capture each field.
+    for await (const part of req.parts()) {
+      if (part.type === 'field' && part.fieldname === 'metadata') {
+        metadataRaw = part.value as string
+      } else if (part.type === 'file' && part.fieldname === 'screenshot') {
+        screenshotBuf  = await part.toBuffer()
+        screenshotType = part.mimetype
+      }
+    }
+
+    if (!metadataRaw || !screenshotBuf) {
+      return reply.code(400).send({ error: 'validation_error',
+        detail: 'metadata and screenshot multipart fields are both required' })
+    }
+
+    // PNG-only — magic-byte check, do not trust Content-Type alone.
+    const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    if (!screenshotBuf.subarray(0, 8).equals(PNG_MAGIC)) {
+      return reply.code(415).send({ error: 'unsupported_media_type',
+        detail: 'screenshot must be PNG' })
+    }
+
+    // Validate via your schema validator (zod / ajv / valibot).
+    // Rejects unknown protocol_version → 400 unsupported_protocol_version.
+    // Rejects unknown severity → 422 schema_error.
+    let metadata: ValidatedSubmission
+    try {
+      metadata = validateSubmission(JSON.parse(metadataRaw))
+    } catch (err) {
+      // Distinguish the two error classes with explicit codes.
+      if (err.kind === 'unsupported_protocol_version') {
+        return reply.code(400).send({ error: 'unsupported_protocol_version',
+          detail: err.message })
+      }
+      return reply.code(422).send({ error: 'schema_error', detail: err.message })
+    }
+
+    const id = await storage.saveReport({
+      ...metadata,
+      server_user_agent: req.headers['user-agent'] ?? '',
+    }, screenshotBuf)
+
+    // Best-effort GitHub sync. Failure must not roll back the local save.
+    let githubIssueUrl: string | null = null
+    if (opts.github?.enabled) {
+      try {
+        const result = await createGitHubIssue(opts.github, { id, ...metadata })
+        if (result) {
+          githubIssueUrl = result.issueUrl
+          // Post-save update — see "What every adapter MUST implement" § GitHub sync.
+          if (typeof storage.setGitHubIssue === 'function') {
+            await storage.setGitHubIssue(id, result.issueUrl, result.issueNumber)
+          }
+        }
+      } catch (err) { fastify.log.warn({ err }, '[bug-fab] github sync failed') }
+    }
+
+    return reply.code(201).send({
+      id,
+      received_at:      new Date().toISOString(),
+      stored_at:        `storage://bug-reports/${id}`,
+      github_issue_url: githubIssueUrl,
+    })
+  })
+}
+```
+
+### Storage interface
+
+```typescript
+interface IStorage {
+  saveReport(metadata: StoredMetadata, screenshotBytes: Buffer): Promise<string>  // returns id
+  getReport(id: string): Promise<BugReportDetail | null>
+  listReports(filters: ListFilters, page: number, pageSize: number):
+    Promise<{ items: BugReportSummary[]; total: number; stats: BugReportListStats }>
+  getScreenshotPath(id: string): Promise<string | null>
+  updateStatus(id: string, status: Status, by: string,
+               fixCommit?: string, fixDescription?: string): Promise<BugReportDetail>
+  deleteReport(id: string): Promise<void>
+  archiveReport(id: string): Promise<void>
+  bulkCloseFixed(): Promise<number>
+  bulkArchiveClosed(): Promise<number>
+
+  // Optional — GitHub post-save update hook. Duck-typed at call-site.
+  setGitHubIssue?(id: string, issueUrl: string, issueNumber: number): Promise<void>
+}
+```
+
+### Common pitfalls (Fastify)
+
+- **fp() is mandatory.** Without `fastify-plugin` wrapping, the plugin registers in its own encapsulation — parent-scope hooks (auth, logging, etc.) won't fire for plugin routes. Always wrap with `fp()`.
+- **`@fastify/multipart` size limit at registration.** Setting `limits.fileSize` in the plugin registration is the only way to enforce the 11 MiB cap — the Fastify multipart parser buffers up to that limit and then errors. Per-route checking is too late.
+- **Fastify 5 is async-only.** Fastify 5 dropped the callback-style API. Plugin registrations and route handlers must return promises. `await app.register(plugin)` and `async (req, reply) => {...}` are mandatory shapes.
+- **Viewer prefix must be non-empty.** The viewer registers a `GET ''` (root) HTML list route inside its prefix. Mounting at `/` collapses with the app root; the plugin throws at startup. Use `/admin`, `/admin/bug-reports`, or similar.
+- **Snake_case JSON.** Don't use Fastify's auto-CamelCase plugins on Bug-Fab routes. The protocol is snake_case across the wire; conversion breaks conformance.
+- **Don't wrap responses in your app's envelope.** If your host app uses `{ data, error }` envelopes (TKR style) via a shared `ok()`/`fail()` helper, exclude Bug-Fab routes — the protocol's envelope is `{ error, detail }` for failures and bare JSON for success. Wrapping breaks the conformance suite.
 
 ---
 
