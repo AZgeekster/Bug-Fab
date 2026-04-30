@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -119,4 +118,9 @@ app = create_app()
 
 
 if __name__ == "__main__":
+    # Lazy-import uvicorn so test harnesses can import this module's
+    # ``app`` factory without needing uvicorn installed (uvicorn lives in
+    # the example's requirements.txt, not in the Bug-Fab dev extras).
+    import uvicorn
+
     uvicorn.run(app, host="127.0.0.1", port=8000)
