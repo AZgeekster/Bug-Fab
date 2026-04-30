@@ -5,13 +5,26 @@ the FastAPI reference adapter, the Pydantic schemas, three storage
 backends behind a single `Storage` ABC, and the vanilla-JS frontend
 bundle (with `html2canvas` vendored at a pinned version — no CDN).
 
-This guide covers three install paths:
+This guide covers three Python install paths:
 
 1. [FastAPI consumer](#fastapi-consumer) — the canonical path.
 2. [Flask consumer](#flask-consumer) — protocol-only integration via
    direct route handlers.
 3. [React / SPA consumer](#react--spa-consumer) — the JS bundle plus a
    protocol-honoring backend (any language).
+
+For non-Python integrations (Fastify, Express, Next.js Route Handlers,
+etc.), the Python `bug-fab` package is **not required at runtime** —
+you implement the [wire protocol](PROTOCOL.md) directly. Bug-Fab still
+ships the conformance suite as a Python pytest plugin, so you may want
+`pip install bug-fab` on a CI machine for protocol verification.
+
+- **Fastify + Next.js + PostgreSQL + PM2** — see the full step-by-step
+  walkthrough at [`docs/integrations/fastify-nextjs-postgres.md`](./integrations/fastify-nextjs-postgres.md).
+- **Other stacks** — see [`docs/ADAPTERS.md`](./ADAPTERS.md) for code-level
+  sketches and [`docs/ADAPTERS_REGISTRY.md`](./ADAPTERS_REGISTRY.md) for
+  the priority-tiered list of stacks with status (reference / community /
+  sketch / wanted).
 
 ## Requirements
 

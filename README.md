@@ -83,6 +83,7 @@ land in `./bug_reports/`.
 | Install Bug-Fab in a FastAPI / Flask / SPA app | [`docs/INSTALLATION.md`](https://github.com/AZgeekster/Bug-Fab/blob/main/docs/INSTALLATION.md) |
 | Pick a storage backend, configure auth at the mount point, turn on rate limiting or GitHub sync | [`docs/DEPLOYMENT_OPTIONS.md`](https://github.com/AZgeekster/Bug-Fab/blob/main/docs/DEPLOYMENT_OPTIONS.md) |
 | Write your own backend adapter in Fastify / Express / Razor / SvelteKit / Go | [`docs/ADAPTERS.md`](https://github.com/AZgeekster/Bug-Fab/blob/main/docs/ADAPTERS.md) + [`docs/PROTOCOL.md`](https://github.com/AZgeekster/Bug-Fab/blob/main/docs/PROTOCOL.md) |
+| Drop Bug-Fab into a Fastify + Next.js + Postgres + PM2 app (full walkthrough) | [`docs/integrations/fastify-nextjs-postgres.md`](https://github.com/AZgeekster/Bug-Fab/blob/main/docs/integrations/fastify-nextjs-postgres.md) |
 | See which adapters exist (reference / community-maintained / sketch / wanted) | [`docs/ADAPTERS_REGISTRY.md`](https://github.com/AZgeekster/Bug-Fab/blob/main/docs/ADAPTERS_REGISTRY.md) |
 | Verify your adapter against the wire protocol | [`docs/CONFORMANCE.md`](https://github.com/AZgeekster/Bug-Fab/blob/main/docs/CONFORMANCE.md) |
 | Self-host the public POC on Fly.io | [`docs/POC_HOSTING.md`](https://github.com/AZgeekster/Bug-Fab/blob/main/docs/POC_HOSTING.md) |

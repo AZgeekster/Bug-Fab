@@ -78,8 +78,8 @@ Mainstream stacks where adapter demand is likely from real consumers. Bug-Fab ac
 | Language | TypeScript |
 | Tracks Bug-Fab | v0.1 (post-spec-tightening 2026-04-29) |
 | Conformance | ⚠️ partial — pending first run on corrected plugin |
-| Reference doc | [`docs/ADAPTERS.md#fastify-typescript-fastify--5`](./ADAPTERS.md#fastify-typescript-fastify--5) |
-| Last updated | 2026-04-29 |
+| Reference doc | Sketch: [`docs/ADAPTERS.md#fastify-typescript-fastify--5`](./ADAPTERS.md#fastify-typescript-fastify--5). Full walkthrough: [`docs/integrations/fastify-nextjs-postgres.md`](./integrations/fastify-nextjs-postgres.md) (+ [AI companion](./integrations/fastify-nextjs-postgres.AGENTS.md)). |
+| Last updated | 2026-04-30 |
 | Maintainer | TKR (Andrew's other project) |
 | Notes | First-ever consumer integration; surfaced the spec-tightening pass. Now spec-conformant after 7 mechanical fixes. |
 
