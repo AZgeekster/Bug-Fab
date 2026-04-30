@@ -38,7 +38,10 @@ def _post_with_metadata(client: httpx.Client, metadata: str) -> httpx.Response:
     )
 
 
-def test_environment_dev_round_trips(conformance_client: httpx.Client) -> None:
+def test_environment_dev_round_trips(
+    conformance_client: httpx.Client,
+    conformance_viewer_client: httpx.Client,
+) -> None:
     """Submitting `environment: "dev"` MUST succeed and the value MUST persist."""
     metadata_dict = json.loads(make_test_metadata(title="Environment field — dev"))
     metadata_dict.setdefault("context", {})["environment"] = "dev"
@@ -51,7 +54,7 @@ def test_environment_dev_round_trips(conformance_client: httpx.Client) -> None:
         )
     report_id = response.json()["id"]
 
-    detail = conformance_client.get(f"{LIST_PATH}/{report_id}")
+    detail = conformance_viewer_client.get(f"{LIST_PATH}/{report_id}")
     if detail.status_code != 200:
         pytest.fail(
             f"Detail fetch failed with {detail.status_code}; cannot verify environment round-trip."

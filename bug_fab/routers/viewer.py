@@ -209,7 +209,7 @@ async def get_report_html(
 
 
 @viewer_router.get(
-    "/{report_id}/screenshot",
+    "/reports/{report_id}/screenshot",
     summary="Raw screenshot bytes",
 )
 async def get_screenshot(

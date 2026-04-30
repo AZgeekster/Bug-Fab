@@ -48,10 +48,13 @@ def _seed_report(client: httpx.Client, **metadata_overrides: object) -> str:
     return body["id"]
 
 
-def test_list_returns_pagination_envelope(conformance_client: httpx.Client) -> None:
+def test_list_returns_pagination_envelope(
+    conformance_client: httpx.Client,
+    conformance_viewer_client: httpx.Client,
+) -> None:
     """`GET /reports` MUST return `{items, total, page, page_size}`."""
     _seed_report(conformance_client, title="List pagination envelope check")
-    response = conformance_client.get(LIST_PATH)
+    response = conformance_viewer_client.get(LIST_PATH)
     if response.status_code != 200:
         pytest.fail(
             f"GET /reports MUST return 200; got {response.status_code}. Body: {response.text[:500]}"
@@ -71,10 +74,13 @@ def test_list_returns_pagination_envelope(conformance_client: httpx.Client) -> N
         pytest.fail(f"`total` MUST be an int; got {type(body['total']).__name__}")
 
 
-def test_list_filter_by_status_open(conformance_client: httpx.Client) -> None:
+def test_list_filter_by_status_open(
+    conformance_client: httpx.Client,
+    conformance_viewer_client: httpx.Client,
+) -> None:
     """`GET /reports?status=open` MUST return only open reports."""
     _seed_report(conformance_client, title="Filter-by-status seed (open)")
-    response = conformance_client.get(LIST_PATH, params={"status": "open"})
+    response = conformance_viewer_client.get(LIST_PATH, params={"status": "open"})
     if response.status_code != 200:
         pytest.fail(
             f"Status-filtered list MUST return 200; got {response.status_code}. "
@@ -89,12 +95,15 @@ def test_list_filter_by_status_open(conformance_client: httpx.Client) -> None:
         )
 
 
-def test_list_filter_by_severity_critical(conformance_client: httpx.Client) -> None:
+def test_list_filter_by_severity_critical(
+    conformance_client: httpx.Client,
+    conformance_viewer_client: httpx.Client,
+) -> None:
     """`GET /reports?severity=critical` MUST return only critical reports."""
     _seed_report(
         conformance_client, title="Filter-by-severity seed (critical)", severity="critical"
     )
-    response = conformance_client.get(LIST_PATH, params={"severity": "critical"})
+    response = conformance_viewer_client.get(LIST_PATH, params={"severity": "critical"})
     if response.status_code != 200:
         pytest.fail(
             f"Severity-filtered list MUST return 200; got {response.status_code}. "
@@ -109,7 +118,10 @@ def test_list_filter_by_severity_critical(conformance_client: httpx.Client) -> N
         )
 
 
-def test_detail_returns_documented_fields(conformance_client: httpx.Client) -> None:
+def test_detail_returns_documented_fields(
+    conformance_client: httpx.Client,
+    conformance_viewer_client: httpx.Client,
+) -> None:
     """`GET /reports/{id}` MUST return the `BugReportDetail` shape."""
     report_id = _seed_report(
         conformance_client,
@@ -118,7 +130,7 @@ def test_detail_returns_documented_fields(conformance_client: httpx.Client) -> N
         severity="high",
         tags=["detail-check"],
     )
-    response = conformance_client.get(f"{LIST_PATH}/{report_id}")
+    response = conformance_viewer_client.get(f"{LIST_PATH}/{report_id}")
     if response.status_code != 200:
         pytest.fail(
             f"GET /reports/{{id}} MUST return 200 for a known id; "
@@ -149,10 +161,13 @@ def test_detail_returns_documented_fields(conformance_client: httpx.Client) -> N
         )
 
 
-def test_screenshot_returns_image_png(conformance_client: httpx.Client) -> None:
+def test_screenshot_returns_image_png(
+    conformance_client: httpx.Client,
+    conformance_viewer_client: httpx.Client,
+) -> None:
     """`GET /reports/{id}/screenshot` MUST return PNG bytes with `image/png` content-type."""
     report_id = _seed_report(conformance_client, title="Screenshot content-type check")
-    response = conformance_client.get(f"{LIST_PATH}/{report_id}/screenshot")
+    response = conformance_viewer_client.get(f"{LIST_PATH}/{report_id}/screenshot")
     if response.status_code != 200:
         pytest.fail(
             f"Screenshot endpoint MUST return 200 for a known id; "
@@ -169,9 +184,9 @@ def test_screenshot_returns_image_png(conformance_client: httpx.Client) -> None:
     "subpath",
     ["", "/screenshot"],
 )
-def test_unknown_id_returns_404(conformance_client: httpx.Client, subpath: str) -> None:
+def test_unknown_id_returns_404(conformance_viewer_client: httpx.Client, subpath: str) -> None:
     """Both detail and screenshot endpoints MUST return 404 for an unknown id."""
-    response = conformance_client.get(f"{LIST_PATH}/bug-does-not-exist-xyz{subpath}")
+    response = conformance_viewer_client.get(f"{LIST_PATH}/bug-does-not-exist-xyz{subpath}")
     if response.status_code != 404:
         pytest.fail(
             f"Unknown report id MUST return 404 on {LIST_PATH}/<id>{subpath}; "

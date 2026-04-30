@@ -265,6 +265,42 @@
       "title": "BugReportDetail",
       "type": "object"
     },
+    "BugReportIntakeResponse": {
+      "description": "The minimal `201 Created` response for `POST /bug-reports`.\n\nPer `docs/PROTOCOL.md` \u00a7 Response, the intake endpoint MUST return\njust these four fields \u2014 explicitly NOT echoing user-submitted\nmetadata at the top level. Privacy reason: the response body may be\nlogged by reverse proxies, browser network panels, or remote\ncollectors; user-submitted free text shouldn't ride along.\n\nClients that want the stored detail should follow up with\n`GET /reports/{id}` after intake.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "received_at": {
+          "title": "Received At",
+          "type": "string"
+        },
+        "stored_at": {
+          "title": "Stored At",
+          "type": "string"
+        },
+        "github_issue_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Github Issue Url"
+        }
+      },
+      "required": [
+        "id",
+        "received_at",
+        "stored_at"
+      ],
+      "title": "BugReportIntakeResponse",
+      "type": "object"
+    },
     "BugReportListResponse": {
       "description": "Pagination envelope for `GET /reports`.",
       "properties": {

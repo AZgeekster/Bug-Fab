@@ -229,7 +229,8 @@ def test_get_screenshot_returns_image_png(app_factory, tiny_png: bytes) -> None:
     client = app_factory()
     vp = _vp(client)
     bid = _seed(client, tiny_png, title="Screenshot test")
-    response = client.get(f"{vp}/{bid}/screenshot")
+    # Path matches PROTOCOL.md: GET /reports/{id}/screenshot under the viewer prefix.
+    response = client.get(f"{vp}/reports/{bid}/screenshot")
     assert response.status_code == 200
     assert response.headers.get("content-type", "").startswith("image/png")
     assert response.content.startswith(b"\x89PNG")
@@ -238,7 +239,7 @@ def test_get_screenshot_returns_image_png(app_factory, tiny_png: bytes) -> None:
 def test_get_screenshot_unknown_id_returns_404(app_factory) -> None:
     client = app_factory()
     vp = _vp(client)
-    response = client.get(f"{vp}/bug-999/screenshot")
+    response = client.get(f"{vp}/reports/bug-999/screenshot")
     assert response.status_code == 404
 
 
@@ -408,4 +409,4 @@ def test_read_endpoints_remain_open_when_destructive_disabled(
     assert client.get(vp).status_code == 200
     assert client.get(f"{vp}/reports").status_code == 200
     assert client.get(f"{vp}/reports/{bid}").status_code == 200
-    assert client.get(f"{vp}/{bid}/screenshot").status_code == 200
+    assert client.get(f"{vp}/reports/{bid}/screenshot").status_code == 200

@@ -44,10 +44,13 @@ def _seed_report(client: httpx.Client, **metadata_overrides: object) -> str:
     return response.json()["id"]
 
 
-def test_valid_status_change_succeeds(conformance_client: httpx.Client) -> None:
+def test_valid_status_change_succeeds(
+    conformance_client: httpx.Client,
+    conformance_viewer_client: httpx.Client,
+) -> None:
     """`PUT /reports/{id}/status` with `status: fixed` MUST succeed."""
     report_id = _seed_report(conformance_client, title="Valid status change")
-    response = conformance_client.put(
+    response = conformance_viewer_client.put(
         f"{LIST_PATH}/{report_id}/status",
         json={"status": "fixed", "fix_commit": "deadbeef", "fix_description": "fixed it"},
     )
@@ -58,14 +61,17 @@ def test_valid_status_change_succeeds(conformance_client: httpx.Client) -> None:
         )
 
     # Verify the status actually changed
-    detail = conformance_client.get(f"{LIST_PATH}/{report_id}").json()
+    detail = conformance_viewer_client.get(f"{LIST_PATH}/{report_id}").json()
     if detail.get("status") != "fixed":
         pytest.fail(
             f"After PUT status=fixed, detail status MUST be 'fixed'; got {detail.get('status')!r}"
         )
 
 
-def test_invalid_status_returns_422(conformance_client: httpx.Client) -> None:
+def test_invalid_status_returns_422(
+    conformance_client: httpx.Client,
+    conformance_viewer_client: httpx.Client,
+) -> None:
     """An unknown status value MUST be rejected with 422.
 
     Mirrors the severity strictness rule (CC11) for the status enum: silent
@@ -73,7 +79,7 @@ def test_invalid_status_returns_422(conformance_client: httpx.Client) -> None:
     guarantee.
     """
     report_id = _seed_report(conformance_client, title="Invalid status check")
-    response = conformance_client.put(
+    response = conformance_viewer_client.put(
         f"{LIST_PATH}/{report_id}/status",
         json={"status": "unknown"},
     )
@@ -84,13 +90,16 @@ def test_invalid_status_returns_422(conformance_client: httpx.Client) -> None:
         )
 
 
-def test_lifecycle_audit_log_is_appended(conformance_client: httpx.Client) -> None:
+def test_lifecycle_audit_log_is_appended(
+    conformance_client: httpx.Client,
+    conformance_viewer_client: httpx.Client,
+) -> None:
     """Each status change MUST append an entry to `lifecycle: list[dict]`."""
     report_id = _seed_report(conformance_client, title="Lifecycle audit log check")
-    before = conformance_client.get(f"{LIST_PATH}/{report_id}").json()
+    before = conformance_viewer_client.get(f"{LIST_PATH}/{report_id}").json()
     before_count = len(before.get("lifecycle", []))
 
-    response = conformance_client.put(
+    response = conformance_viewer_client.put(
         f"{LIST_PATH}/{report_id}/status",
         json={"status": "investigating"},
     )
@@ -100,7 +109,7 @@ def test_lifecycle_audit_log_is_appended(conformance_client: httpx.Client) -> No
             f"Fix `test_valid_status_change_succeeds` first."
         )
 
-    after = conformance_client.get(f"{LIST_PATH}/{report_id}").json()
+    after = conformance_viewer_client.get(f"{LIST_PATH}/{report_id}").json()
     after_count = len(after.get("lifecycle", []))
 
     if after_count != before_count + 1:
@@ -119,17 +128,20 @@ def test_lifecycle_audit_log_is_appended(conformance_client: httpx.Client) -> No
         )
 
 
-def test_bulk_close_fixed_returns_count(conformance_client: httpx.Client) -> None:
+def test_bulk_close_fixed_returns_count(
+    conformance_client: httpx.Client,
+    conformance_viewer_client: httpx.Client,
+) -> None:
     """`POST /bulk-close-fixed` MUST return `{closed: int}`."""
     report_id = _seed_report(conformance_client, title="Bulk close-fixed seed")
-    fix_response = conformance_client.put(
+    fix_response = conformance_viewer_client.put(
         f"{LIST_PATH}/{report_id}/status",
         json={"status": "fixed"},
     )
     if fix_response.status_code not in {200, 204}:
         pytest.skip("Could not transition report to 'fixed' to seed bulk-close test.")
 
-    response = conformance_client.post(BULK_CLOSE_PATH)
+    response = conformance_viewer_client.post(BULK_CLOSE_PATH)
     if response.status_code not in {200, 204}:
         pytest.fail(
             f"POST /bulk-close-fixed MUST return 200/204; "
@@ -143,11 +155,14 @@ def test_bulk_close_fixed_returns_count(conformance_client: httpx.Client) -> Non
             pytest.fail(f"`closed` MUST be an int; got {type(body['closed']).__name__}")
 
 
-def test_bulk_archive_closed_returns_count(conformance_client: httpx.Client) -> None:
+def test_bulk_archive_closed_returns_count(
+    conformance_client: httpx.Client,
+    conformance_viewer_client: httpx.Client,
+) -> None:
     """`POST /bulk-archive-closed` MUST return `{archived: int}`."""
     report_id = _seed_report(conformance_client, title="Bulk archive-closed seed")
     for next_status in ("fixed", "closed"):
-        step = conformance_client.put(
+        step = conformance_viewer_client.put(
             f"{LIST_PATH}/{report_id}/status",
             json={"status": next_status},
         )
@@ -157,7 +172,7 @@ def test_bulk_archive_closed_returns_count(conformance_client: httpx.Client) -> 
                 f"(got {step.status_code}); cannot verify bulk-archive."
             )
 
-    response = conformance_client.post(BULK_ARCHIVE_PATH)
+    response = conformance_viewer_client.post(BULK_ARCHIVE_PATH)
     if response.status_code not in {200, 204}:
         pytest.fail(
             f"POST /bulk-archive-closed MUST return 200/204; "

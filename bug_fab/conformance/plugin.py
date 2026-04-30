@@ -59,8 +59,21 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store",
         default=None,
         help=(
-            "Base URL of the adapter under test (e.g. http://localhost:8000/bug-fab). "
+            "Base URL of the adapter's INTAKE endpoint (e.g. http://localhost:8000/api). "
+            "The conformance suite appends `/bug-reports` to this. "
             "Required when --bug-fab-conformance is set."
+        ),
+    )
+    group.addoption(
+        "--viewer-base-url",
+        action="store",
+        default=None,
+        help=(
+            "Base URL of the adapter's VIEWER endpoints (e.g. http://localhost:8000/admin/bug-reports). "
+            "The conformance suite appends `/reports`, `/reports/{id}`, `/bulk-close-fixed`, etc. "
+            "Defaults to --base-url when not set (for adapters that mount intake + viewer "
+            "under one prefix). Set explicitly for split-mount adapters where intake is open "
+            "and viewer is auth-gated under different URL prefixes — the documented best practice."
         ),
     )
     group.addoption(
@@ -171,17 +184,34 @@ def _parse_auth_header(raw: str | None) -> dict[str, str]:
 def conformance_base_url(request: pytest.FixtureRequest) -> str:
     """Yield the validated `--base-url`, failing fast if it is missing.
 
-    This is a separate fixture so individual conformance tests can depend on
-    just the URL string (e.g., for relative-path joins) without spinning up a
-    full client.
+    This is the INTAKE base URL — `/bug-reports` paths resolve against it.
+    Viewer tests use `conformance_viewer_base_url` instead, which defaults
+    to this value when `--viewer-base-url` is not set.
     """
     base_url = request.config.getoption("--base-url")
     if not base_url:
         pytest.fail(
             "--base-url is required when running conformance tests. "
-            "Example: pytest --bug-fab-conformance --base-url=http://localhost:8000"
+            "Example: pytest --bug-fab-conformance --base-url=http://localhost:8000/api"
         )
     return base_url.rstrip("/")
+
+
+@pytest.fixture(scope="session")
+def conformance_viewer_base_url(
+    request: pytest.FixtureRequest,
+    conformance_base_url: str,
+) -> str:
+    """Yield the validated `--viewer-base-url`, defaulting to `--base-url`.
+
+    Real adapters typically split intake (open submit, mounted at `/api`)
+    from viewer (auth-gated, mounted at `/admin/bug-reports` or similar).
+    This fixture lets the suite address each independently. When the
+    adapter mounts both at the same prefix, `--viewer-base-url` can be
+    omitted.
+    """
+    viewer_url = request.config.getoption("--viewer-base-url")
+    return (viewer_url or conformance_base_url).rstrip("/")
 
 
 @pytest.fixture(scope="session")
@@ -197,7 +227,10 @@ def conformance_client(
     conformance_base_url: str,
     conformance_auth_headers: dict[str, str],
 ) -> Iterator[httpx.Client]:
-    """Yield an `httpx.Client` pointed at the adapter under test.
+    """Yield an `httpx.Client` pointed at the adapter's INTAKE base URL.
+
+    Use for `POST /bug-reports` calls. Use `conformance_viewer_client`
+    for any `/reports`, `/reports/{id}`, or `/bulk-*` path.
 
     Session-scoped so each test reuses the same TCP connection pool —
     keeps the suite fast against a slow adapter and avoids per-test
@@ -205,6 +238,26 @@ def conformance_client(
     """
     with httpx.Client(
         base_url=conformance_base_url,
+        headers=conformance_auth_headers,
+        timeout=30.0,
+        follow_redirects=False,
+    ) as client:
+        yield client
+
+
+@pytest.fixture(scope="session")
+def conformance_viewer_client(
+    conformance_viewer_base_url: str,
+    conformance_auth_headers: dict[str, str],
+) -> Iterator[httpx.Client]:
+    """Yield an `httpx.Client` pointed at the adapter's VIEWER base URL.
+
+    Use for `GET /reports`, `GET /reports/{id}`, `PUT /reports/{id}/status`,
+    `DELETE /reports/{id}`, `GET /reports/{id}/screenshot`, and the bulk
+    operation paths.
+    """
+    with httpx.Client(
+        base_url=conformance_viewer_base_url,
         headers=conformance_auth_headers,
         timeout=30.0,
         follow_redirects=False,

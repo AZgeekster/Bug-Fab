@@ -32,6 +32,7 @@ from bug_fab.schemas import (
     BugReportContext,
     BugReportCreate,
     BugReportDetail,
+    BugReportIntakeResponse,
     BugReportListResponse,
     BugReportStatusUpdate,
     BugReportSummary,
@@ -47,6 +48,7 @@ def build_schema() -> dict:
     models = [
         (BugReportCreate, "validation"),
         (BugReportContext, "validation"),
+        (BugReportIntakeResponse, "validation"),
         (BugReportStatusUpdate, "validation"),
         (LifecycleEvent, "validation"),
         (BugReportSummary, "validation"),

@@ -31,7 +31,7 @@ from pydantic import ValidationError
 from bug_fab._rate_limit import RateLimiter
 from bug_fab.config import Settings
 from bug_fab.integrations.github import GitHubSync
-from bug_fab.schemas import BugReportCreate, BugReportDetail
+from bug_fab.schemas import BugReportCreate, BugReportIntakeResponse
 from bug_fab.storage.base import Storage
 
 logger = logging.getLogger(__name__)
@@ -150,7 +150,7 @@ def _detect_image_kind(payload: bytes) -> str | None:
 
 @submit_router.post(
     "/bug-reports",
-    response_model=BugReportDetail,
+    response_model=BugReportIntakeResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Submit a bug report",
 )
@@ -162,7 +162,7 @@ async def submit_bug_report(
     settings: Settings = Depends(get_settings),
     github_sync: GitHubSync | None = Depends(get_github_sync),
     limiter: RateLimiter | None = Depends(get_rate_limiter),
-) -> BugReportDetail:
+) -> BugReportIntakeResponse:
     """Persist a new bug report and return its full detail payload."""
     if limiter is not None and not limiter.check(_client_ip(request)):
         raise HTTPException(
@@ -244,21 +244,26 @@ async def submit_bug_report(
     # GitHub sync is best-effort. A failed POST does not roll back the
     # local save; the report simply lacks a github_issue_url until a
     # later replay or manual cross-link.
+    github_issue_url: str | None = None
     if github_sync is not None:
         try:
             issue_number, issue_url = await github_sync.create_issue(detail.model_dump(mode="json"))
             if issue_number is not None and issue_url is not None:
-                # Re-read so the response includes the github linkage.
-                # Storage backends may persist this asynchronously; if the
-                # backend exposes a hook to update issue linkage we use it,
-                # otherwise the linkage will surface on the next read.
+                github_issue_url = issue_url
+                # Persist the link to storage if the backend supports it. If not,
+                # consumers will see it appear on the next GET /reports/{id}.
                 update_hook = getattr(storage, "set_github_link", None)
                 if callable(update_hook):
                     await update_hook(report_id, issue_number, issue_url)
-                refreshed = await storage.get_report(report_id)
-                if refreshed is not None:
-                    detail = refreshed
         except Exception:  # pragma: no cover - defensive
             logger.exception("bug_fab_github_sync_failed", extra={"report_id": report_id})
 
-    return detail
+    # Per PROTOCOL.md § Response — minimal envelope, NOT the full BugReportDetail.
+    # `stored_at` is an opaque diagnostic string; consumers wanting the full
+    # stored shape do GET /reports/{id} after.
+    return BugReportIntakeResponse(
+        id=report_id,
+        received_at=detail.created_at,
+        stored_at=f"bug-fab://reports/{report_id}",
+        github_issue_url=github_issue_url,
+    )

@@ -56,16 +56,16 @@ def test_happy_path_returns_201_and_full_detail(app_factory, tiny_png: bytes) ->
     )
     assert response.status_code == 201, response.text
     body = response.json()
-    # Documented response shape: full BugReportDetail
+    # Documented response shape per PROTOCOL.md § Response: minimal envelope
+    # ONLY — `id`, `received_at`, `stored_at`, `github_issue_url`. Privacy
+    # invariant: the response body MUST NOT echo user-submitted free text.
+    assert set(body.keys()) == {"id", "received_at", "stored_at", "github_issue_url"}
     assert body["id"].startswith("bug-")
-    assert body["title"] == "Submit form does not clear after success"
-    assert body["status"] == "open"
-    assert body["severity"] == "medium"
-    assert body["lifecycle"]
-    assert body["lifecycle"][0]["action"] == "created"
-    # Has both server-captured + client-supplied UAs
-    assert body["client_reported_user_agent"] == "client-supplied-ua/1.0"
-    assert "server_user_agent" in body
+    assert body["github_issue_url"] is None
+    # Specifically: title / description / severity MUST NOT leak into the envelope.
+    assert "title" not in body
+    assert "description" not in body
+    assert "severity" not in body
 
 
 def test_happy_path_persists_to_storage(app_factory, tiny_png: bytes, file_storage) -> None:
@@ -92,7 +92,13 @@ def test_happy_path_persists_to_storage(app_factory, tiny_png: bytes, file_stora
 
 
 def test_server_captures_user_agent_from_header(app_factory, tiny_png: bytes) -> None:
+    """Server-captured UA + client-reported UA both round-trip via GET detail.
+
+    The intake response is the minimal envelope (no UA fields), so we follow
+    up with GET /reports/{id} to confirm both UA values landed.
+    """
     client = app_factory()
+    vp = getattr(client, "viewer_prefix", "")
     response = client.post(
         "/bug-reports",
         data={"metadata": json.dumps(_baseline_metadata())},
@@ -100,23 +106,29 @@ def test_server_captures_user_agent_from_header(app_factory, tiny_png: bytes) ->
         headers={"User-Agent": "Mozilla/5.0 (Server-Captured)"},
     )
     assert response.status_code == 201
-    body = response.json()
-    assert body["server_user_agent"] == "Mozilla/5.0 (Server-Captured)"
+    bid = response.json()["id"]
+
+    detail = client.get(f"{vp}/reports/{bid}").json()
+    assert detail["server_user_agent"] == "Mozilla/5.0 (Server-Captured)"
     # Client-supplied value preserved verbatim
-    assert body["client_reported_user_agent"] == "client-supplied-ua/1.0"
+    assert detail["client_reported_user_agent"] == "client-supplied-ua/1.0"
 
 
 def test_environment_flows_through(app_factory, tiny_png: bytes) -> None:
+    """Environment field round-trips via GET detail (intake response is minimal)."""
     md = _baseline_metadata()
     md["context"]["environment"] = "staging"
     client = app_factory()
+    vp = getattr(client, "viewer_prefix", "")
     response = client.post(
         "/bug-reports",
         data={"metadata": json.dumps(md)},
         files={"screenshot": ("shot.png", tiny_png, "image/png")},
     )
     assert response.status_code == 201
-    assert response.json()["environment"] == "staging"
+    bid = response.json()["id"]
+    detail = client.get(f"{vp}/reports/{bid}").json()
+    assert detail["environment"] == "staging"
 
 
 # -----------------------------------------------------------------------------

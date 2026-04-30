@@ -364,7 +364,10 @@ def test_submit_succeeds_even_when_github_create_issue_errors(app_factory, tiny_
     )
     assert response.status_code == 201
     body = response.json()
-    assert body["title"] == "github fail"
+    # Minimal envelope: id present, github_issue_url null (sync failed but
+    # local persistence succeeded — best-effort guarantee).
+    assert body["id"].startswith("bug-")
+    assert body["github_issue_url"] is None
     # No issue linkage on the report
     assert body.get("github_issue_number") in (None, 0)
 

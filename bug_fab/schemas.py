@@ -203,3 +203,24 @@ class BugReportListResponse(BaseModel):
     total: int
     page: int = 1
     page_size: int = 20
+
+
+class BugReportIntakeResponse(BaseModel):
+    """The minimal `201 Created` response for `POST /bug-reports`.
+
+    Per `docs/PROTOCOL.md` § Response, the intake endpoint MUST return
+    just these four fields — explicitly NOT echoing user-submitted
+    metadata at the top level. Privacy reason: the response body may be
+    logged by reverse proxies, browser network panels, or remote
+    collectors; user-submitted free text shouldn't ride along.
+
+    Clients that want the stored detail should follow up with
+    `GET /reports/{id}` after intake.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    received_at: str
+    stored_at: str
+    github_issue_url: str | None = None

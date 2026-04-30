@@ -46,7 +46,10 @@ def _seed_report(client: httpx.Client) -> str:
     return response.json()["id"]
 
 
-def test_deprecated_status_rejected_on_write(conformance_client: httpx.Client) -> None:
+def test_deprecated_status_rejected_on_write(
+    conformance_client: httpx.Client,
+    conformance_viewer_client: httpx.Client,
+) -> None:
     """CC12 (write half): `PUT status: "resolved"` MUST return 422.
 
     Adapters MAY reject deprecated values on write — and the v0.1
@@ -55,7 +58,7 @@ def test_deprecated_status_rejected_on_write(conformance_client: httpx.Client) -
     has already retired.
     """
     report_id = _seed_report(conformance_client)
-    response = conformance_client.put(
+    response = conformance_viewer_client.put(
         f"{LIST_PATH}/{report_id}/status",
         json={"status": DEPRECATED_STATUS},
     )
