@@ -1,0 +1,27 @@
+{
+  "name": "bug-fab-nextjs-minimal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Next.js 14 App Router POC implementing all eight Bug-Fab wire-protocol endpoints as Route Handlers.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "14.2.15",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.10",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "typescript": "5.5.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

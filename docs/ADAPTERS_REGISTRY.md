@@ -139,34 +139,34 @@ Mainstream stacks where adapter demand is likely from real consumers. Bug-Fab ac
 | Field | Value |
 |---|---|
 | Stack | Django ≥ 4.2, Python ≥ 3.10 |
-| Status | ⚪ wanted |
+| Status | 🟡 sketch |
 | Tier | 1 |
-| Package | (none) |
+| Package | (sketch) |
 | Repository | — |
 | Language | Python |
 | Tracks Bug-Fab | v0.1 |
-| Conformance | n/a |
-| Reference doc | (TBD) |
+| Conformance | untested |
+| Reference doc | [`docs/ADAPTERS.md#django-django--42-python--310`](./ADAPTERS.md#django-django--42-python--310) |
 | Last updated | 2026-04-30 |
-| Maintainer | (none) |
-| Notes | Second-most-popular Python web framework. A `django-bug-fab` reusable app would integrate with Django's ORM (`models.Model`) and admin pages. ~3-4 days of work. |
+| Maintainer | (none — sketch only) |
+| Notes | Reusable Django app pattern — `BugReport` + `BugReportLifecycle` models, plain Django views (no DRF dependency), admin auth via `LoginRequiredMixin`. Sketch covers all 8 endpoints, multi-process safe (DB-backed), and the 7 most-common Django integration pitfalls (DRF camelCase, csrf_exempt, MEDIA_ROOT, upload-size settings, etc.). |
 
 ### NestJS (TypeScript)
 
 | Field | Value |
 |---|---|
 | Stack | NestJS ≥ 10, TypeScript |
-| Status | ⚪ wanted |
+| Status | 🟡 sketch |
 | Tier | 1 |
-| Package | (none) |
+| Package | (sketch) |
 | Repository | — |
 | Language | TypeScript |
 | Tracks Bug-Fab | v0.1 |
-| Conformance | n/a |
-| Reference doc | (TBD) |
+| Conformance | untested |
+| Reference doc | [`docs/ADAPTERS.md#nestjs-typescript-nestjs--10`](./ADAPTERS.md#nestjs-typescript-nestjs--10) |
 | Last updated | 2026-04-30 |
-| Maintainer | (none) |
-| Notes | Growing enterprise TS framework. A `@bug-fab/nestjs` module would be a Module + Controller exposing the 8 endpoints. The Fastify sketch translates almost directly — NestJS supports Fastify as its underlying server. |
+| Maintainer | (none — sketch only) |
+| Notes | `BugFabModule` pattern: 2 controllers (intake + viewer), `BugFabService` implementing IStorage, class-validator DTOs, custom `@Catch()` exception filter remapping NestJS's default `{statusCode, message, error}` to the protocol's `{error, detail}` envelope. Targets `@nestjs/platform-fastify` (recommended) with Express path noted. 9-bullet pitfalls section. |
 
 ---
 
@@ -178,18 +178,18 @@ Real but smaller user bases or growing-mainstream stacks. Sketches welcome; main
 
 | Field | Value |
 |---|---|
-| Stack | Hono ≥ 4 (Node, Bun, Deno, edge runtimes) |
-| Status | ⚪ wanted |
+| Stack | Hono ≥ 4 (Node, Bun, Deno, Cloudflare Workers, Vercel Edge) |
+| Status | 🟡 sketch |
 | Tier | 2 |
-| Package | (none) |
+| Package | (sketch) |
 | Repository | — |
 | Language | TypeScript |
 | Tracks Bug-Fab | v0.1 |
-| Conformance | n/a |
-| Reference doc | (TBD) |
+| Conformance | untested |
+| Reference doc | [`docs/ADAPTERS.md#hono-typescript-hono--4`](./ADAPTERS.md#hono-typescript-hono--4) |
 | Last updated | 2026-04-30 |
-| Maintainer | (none) |
-| Notes | Particularly interesting for edge / Cloudflare Workers deployments since Hono runs everywhere. Multipart support is via `c.req.parseBody()`. |
+| Maintainer | (none — sketch only) |
+| Notes | Edge-runtime-friendly. Sketch uses `c.req.parseBody()` for multipart, returns `Uint8Array` from `getScreenshotBytes` (so storage backends can be R2/S3/KV instead of `node:fs` for serverless deploys). Body-size limit is runtime-defined; 10/11 MiB cap enforced inside the handler. |
 
 ### SvelteKit (TypeScript)
 

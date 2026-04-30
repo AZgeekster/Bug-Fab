@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Next.js build output
+.next/
+out/
+next-env.d.ts
+
+# Bug-Fab runtime data — these are submitted reports; never commit them.
+bug_reports/
+
+# Local databases (none used by default; here so swap-in backends are safe)
+*.db
+*.sqlite
+*.sqlite3
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Vendored frontend bundle — fetched at deploy time, not committed.
+public/bug-fab/bug-fab.js
+public/bug-fab/vendor/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+.env.*.local

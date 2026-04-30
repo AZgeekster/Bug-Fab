@@ -236,15 +236,16 @@ Returns a JSON array of report summaries. Supports filtering via query params.
 
 ```json
 {
-  "reports": [
+  "items": [
     {
       "id": "bug-001",
       "title": "Save button is unresponsive",
+      "report_type": "bug",
       "severity": "high",
       "status": "open",
-      "environment": "prod",
-      "received_at": "2026-04-27T15:30:00Z",
-      "app": {"name": "shop", "version": "1.4.2"},
+      "module": "checkout",
+      "created_at": "2026-04-27T15:30:00Z",
+      "has_screenshot": true,
       "github_issue_url": null
     }
   ],
@@ -262,7 +263,7 @@ Returns a JSON array of report summaries. Supports filtering via query params.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `reports` | array | Summary objects. Field set documented above; adapters MAY include additional summary fields but MUST include the listed fields. |
+| `items` | array | Summary objects (each is a `BugReportSummary` per [`protocol-schema.json`](./protocol-schema.json)). Adapters MAY include additional summary fields but MUST include the documented set. |
 | `total` | int | Total reports matching filters (across all pages). |
 | `page` | int | Current page (echoed from request). |
 | `page_size` | int | Effective page size (echoed from request, possibly capped). |

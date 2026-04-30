@@ -1173,6 +1173,924 @@ func (a *Adapter) persistReport(ctx context.Context, id string, receivedAt time.
 
 ---
 
+<!-- HONO_SECTION_START -->
+## Hono (TypeScript, Hono ≥ 4)
+
+Hono is the right adapter target when the consumer runs on an edge or non-Node JavaScript runtime — Cloudflare Workers, Bun, Deno Deploy, Vercel Edge — or wants a single ultra-light server framework that runs unchanged across all of them. Hono's `c.req.parseBody()` handles `multipart/form-data` natively across runtimes, and the `Hono` instance is itself a fetch-style handler, which makes mounting Bug-Fab's two routers trivial.
+
+### Required peer dependencies
+
+```json
+{
+  "peerDependencies": {
+    "hono": ">=4.0.0"
+  }
+}
+```
+
+Hono ships its own multipart parser as part of `c.req.parseBody()`, so no additional middleware is needed for the intake route. Storage backend dependencies (e.g., `@aws-sdk/client-s3` for R2/S3, `@cloudflare/workers-types` for KV/D1, `node:fs` on Node/Bun) are consumer-provided via the `IStorage` implementation.
+
+### Multipart parsing
+
+Hono delegates body parsing to the underlying runtime's `Request.formData()` (Web Fetch standard). The convenience wrapper is `c.req.parseBody()`, which returns `Record<string, string | File>` — string for text fields, `File` for upload parts. Always type-check before accessing `.arrayBuffer()` or treating a value as a string; the multipart shape is not guaranteed.
+
+```typescript
+const body = await c.req.parseBody()
+const metadataRaw = body['metadata']
+const screenshotEntry = body['screenshot']
+
+if (typeof metadataRaw !== 'string' || !(screenshotEntry instanceof File)) {
+  return c.json({ error: 'validation_error',
+    detail: 'metadata and screenshot multipart fields are both required' }, 400)
+}
+```
+
+Body size limits are runtime-defined: Cloudflare Workers caps at 100 MiB on paid plans (much less on free), Bun and Node default to no cap, Vercel Edge caps at 4.5 MiB. The 11 MiB total-body figure from PROTOCOL.md must be enforced explicitly inside the handler when the runtime ceiling exceeds it — and the consumer must verify the runtime ceiling is at least 11 MiB.
+
+### Plugin / route registration
+
+Hono apps are composable: build one `Hono` instance per router, then mount each under a non-empty prefix. The viewer-prefix-must-be-non-empty constraint from PROTOCOL.md still applies — the viewer's HTML list lives at the prefix root.
+
+```typescript
+import { Hono } from 'hono'
+
+interface BugFabOptions {
+  storage:       IStorage
+  submitPrefix?: string                 // default: "/api"
+  viewerPrefix?: string                 // default: "/admin/bug-reports" — MUST be non-empty
+  github?: { enabled: boolean; pat: string; repo: string; apiBase?: string }
+}
+
+export function mountBugFab<E extends { Bindings?: unknown; Variables?: unknown }>(
+  app:  Hono<E>,
+  opts: BugFabOptions,
+): Hono<E> {
+  if (!opts.storage) throw new Error('[bug-fab] opts.storage is required')
+
+  const submitPrefix = opts.submitPrefix ?? '/api'
+  const viewerPrefix = opts.viewerPrefix ?? '/admin/bug-reports'
+
+  if (!viewerPrefix || viewerPrefix === '/') {
+    throw new Error('[bug-fab] viewerPrefix must be non-empty and non-root.')
+  }
+
+  const intake = buildIntakeRoutes(opts)
+  const viewer = buildViewerRoutes(opts.storage)
+
+  app.route(submitPrefix, intake)
+  app.route(viewerPrefix, viewer)
+
+  // Preserve the protocol's error envelope — Hono's default 500 handler
+  // emits plain text, which would corrupt {error, detail} responses.
+  app.onError((err, c) => {
+    console.error('[bug-fab] unhandled', err)
+    return c.json({ error: 'internal_error', detail: String(err.message ?? err) }, 500)
+  })
+
+  return app
+}
+```
+
+### Intake route — POST /bug-reports
+
+```typescript
+import { Hono } from 'hono'
+import type {
+  BugReportCreate,
+  BugReportIntakeResponse,
+} from '@bug-fab/protocol-types'
+
+const PNG_MAGIC = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+function buildIntakeRoutes(opts: BugFabOptions): Hono {
+  const intake = new Hono()
+
+  intake.post('/bug-reports', async (c) => {
+    const body = await c.req.parseBody()
+    const metadataRaw = body['metadata']
+    const screenshotEntry = body['screenshot']
+
+    if (typeof metadataRaw !== 'string' || !(screenshotEntry instanceof File)) {
+      return c.json({ error: 'validation_error',
+        detail: 'metadata and screenshot multipart fields are both required' }, 400)
+    }
+
+    const screenshotBuf = new Uint8Array(await screenshotEntry.arrayBuffer())
+
+    if (screenshotBuf.byteLength > 10 * 1024 * 1024) {
+      return c.json({ error: 'payload_too_large',
+        limit_bytes: 10 * 1024 * 1024 }, 413)
+    }
+
+    // PNG magic-byte check — do not trust the File.type / Content-Type alone.
+    // The conformance suite has an explicit JPEG-rejection test.
+    const head = screenshotBuf.subarray(0, 8)
+    if (head.length < 8 || !head.every((b, i) => b === PNG_MAGIC[i])) {
+      return c.json({ error: 'unsupported_media_type',
+        detail: 'screenshot must be PNG' }, 415)
+    }
+
+    let parsed: unknown
+    try { parsed = JSON.parse(metadataRaw) } catch (err) {
+      return c.json({ error: 'validation_error',
+        detail: `metadata is not valid JSON: ${(err as Error).message}` }, 400)
+    }
+
+    // Validate via your schema validator (zod / valibot / ajv) against the
+    // wire-protocol shape (snake_case BugReportCreate). The validator MUST:
+    //   - reject unknown protocol_version → 400 unsupported_protocol_version
+    //   - reject missing protocol_version / title / client_ts → 422 schema_error
+    //   - reject unknown severity / report_type → 422 schema_error
+    //   - reject reporter sub-fields > 256 chars → 422 schema_error
+    let metadata: BugReportCreate
+    try {
+      metadata = validateSubmission(parsed)
+    } catch (err: any) {
+      if (err.kind === 'unsupported_protocol_version') {
+        return c.json({ error: 'unsupported_protocol_version',
+          detail: err.message }, 400)
+      }
+      return c.json({ error: 'schema_error', detail: err.message }, 422)
+    }
+
+    // Server-captured User-Agent — source of truth (PROTOCOL.md §User-Agent
+    // trust boundary). The client-supplied context.user_agent is preserved
+    // separately as `client_reported_user_agent`.
+    const serverUA = c.req.header('user-agent') ?? ''
+
+    const id = await opts.storage.saveReport({
+      ...metadata,
+      server_user_agent: serverUA,
+    }, screenshotBuf)
+
+    // Best-effort GitHub sync — failure logs but never breaks intake.
+    let githubIssueUrl: string | null = null
+    if (opts.github?.enabled) {
+      try {
+        const result = await createGitHubIssue(opts.github, { id, ...metadata })
+        if (result) {
+          githubIssueUrl = result.issueUrl
+          if (typeof opts.storage.setGitHubIssue === 'function') {
+            await opts.storage.setGitHubIssue(id, result.issueUrl, result.issueNumber)
+          }
+        }
+      } catch (err) { console.warn('[bug-fab] github sync failed', err) }
+    }
+
+    // Minimal envelope — NEVER echo title/description/severity/etc.
+    const response: BugReportIntakeResponse = {
+      id,
+      received_at:      new Date().toISOString(),
+      stored_at:        `storage://bug-reports/${id}`,
+      github_issue_url: githubIssueUrl,
+    }
+    return c.json(response, 201)
+  })
+
+  return intake
+}
+```
+
+### Storage interface
+
+```typescript
+interface IStorage {
+  saveReport(metadata: StoredMetadata, screenshotBytes: Uint8Array): Promise<string>  // returns id
+  getReport(id: string): Promise<BugReportDetail | null>
+  listReports(filters: ListFilters, page: number, pageSize: number):
+    Promise<{ items: BugReportSummary[]; total: number; stats: BugReportListStats }>
+  getScreenshotBytes(id: string): Promise<Uint8Array | null>
+  updateStatus(id: string, status: Status, by: string,
+               fixCommit?: string, fixDescription?: string): Promise<BugReportDetail>
+  deleteReport(id: string): Promise<void>
+  archiveReport(id: string): Promise<void>
+  bulkCloseFixed(): Promise<number>
+  bulkArchiveClosed(): Promise<number>
+
+  // Optional — GitHub post-save update hook. Duck-typed at call-site.
+  setGitHubIssue?(id: string, issueUrl: string, issueNumber: number): Promise<void>
+}
+```
+
+The viewer router fetches PNG bytes via `getScreenshotBytes` rather than a filesystem path — edge runtimes have no `node:fs`, so the abstraction returns bytes directly and lets the storage class decide where they came from (R2 object, KV value, local disk read on Bun/Node, etc.).
+
+### Common pitfalls (Hono)
+
+- **Edge runtime cannot do filesystem I/O.** If the consumer deploys to Cloudflare Workers, Vercel Edge, or Deno Deploy, the storage backend MUST NOT use `node:fs` — those imports fail at deploy time. Use R2 / S3 / KV / D1 / Durable Objects instead. Bun and Node deployments can use the filesystem-backed storage, but the same `IStorage` interface should work both ways.
+- **Body size limit is runtime-defined.** Hono delegates to the runtime's `Request.formData()`. Cloudflare Workers (free plan), Vercel Edge (4.5 MiB), and Deno Deploy each impose their own ceilings — verify the deployment platform's cap is at least 11 MiB or the screenshot upload silently fails before reaching the handler. Bun and Node have no default cap; the 10 MiB screenshot / 11 MiB total checks inside the handler are authoritative there.
+- **`c.req.parseBody()` returns `Record<string, string | File>`.** Don't assume `body['screenshot']` is a `File` without an `instanceof File` check; if the part is missing or duplicated, the value can be a string or an array. Multiple parts with the same name return the *last* value by default — pass `{ all: true }` if you need them all, but Bug-Fab's protocol expects one of each.
+- **`app.onError(...)` is mandatory to preserve the protocol error envelope.** Hono's default error path emits plain text (`Internal Server Error`), which breaks the conformance suite's `{error, detail}` JSON expectation. Register an `onError` handler at mount time that returns `c.json({error: 'internal_error', detail}, 500)`.
+- **Snake_case JSON over the wire.** Don't apply Hono camelCase / serialization middleware to Bug-Fab routes. The protocol is snake_case; converting breaks consumers and the conformance suite.
+- **Don't return `BugReportDetail` from intake.** The 201 envelope is `{id, received_at, stored_at, github_issue_url}` only — echoing user-submitted free text in the intake response leaks PII into reverse-proxy logs and browser network panels (PROTOCOL.md §Response — 201 Created). Clients that want detail follow up with `GET /reports/{id}`.
+- **Viewer prefix must be non-empty.** The viewer's HTML list page resolves at the empty path within its prefix. Mounting at `/` collides with the host app's root — the plugin throws at startup. Use `/admin`, `/admin/bug-reports`, or similar.
+
+---
+
+<!-- NESTJS_SECTION_START -->
+## NestJS (TypeScript, NestJS ≥ 10)
+
+NestJS is an opinionated TypeScript server framework built around modules, decorators, and dependency injection. Bug-Fab fits cleanly into a single `BugFabModule` with two controllers (intake + viewer), a storage service implementing `IStorage`, class-validator DTOs, and a custom exception filter that remaps NestJS's default error envelope to the protocol's `{error, detail}` shape. NestJS supports both Express and Fastify as the underlying HTTP adapter; the sketch below targets `@nestjs/platform-fastify` (recommended for size + multipart speed) and notes the Express delta inline.
+
+### Required dependencies
+
+```json
+{
+  "dependencies": {
+    "@nestjs/common":           "^10.0.0",
+    "@nestjs/core":             "^10.0.0",
+    "@nestjs/platform-fastify": "^10.0.0",
+    "@fastify/multipart":       "^10.0.0",
+    "class-validator":          "^0.14.0",
+    "class-transformer":        "^0.5.0",
+    "reflect-metadata":         "^0.2.0",
+    "rxjs":                     "^7.8.0"
+  }
+}
+```
+
+If you prefer Express underneath, swap `@nestjs/platform-fastify` + `@fastify/multipart` for `@nestjs/platform-express` + `multer` (already a NestJS peer). Pick one — do not pull both.
+
+### Module layout
+
+```
+src/bug-fab/
+├── bug-fab.module.ts                 (registers everything below)
+├── bug-fab.service.ts                (IStorage implementation)
+├── bug-fab-submit.controller.ts      (POST /api/bug-reports)
+├── bug-fab-viewer.controller.ts      (GET/PUT/DELETE /admin/bug-reports/*)
+├── dto/
+│   ├── bug-report-create.dto.ts      (class-validator on submission)
+│   ├── bug-report-status-update.dto.ts
+│   └── reporter.dto.ts
+├── interfaces/
+│   └── storage.interface.ts          (IStorage)
+└── filters/
+    └── bug-fab-exception.filter.ts   (custom @Catch → protocol envelope)
+```
+
+### DTOs (class-validator)
+
+```typescript
+// dto/reporter.dto.ts
+import { IsOptional, IsString, MaxLength } from 'class-validator';
+
+export class ReporterDto {
+  @IsOptional() @IsString() @MaxLength(256) name?: string;
+  @IsOptional() @IsString() @MaxLength(256) email?: string;
+  @IsOptional() @IsString() @MaxLength(256) user_id?: string;
+}
+
+// dto/bug-report-create.dto.ts
+import { IsArray, IsEnum, IsIn, IsObject, IsOptional, IsString,
+         Length, MinLength, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+import { ReporterDto } from './reporter.dto';
+
+export class BugReportCreateDto {
+  @IsIn(['0.1'], { message: 'unsupported_protocol_version' })
+  protocol_version!: '0.1';
+
+  @IsString() @Length(1, 200) title!: string;
+
+  @IsString() @MinLength(1) client_ts!: string;
+
+  @IsOptional() @IsEnum(['bug', 'feature_request'])
+  report_type?: 'bug' | 'feature_request';
+
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsString() expected_behavior?: string;
+
+  @IsOptional() @IsEnum(['low', 'medium', 'high', 'critical'])
+  severity?: 'low' | 'medium' | 'high' | 'critical';
+
+  @IsOptional() @IsArray() @IsString({ each: true }) tags?: string[];
+
+  @IsOptional() @ValidateNested() @Type(() => ReporterDto)
+  reporter?: ReporterDto;
+
+  @IsOptional() @IsObject() context?: Record<string, unknown>;
+}
+```
+
+`ValidationPipe` is applied at the controller level (NOT globally) so it does not also intercept the consumer's other routes:
+
+```typescript
+@UsePipes(new ValidationPipe({
+  whitelist: true,
+  forbidNonWhitelisted: false,         // context allows extra keys per protocol
+  transform: false,                    // CRITICAL — see pitfalls below
+}))
+```
+
+### Submit controller — `POST /api/bug-reports`
+
+```typescript
+import { Controller, Post, Req, UseFilters, HttpCode } from '@nestjs/common';
+import { FastifyRequest } from 'fastify';
+
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+@Controller('api')
+@UseFilters(BugFabExceptionFilter)
+export class BugFabSubmitController {
+  constructor(private readonly service: BugFabService) {}
+
+  @Post('bug-reports')
+  @HttpCode(201)
+  async submit(@Req() req: FastifyRequest) {
+    // Iterate parts ONCE — fastify multipart is a single-shot async iterator.
+    let metadataRaw: string | undefined;
+    let screenshotBuf: Buffer | undefined;
+    for await (const part of (req as any).parts()) {
+      if (part.type === 'field' && part.fieldname === 'metadata') metadataRaw = part.value;
+      else if (part.type === 'file' && part.fieldname === 'screenshot') screenshotBuf = await part.toBuffer();
+    }
+    if (!metadataRaw || !screenshotBuf) {
+      throw new BugFabError('validation_error', 400,
+        'metadata and screenshot multipart fields are both required');
+    }
+    // Magic-byte PNG check — do NOT trust multipart mimetype.
+    if (!screenshotBuf.subarray(0, 8).equals(PNG_MAGIC)) {
+      throw new BugFabError('unsupported_media_type', 415, 'screenshot must be PNG');
+    }
+    if (screenshotBuf.length > 10 * 1024 * 1024) {
+      throw new BugFabError('payload_too_large', 413,
+        'screenshot exceeds 10 MiB cap', { limit_bytes: 10 * 1024 * 1024 });
+    }
+    let metadata: any;
+    try { metadata = JSON.parse(metadataRaw); }
+    catch (e) { throw new BugFabError('validation_error', 400,
+      `metadata is not valid JSON: ${(e as Error).message}`); }
+
+    // Run class-validator manually — JSON is already parsed.
+    // Maps unsupported_protocol_version → 400, other failures → 422 schema_error.
+    const dto = await validateMetadata(metadata);
+
+    const serverUA = req.headers['user-agent'] ?? '';
+    const result = await this.service.saveReport(dto, screenshotBuf, serverUA);
+
+    // Minimal envelope — never echo user-submitted text in 201 body.
+    return { id: result.id, received_at: result.received_at,
+             stored_at: result.stored_at, github_issue_url: result.github_issue_url };
+  }
+}
+```
+
+### Viewer controller
+
+```typescript
+@Controller('admin/bug-reports')
+@UseFilters(BugFabExceptionFilter)
+@UseGuards(AuthGuard('jwt'))                // consumer-supplied
+export class BugFabViewerController {
+  constructor(private readonly service: BugFabService) {}
+
+  @Get('')                                  // HTML list page (non-empty prefix required)
+  list(@Res() reply: FastifyReply) { /* render or redirect to /reports */ }
+
+  @Get('reports')
+  async listReports(@Query() filters: ListFiltersDto) {
+    return this.service.listReports(filters);
+  }
+
+  @Get('reports/:id')
+  async detail(@Param('id') id: string) {
+    const report = await this.service.getReport(id);
+    if (!report) throw new BugFabError('not_found', 404, id);
+    return report;
+  }
+
+  @Get('reports/:id/screenshot')
+  async screenshot(@Param('id') id: string, @Res() reply: FastifyReply) {
+    const path = await this.service.getScreenshotPath(id);
+    if (!path) throw new BugFabError('not_found', 404, id);
+    reply.type('image/png').send(await readFile(path));
+  }
+
+  @Put('reports/:id/status')
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: false }))
+  async updateStatus(@Param('id') id: string,
+                     @Body() body: BugReportStatusUpdateDto) {
+    return this.service.updateStatus(id, body);
+  }
+
+  @Delete('reports/:id')
+  @HttpCode(204)
+  async delete(@Param('id') id: string) { await this.service.deleteReport(id); }
+
+  @Post('bulk-close-fixed')
+  async bulkClose() { return { closed: await this.service.bulkCloseFixed() }; }
+
+  @Post('bulk-archive-closed')
+  async bulkArchive() { return { archived: await this.service.bulkArchiveClosed() }; }
+}
+```
+
+### Storage service
+
+`BugFabService` implements the 9-method `IStorage` interface plus the optional `setGitHubIssue` post-save hook. TypeORM is the recommended persistence layer (NestJS docs default there) — Prisma works equally well if the consumer already uses it.
+
+```typescript
+// interfaces/storage.interface.ts
+export interface IStorage {
+  saveReport(metadata: BugReportCreateDto, screenshot: Buffer, serverUA: string):
+    Promise<BugReportIntakeResponse>;
+  getReport(id: string): Promise<BugReportDetail | null>;
+  listReports(filters: ListFilters): Promise<BugReportListResponse>;
+  getScreenshotPath(id: string): Promise<string | null>;
+  updateStatus(id: string, body: BugReportStatusUpdateDto): Promise<BugReportDetail>;
+  deleteReport(id: string): Promise<void>;
+  archiveReport(id: string): Promise<void>;
+  bulkCloseFixed(): Promise<number>;
+  bulkArchiveClosed(): Promise<number>;
+  setGitHubIssue?(id: string, issueUrl: string, issueNumber: number): Promise<void>;
+}
+
+// bug-fab.service.ts (sketch — TypeORM repos injected; Prisma client equivalent)
+@Injectable()
+export class BugFabService implements IStorage {
+  constructor(
+    @InjectRepository(BugReport) private readonly reports: Repository<BugReport>,
+    @InjectRepository(BugReportLifecycle) private readonly lifecycle: Repository<BugReportLifecycle>,
+    private readonly github: GitHubIssueService,
+  ) {}
+
+  async saveReport(metadata, screenshot, serverUA) {
+    const id = await this.assignId();
+    const screenshotPath = path.join(this.dataPath, `${id}.png`);
+    await writeFile(screenshotPath, screenshot);
+
+    const report = await this.reports.save({
+      id, title: metadata.title, severity: metadata.severity ?? 'medium',
+      status: 'open', protocol_version: '0.1',
+      user_agent_server: serverUA,
+      user_agent_client: metadata.context?.user_agent ?? '',
+      metadata_json: JSON.stringify(metadata),
+      screenshot_path: screenshotPath, received_at: new Date(),
+    });
+
+    // Append-only lifecycle entry.
+    await this.lifecycle.save({ bug_report_id: id, action: 'created', at: new Date(),
+      by: metadata.reporter?.user_id || metadata.reporter?.email || 'anonymous' });
+
+    // Best-effort GitHub sync — never fail the intake response.
+    let githubIssueUrl: string | null = null;
+    try {
+      const issue = await this.github.createIssue(report);
+      if (issue) { githubIssueUrl = issue.url;
+                   await this.setGitHubIssue(id, issue.url, issue.number); }
+    } catch (err) { this.logger.warn(`github sync failed for ${id}: ${err}`); }
+
+    return { id, received_at: report.received_at.toISOString(),
+             stored_at: `file://${screenshotPath}`, github_issue_url: githubIssueUrl };
+  }
+
+  async setGitHubIssue(id, url, number) {
+    await this.reports.update(id, { github_issue_url: url, github_issue_number: number });
+  }
+  // ... remaining IStorage methods (getReport, listReports, updateStatus, etc.)
+}
+```
+
+### Custom exception filter for protocol error envelopes
+
+NestJS's default exception responses are `{statusCode, message, error}` — the wrong shape. Translate to the protocol envelope:
+
+```typescript
+// filters/bug-fab-exception.filter.ts
+import { ArgumentsHost, Catch, ExceptionFilter, HttpException } from '@nestjs/common';
+
+export class BugFabError extends HttpException {
+  constructor(public code: string, status: number,
+              public detail: string | unknown[],
+              public extras: Record<string, unknown> = {}) {
+    super({ error: code, detail }, status);
+  }
+}
+
+@Catch()
+export class BugFabExceptionFilter implements ExceptionFilter {
+  catch(exception: unknown, host: ArgumentsHost) {
+    const reply = host.switchToHttp().getResponse();
+
+    if (exception instanceof BugFabError) {
+      return reply.code(exception.getStatus())
+        .send({ error: exception.code, detail: exception.detail, ...exception.extras });
+    }
+
+    // class-validator failures arrive as BadRequestException with array `message`.
+    if (exception instanceof HttpException) {
+      const resp = exception.getResponse() as any;
+      const detail = Array.isArray(resp?.message) ? resp.message : (resp?.message ?? resp);
+      const code = exception.getStatus() === 422 ? 'schema_error' : 'validation_error';
+      return reply.code(exception.getStatus()).send({ error: code, detail });
+    }
+
+    return reply.code(500).send({ error: 'internal_error', detail: 'unhandled server exception' });
+  }
+}
+```
+
+### Auth — Guard
+
+Apply `@UseGuards(...)` at the **viewer controller** only. Intake stays unguarded so end users can submit reports without an auth token:
+
+```typescript
+@Controller('admin/bug-reports')
+@UseGuards(AuthGuard('jwt'))               // viewer-only
+export class BugFabViewerController { ... }
+
+// Intake controller is deliberately UNGUARDED — apply the guard
+// at the consumer's mount point if intake should be authenticated.
+```
+
+The consumer can swap `AuthGuard('jwt')` for `AuthGuard('local')`, a custom `RolesGuard`, or any NestJS guard; the protocol does not constrain the choice.
+
+### Common pitfalls (NestJS)
+
+- **Global `ClassSerializerInterceptor`.** If the host app registers it globally, it auto-converts response objects to camelCase, which breaks the snake_case wire format. Either exclude Bug-Fab routes from the interceptor or do not register it inside `BugFabModule`.
+- **Default `BadRequestException` shape.** NestJS returns `{statusCode, message, error}` — wrong shape for Bug-Fab. The custom `@Catch()` filter above is required; without it, conformance fails on every validation error.
+- **`@Body()` decorator with `transform: true`.** If `ValidationPipe` is constructed with `transform: true`, class-transformer silently rewrites unknown keys into the DTO and can flatten `protocol_version` → `protocolVersion` on serialization. Always pass `transform: false` on Bug-Fab routes, or use `@Expose({ name: 'snake_field' })` per property.
+- **`FileInterceptor` size limit defaults too small.** Express's body-parser caps multipart at ~100 KB by default. When using `@nestjs/platform-express` + `multer`, set `limits: { fileSize: 11 * 1024 * 1024 }` explicitly on the `FileInterceptor`. With `@nestjs/platform-fastify` + `@fastify/multipart`, set `limits.fileSize` at registration time — checking inside the route handler is too late.
+- **`@nestjs/platform-fastify` vs `@nestjs/platform-express`.** Multipart handling is different (fastify async iterator vs multer middleware). Pin `@fastify/multipart` for the fastify path or `multer` for the express path — never both. The sketch above uses fastify; the express path swaps the iterator for `@UseInterceptors(FileInterceptor('screenshot', { limits }))` plus `@UploadedFile()`.
+- **Auth guard on the wrong scope.** Applying `@UseGuards(...)` at the module level (via a global guard) gates intake too, which breaks the public-submit pattern. Apply guards only on the viewer controller, or on the consumer's mount point — never as a module-wide default.
+- **`forbidNonWhitelisted: true` on the context field.** The protocol explicitly allows extra keys inside `context` (consumer-specific diagnostics round-trip verbatim). Setting `forbidNonWhitelisted: true` rejects valid submissions. Use `whitelist: true` with `forbidNonWhitelisted: false`, or split the validation so only the top-level DTO is whitelisted.
+- **TypeORM camelCase columns.** TypeORM defaults to snake_case in some configurations and camelCase in others. Pin column names with `@Column({ name: 'protocol_version' })` so the wire format and DB schema stay aligned regardless of the global naming strategy.
+- **Treating lifecycle as mutable.** Some NestJS implementations use `repo.update()` on lifecycle rows. The protocol requires append-only — service-layer code must only `INSERT`, never `UPDATE` or `DELETE` on the lifecycle table.
+
+---
+
+<!-- DJANGO_SECTION_START -->
+## Django (Django ≥ 4.2, Python ≥ 3.10)
+
+Django covers a large slice of the Python web ecosystem — ORM-first, batteries-included, auth/admin/sessions out of the box. A Bug-Fab adapter slots in as a reusable Django app registered in `INSTALLED_APPS`, with the wire protocol mapped to plain Django views and storage backed by the ORM.
+
+### Required dependencies
+
+```toml
+django    >= 4.2
+requests  >= 2.31   # best-effort GitHub Issues sync
+```
+
+DRF is **not** a hard dependency — the sketch uses plain Django views (`JsonResponse`, `View`, `csrf_exempt`). If the host project already uses DRF, see the pitfalls section about disabling camelCase renderers per-route.
+
+### App layout
+
+Bug-Fab lives as a self-contained Django app. Recommended placement: `apps/bug_fab/` (or wherever the host project keeps its first-party apps), registered in `INSTALLED_APPS`.
+
+```
+apps/bug_fab/
+├── apps.py                  # AppConfig — name = "apps.bug_fab"
+├── models.py                # BugReport + BugReportLifecycle
+├── managers.py              # BugReportManager (storage helpers)
+├── views.py                 # Intake + viewer views
+├── urls/intake.py           # POST /bug-reports
+├── urls/viewer.py           # /reports*, /bulk-*
+├── auth.py                  # AdminRequiredMixin
+├── validators.py            # Severity / Status / protocol_version checks
+├── github.py                # Best-effort GitHub Issues sync
+└── migrations/
+```
+
+In the project's root `urls.py`, the host mounts the two routers under separate prefixes so they can be guarded by different middleware:
+
+```python
+# project/urls.py
+from django.urls import include, path
+
+urlpatterns = [
+    path("api/",                include("apps.bug_fab.urls.intake")),  # open submit
+    path("admin/bug-reports/",  include("apps.bug_fab.urls.viewer")),  # auth-required
+]
+```
+
+### Model layer
+
+Two models — one row per report, append-only lifecycle entries in a child table. Screenshots live on disk via `FileField`; the file path is stored, never the bytes.
+
+```python
+# apps/bug_fab/models.py
+from django.db import models
+from django.utils import timezone
+
+
+class BugReport(models.Model):
+    class ReportType(models.TextChoices):
+        BUG = "bug", "Bug"
+        FEATURE_REQUEST = "feature_request", "Feature request"
+
+    class Severity(models.TextChoices):
+        LOW = "low", "Low"
+        MEDIUM = "medium", "Medium"
+        HIGH = "high", "High"
+        CRITICAL = "critical", "Critical"
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        INVESTIGATING = "investigating", "Investigating"
+        FIXED = "fixed", "Fixed"
+        CLOSED = "closed", "Closed"
+
+    # Wire-protocol fields — snake_case names match the protocol exactly.
+    id = models.CharField(primary_key=True, max_length=64)  # bug-NNN format
+    protocol_version = models.CharField(max_length=16, default="0.1")
+    title = models.CharField(max_length=200)
+    report_type = models.CharField(
+        max_length=32, choices=ReportType.choices, default=ReportType.BUG,
+    )
+    description = models.TextField(blank=True, default="")
+    expected_behavior = models.TextField(blank=True, default="")
+    severity = models.CharField(
+        max_length=16, choices=Severity.choices, default=Severity.MEDIUM,
+    )
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.OPEN, db_index=True,
+    )
+    tags = models.JSONField(default=list, blank=True)
+
+    # Reporter sub-fields (each capped at 256 per protocol).
+    reporter_name = models.CharField(max_length=256, blank=True, default="")
+    reporter_email = models.CharField(max_length=256, blank=True, default="")
+    reporter_user_id = models.CharField(max_length=256, blank=True, default="")
+
+    # Auto-captured browser context — JSON blob with extra="allow" semantics.
+    context = models.JSONField(default=dict, blank=True)
+
+    # User-Agent trust boundary — keep both, never overwrite the server one.
+    server_user_agent = models.TextField(blank=True, default="")
+    client_reported_user_agent = models.TextField(blank=True, default="")
+
+    # Screenshot lives on disk. MEDIA_ROOT must be configured.
+    screenshot = models.FileField(upload_to="bug_reports/%Y/%m/", max_length=512)
+
+    # GitHub sync (best-effort).
+    github_issue_url = models.URLField(blank=True, default="")
+    github_issue_number = models.IntegerField(null=True, blank=True)
+
+    archived_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+    updated_at = models.DateTimeField(default=timezone.now)
+
+    objects = "BugReportManager()"  # see managers.py
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["status", "severity"]),
+            models.Index(fields=["created_at"]),
+        ]
+
+
+class BugReportLifecycle(models.Model):
+    """Append-only audit log. NEVER update existing rows — only insert."""
+    report = models.ForeignKey(
+        BugReport, on_delete=models.CASCADE, related_name="lifecycle",
+    )
+    action = models.CharField(max_length=32)  # created | status_changed | archived | deleted
+    by = models.CharField(max_length=256, blank=True, default="anonymous")
+    at = models.DateTimeField(default=timezone.now)
+    fix_commit = models.CharField(max_length=512, blank=True, default="")
+    fix_description = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["at", "id"]
+        indexes = [models.Index(fields=["report", "at"])]
+```
+
+### URL routing
+
+Two URL conf modules — one per router — so the host project mounts them at different prefixes with different middleware. Per [`PROTOCOL.md`](./PROTOCOL.md) § Viewer mount-prefix note, the viewer prefix MUST be non-empty.
+
+```python
+# apps/bug_fab/urls/intake.py
+from django.urls import path
+from apps.bug_fab.views import IntakeView
+
+urlpatterns = [
+    path("bug-reports", IntakeView.as_view(), name="bug_fab_intake"),
+]
+
+# apps/bug_fab/urls/viewer.py
+from django.urls import path
+from apps.bug_fab import views
+
+urlpatterns = [
+    path("",                       views.report_list,      name="bug_fab_list"),
+    path("reports",                views.report_list_json, name="bug_fab_list_json"),
+    path("reports/<str:rid>",      views.report_detail,    name="bug_fab_detail"),
+    path("reports/<str:rid>/screenshot", views.screenshot, name="bug_fab_screenshot"),
+    path("reports/<str:rid>/status",     views.status_update, name="bug_fab_status"),
+    path("reports/<str:rid>/delete",     views.delete_report, name="bug_fab_delete"),
+    path("bulk-close-fixed",       views.bulk_close_fixed, name="bug_fab_bulk_close"),
+    path("bulk-archive-closed",    views.bulk_archive_closed, name="bug_fab_bulk_archive"),
+]
+```
+
+### Intake view — `POST /bug-reports`
+
+Class-based view. Uses `@csrf_exempt` because intake commonly comes from a different origin than the Django app (the Bug-Fab frontend bundle attaches to whatever page the user is on). Returns the **minimal envelope** — never echoes user-submitted text.
+
+```python
+# apps/bug_fab/views.py
+import json
+from datetime import datetime, timezone as dt_timezone
+
+from django.core.files.base import ContentFile
+from django.db import transaction
+from django.http import JsonResponse
+from django.utils.decorators import method_decorator
+from django.views import View
+from django.views.decorators.csrf import csrf_exempt
+
+from apps.bug_fab.models import BugReport, BugReportLifecycle
+from apps.bug_fab.validators import validate_submission, ValidationError
+from apps.bug_fab import github
+
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+SCREENSHOT_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB
+
+def _err(code, detail, status):
+    return JsonResponse({"error": code, "detail": detail}, status=status)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class IntakeView(View):
+    def post(self, request):
+        # Multipart parts.
+        metadata_raw = request.POST.get("metadata")
+        screenshot = request.FILES.get("screenshot")
+        if not metadata_raw or not screenshot:
+            return _err("validation_error",
+                        "metadata and screenshot are both required", 400)
+
+        # Size cap (Django may already have rejected — see DATA_UPLOAD_* settings).
+        if screenshot.size > SCREENSHOT_MAX_BYTES:
+            return JsonResponse({
+                "error": "payload_too_large",
+                "limit_bytes": SCREENSHOT_MAX_BYTES,
+            }, status=413)
+
+        # Magic-byte PNG check. Do NOT trust Content-Type alone.
+        head = screenshot.read(8)
+        screenshot.seek(0)
+        if head != PNG_MAGIC:
+            return _err("unsupported_media_type",
+                        "screenshot must be PNG", 415)
+
+        # Parse JSON.
+        try:
+            metadata = json.loads(metadata_raw)
+        except json.JSONDecodeError as exc:
+            return _err("validation_error", f"metadata is not valid JSON: {exc}", 400)
+
+        # Validate. Raises ValidationError with .code and .status.
+        try:
+            data = validate_submission(metadata)
+        except ValidationError as exc:
+            return _err(exc.code, exc.detail, exc.status)
+
+        # User-Agent trust boundary — server header is source of truth.
+        server_ua = request.META.get("HTTP_USER_AGENT", "")
+        client_ua = data.get("context", {}).get("user_agent", "")
+        received_at = datetime.now(dt_timezone.utc)
+
+        # Atomic: insert report + initial lifecycle entry in one transaction.
+        with transaction.atomic():
+            report = BugReport.objects.create_with_id(
+                title=data["title"],
+                report_type=data.get("report_type", "bug"),
+                description=data.get("description", ""),
+                expected_behavior=data.get("expected_behavior", ""),
+                severity=data.get("severity", "medium"),
+                status="open",
+                tags=data.get("tags", []),
+                reporter_name=data.get("reporter", {}).get("name", ""),
+                reporter_email=data.get("reporter", {}).get("email", ""),
+                reporter_user_id=data.get("reporter", {}).get("user_id", ""),
+                context=data.get("context", {}),
+                server_user_agent=server_ua,
+                client_reported_user_agent=client_ua,
+                screenshot=ContentFile(screenshot.read(), name=f"{{id}}.png"),
+                created_at=received_at,
+                updated_at=received_at,
+            )
+            BugReportLifecycle.objects.create(
+                report=report, action="created", by="anonymous", at=received_at,
+            )
+
+        # Best-effort GitHub sync — outside the transaction so a slow API
+        # never blocks the local write. Failures log; intake still returns 201.
+        issue_url = None
+        try:
+            link = github.create_issue(report)
+            if link is not None:
+                issue_url = link.url
+                BugReport.objects.filter(pk=report.id).update(
+                    github_issue_url=link.url, github_issue_number=link.number,
+                )
+        except Exception:  # pragma: no cover — log + swallow
+            pass
+
+        return JsonResponse({
+            "id": report.id,
+            "received_at": received_at.isoformat(),
+            "stored_at": f"file://{report.screenshot.path}",
+            "github_issue_url": issue_url,
+        }, status=201)
+```
+
+### Storage / ORM helpers
+
+A Django manager method bundle mirrors the `IStorage` contract used by the other adapter sketches. The Python reference adapter ships `FileStorage` and `SQLiteStorage`; the Django ORM is the natural equivalent.
+
+```python
+# apps/bug_fab/managers.py
+from django.db import models, transaction
+from django.utils import timezone
+
+
+class BugReportManager(models.Manager):
+    def create_with_id(self, **fields):
+        last = self.order_by("-created_at").first()
+        seq = int(last.id.rsplit("-", 1)[-1]) + 1 if last else 1
+        return self.create(id=f"bug-{seq:03d}", **fields)
+
+    def list_reports(self, *, status=None, severity=None, environment=None,
+                     include_archived=False, page=1, page_size=20):
+        qs = self.all()
+        if not include_archived:  qs = qs.filter(archived_at__isnull=True)
+        if status:                qs = qs.filter(status=status)
+        if severity:              qs = qs.filter(severity=severity)
+        if environment:           qs = qs.filter(context__environment=environment)
+        page_size = min(page_size, 200)
+        offset = (page - 1) * page_size
+        return list(qs[offset:offset + page_size]), qs.count()
+
+    def get_report(self, rid):
+        return self.filter(pk=rid).first()
+
+    @transaction.atomic
+    def update_status(self, rid, *, status, by, fix_commit="", fix_description=""):
+        from apps.bug_fab.models import BugReportLifecycle
+        report = self.select_for_update().filter(pk=rid).first()
+        if not report: return None
+        report.status = status
+        report.save(update_fields=["status", "updated_at"])
+        BugReportLifecycle.objects.create(
+            report=report, action="status_changed", by=by,
+            fix_commit=fix_commit, fix_description=fix_description,
+        )
+        return report
+
+    @transaction.atomic
+    def archive_report(self, rid):
+        return self.filter(pk=rid).update(archived_at=timezone.now())
+
+    @transaction.atomic
+    def bulk_close_fixed(self):
+        return self.filter(status="fixed").update(status="closed")
+
+    @transaction.atomic
+    def bulk_archive_closed(self):
+        return self.filter(status="closed", archived_at__isnull=True
+                          ).update(archived_at=timezone.now())
+```
+
+### Auth — middleware-based
+
+Django's standard auth covers Bug-Fab's needs without a separate `AuthAdapter`. The viewer routes get a `LoginRequiredMixin` (or a stricter custom check); the intake route stays open by default per the standard Bug-Fab pattern.
+
+```python
+# apps/bug_fab/auth.py
+from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+
+
+class AdminRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
+    """Default viewer guard. Override is_admin() per host project's idea of admin."""
+    def test_func(self):
+        return self.request.user.is_staff
+```
+
+Apply per viewer route:
+
+```python
+class ReportListView(AdminRequiredMixin, View):
+    def get(self, request): ...
+```
+
+If the host already mounts viewer URLs behind admin-only middleware (e.g., a tenant-aware SSO middleware applied to `/admin/`), the mixin can be omitted — protection is at the mount point. v0.1 has no per-user permission abstraction; that arrives with `AuthAdapter` in v0.2.
+
+### Common pitfalls (Django)
+
+- **DRF camelCase renderers.** If the host uses `djangorestframework-camel-case`, its renderer rewrites `received_at`, `protocol_version`, `client_ts` into `receivedAt`, `protocolVersion`, `clientTs` — silently breaking the wire protocol. Fix: use plain `JsonResponse` views (as above), or add `@renderer_classes([JSONRenderer])` per-view to bypass the camelCase renderer.
+- **`csrf_exempt` on intake.** The Bug-Fab frontend bundle posts from the consumer page's origin without a Django CSRF token. Without `@csrf_exempt` every submission gets `403 CSRF verification failed`. Apply it to the intake view only — never to viewer mutation routes (status update, delete).
+- **`MEDIA_ROOT` not configured.** `FileField` uses `MEDIA_ROOT` as its base. If unset, files land wherever the working directory points — often the project root. Set `MEDIA_ROOT = "/var/lib/<app>/storage"` (or another persistent volume); `upload_to="bug_reports/%Y/%m/"` resolves under it.
+- **`request.FILES` upload size limits.** Django defaults `DATA_UPLOAD_MAX_MEMORY_SIZE` and `FILE_UPLOAD_MAX_MEMORY_SIZE` to 2.5 MB. Bug-Fab's 11 MiB cap requires raising both to `12 * 1024 * 1024`. Without this, large PNGs are rejected with a generic `RequestDataTooBig` before the intake view runs, never producing the protocol's `413 payload_too_large`.
+- **Multi-process safety.** Django is multi-process safe via the database, so the model approach above scales to multi-worker / multi-container deploys without shared in-memory state. `create_with_id` should use `select_for_update()` or a DB sequence in production to avoid `bug-NNN` collisions under heavy concurrent load.
+- **PostgreSQL `jsonb` vs SQLite JSON.** PostgreSQL's `jsonb` supports indexed queries on `context__environment=...` and works efficiently with `JSONField`. SQLite stores JSON as text — same ORM queries work but degrade on large tables. Production: PostgreSQL. SQLite is fine for dev / small POCs.
+- **`auto_now_add` vs server-side defaults.** Avoid `auto_now_add=True` / `auto_now=True` on `created_at` / `updated_at`. Use `default=django.utils.timezone.now` so the timestamp is set explicitly inside the same `transaction.atomic()` block as the lifecycle insert. Under multi-process deploys, clock skew between workers with `auto_now_add` can produce out-of-order timestamps that confuse the audit log.
+
+---
+
 ## Reference-implementation validation
 
 These sketches were validated against a **.NET 8 + React reference consumer** during the Bug-Fab v0.1 design pass. The consumer was a hand-rolled bug-reporter with the same protocol shape; mapping its existing behavior onto these sketches confirmed each adapter could be built cleanly without protocol stretching.
