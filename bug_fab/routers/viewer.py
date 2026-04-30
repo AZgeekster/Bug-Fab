@@ -261,7 +261,7 @@ async def update_report_status(
         # other reason (e.g., unknown id race). Surface as 422 to keep
         # the contract aligned with severity-style enum errors.
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bug report not found")

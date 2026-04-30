@@ -188,7 +188,7 @@ async def submit_bug_report(
         payload = BugReportCreate.model_validate(metadata_obj)
     except ValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=exc.errors(),
         ) from exc
 
@@ -203,7 +203,7 @@ async def submit_bug_report(
     max_bytes = settings.max_upload_mb * 1024 * 1024
     if len(screenshot_bytes) > max_bytes:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"Screenshot exceeds maximum size of {settings.max_upload_mb} MiB",
         )
     if _detect_image_kind(screenshot_bytes) is None:

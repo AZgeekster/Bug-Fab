@@ -627,6 +627,9 @@ def _to_detail(row: BugReport) -> BugReportDetail:
     metadata = _safe_metadata(row.metadata_json)
     context_data = dict(metadata.get("context") or {})
 
+    reporter_data = metadata.get("reporter") or {}
+    if not isinstance(reporter_data, dict):
+        reporter_data = {}
     payload = {
         "id": row.id,
         "title": row.title,
@@ -641,6 +644,9 @@ def _to_detail(row: BugReport) -> BugReportDetail:
         "description": row.description or "",
         "expected_behavior": metadata.get("expected_behavior", ""),
         "tags": list(metadata.get("tags") or []),
+        "reporter": reporter_data,
+        "client_ts": metadata.get("client_ts", ""),
+        "protocol_version": row.protocol_version or "0.1",
         "context": BugReportContext.model_validate(context_data),
         "lifecycle": [
             LifecycleEvent.model_validate(

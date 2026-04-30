@@ -224,15 +224,23 @@ class FileStorage(Storage):
     def _build_report(self, report_id: str, metadata: dict, now: str) -> dict:
         """Assemble the on-disk report dict from the validated wire payload."""
         context = dict(metadata.get("context") or {})
+        reporter = dict(metadata.get("reporter") or {})
         report = {
             "id": report_id,
+            "protocol_version": metadata.get("protocol_version", "0.1"),
             "title": metadata.get("title", ""),
+            "client_ts": metadata.get("client_ts", ""),
             "report_type": metadata.get("report_type", "bug"),
             "description": metadata.get("description", ""),
             "expected_behavior": metadata.get("expected_behavior", ""),
             "severity": metadata.get("severity", Severity.MEDIUM.value),
             "status": Status.OPEN.value,
             "tags": list(metadata.get("tags") or []),
+            "reporter": {
+                "name": reporter.get("name", ""),
+                "email": reporter.get("email", ""),
+                "user_id": reporter.get("user_id", ""),
+            },
             "context": context,
             "module": metadata.get("module") or context.get("module") or "",
             "created_at": now,

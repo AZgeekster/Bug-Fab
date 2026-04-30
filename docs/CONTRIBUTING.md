@@ -149,10 +149,103 @@ Every push and PR runs:
 - **ruff format check** (`ruff format --check .`)
 - **pytest matrix** on Python **3.10**, **3.11**, **3.12**.
 - **Coverage gate** at 85% — failures block merge.
+- **Schema drift check** (`python scripts/generate_protocol_schema.py --check`) — fails if the on-disk `docs/protocol-schema.json` no longer matches what the Pydantic models would generate. If you change `bug_fab/schemas.py`, regenerate the schema with `python scripts/generate_protocol_schema.py` (no flags) and commit the updated `docs/protocol-schema.json`.
 
 On tagged releases (`v*`), CI additionally builds the wheel + sdist
 and publishes to PyPI via [Trusted Publishing](https://docs.pypi.org/trusted-publishers/)
 (no long-lived tokens stored in GitHub).
+
+## Maintainer release flow
+
+This section is for whoever cuts a release tag. The flow is documented here
+so it's reproducible across maintainers and so future-you doesn't re-trip
+the bugs we already hit.
+
+### Pre-tag gates (mandatory)
+
+1. **Clean-venv install verification.** Spin a fresh Python 3.13 venv
+   *outside* the repo and confirm a fresh install works end-to-end:
+   ```
+   py -3.13 -m venv "$TEMP/bug-fab-clean-venv"
+   "$TEMP/bug-fab-clean-venv/Scripts/python.exe" -m pip install -e ".[dev,sqlite,postgres]"
+   "$TEMP/bug-fab-clean-venv/Scripts/python.exe" -m pytest -q
+   ```
+   The dev environment carries hidden state from sibling projects, so
+   `pip install -e .` succeeding in your dev shell is *not* sufficient.
+   The clean-venv gate has caught three publish-blocking bugs across
+   v0.1's lifecycle: missing `jinja2` dep, real email leaked into the
+   PyPI `authors` block, and a Starlette 1.0 API break that made the
+   viewer non-functional. Don't skip it. (See
+   [`docs/audits/2026-04-28_clean_venv_verification_audit.md`](audits/2026-04-28_clean_venv_verification_audit.md)
+   for the full case history.)
+
+2. **Schema drift check.** `python scripts/generate_protocol_schema.py --check`
+   must exit 0. If it doesn't, regenerate the schema, run the suite again,
+   commit the new schema, and re-tag from the new commit.
+
+3. **CI green on the tag's parent commit.** Don't tag if `main` is red —
+   the publish job will fail and the version number on PyPI may be wasted
+   (PyPI versions are immutable; even a yanked release reserves the slot).
+
+### Pre-flight: gh CLI account check
+
+Bug-Fab is published to `AZgeekster/Bug-Fab`. If your gh keyring holds
+multiple GitHub accounts, the *active* account silently switches between
+sessions. Before any push from a release branch, confirm:
+
+```
+gh auth status | head -2
+```
+
+shows `AZgeekster` as the active account. If not:
+
+```
+gh auth switch -h github.com -u AZgeekster
+```
+
+The token must have `workflow` scope. If `gh auth status` shows only
+`gist`, `read:org`, `repo`, push will fail with `refusing to allow an
+OAuth App to create or update workflow … without 'workflow' scope`.
+Refresh with:
+
+```
+gh auth refresh -h github.com -s workflow
+```
+
+The refresh opens a browser for device-flow approval. If no browser
+auto-opens, the terminal still prints a one-time code and the URL to
+paste it into manually.
+
+### Tagging and publishing
+
+After all pre-tag gates pass and CI is green:
+
+1. Decide the version. Alphas pin the name on PyPI without becoming the
+   default install: `v0.1.0a1`, `v0.1.0a2`. Betas: `v0.1.0b1`. Final:
+   `v0.1.0`.
+2. Tag annotated:
+   ```
+   git tag -a v0.1.0aN -m "Release v0.1.0aN"
+   ```
+3. Push the tag:
+   ```
+   git push origin v0.1.0aN
+   ```
+4. Watch the workflow at
+   `https://github.com/AZgeekster/Bug-Fab/actions/workflows/ci.yml`.
+   The publish job runs only on `v*` tags and uses the `pypi`
+   environment. First-ever publish requires the project's
+   [Trusted Publishing](https://pypi.org/manage/account/publishing/)
+   configuration on pypi.org (one-time setup).
+
+### Post-publish
+
+1. Verify the release at `https://pypi.org/project/bug-fab/`.
+2. Test install from a fresh venv: `pip install --pre bug-fab` (alphas)
+   or `pip install bug-fab` (final).
+3. Update `CHANGELOG.md` if the release has post-tag notes.
+4. Announce in the release-notes thread of choice (none in v0.1; revisit
+   when the project has more reach).
 
 ## Adapter PRs
 
