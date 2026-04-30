@@ -71,14 +71,24 @@ def make_test_png(width: int = 10, height: int = 10) -> bytes:
 
 
 def _baseline_metadata() -> dict[str, Any]:
-    """The canonical baseline metadata dict — every required field populated."""
+    """The canonical baseline metadata dict — every required field populated.
+
+    Required fields per `docs/protocol-schema.json`:
+    `protocol_version`, `title`, `client_ts`. Adapter authors should be able
+    to use this baseline as-is and have intake return 201; if they need to
+    drop or mutate a required field, that's what `make_test_metadata`
+    overrides are for.
+    """
     return {
+        "protocol_version": "0.1",
         "title": "Conformance test bug report",
+        "client_ts": "2026-04-30T12:00:00+00:00",
         "report_type": "bug",
         "description": "Submitted by the bug-fab-conformance pytest plugin.",
         "expected_behavior": "Adapter accepts the submission and returns 201.",
         "severity": "medium",
         "tags": ["conformance"],
+        "reporter": {"name": "", "email": "", "user_id": ""},
         "context": {
             "url": "http://localhost/sample/path",
             "module": "sample",
@@ -154,6 +164,7 @@ def make_legacy_status_payload() -> dict[str, Any]:
         "description": "Pre-existing report with a deprecated status enum value.",
         "expected_behavior": "",
         "tags": [],
+        "reporter": {"name": "", "email": "", "user_id": ""},
         "context": {
             "url": "",
             "module": "legacy",
@@ -170,4 +181,6 @@ def make_legacy_status_payload() -> dict[str, Any]:
         "server_user_agent": "",
         "client_reported_user_agent": "",
         "environment": "",
+        "client_ts": "",
+        "protocol_version": "0.1",
     }
