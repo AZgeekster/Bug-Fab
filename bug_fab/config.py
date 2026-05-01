@@ -12,6 +12,7 @@ All env vars are `BUG_FAB_*`-prefixed. The module exposes a single
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,18 @@ class Settings:
     github_repo: str = ""
     github_api_base: str = "https://api.github.com"
     viewer_permissions: dict[str, bool] = field(default_factory=default_viewer_permissions)
+    #: Optional per-request CSP nonce provider for the viewer's inline
+    #: ``<script>`` blocks. When set, the viewer router calls this with
+    #: the active ``Request`` and stamps the returned string onto each
+    #: inline script tag as ``nonce="..."``. Returning ``None`` (or
+    #: leaving the field unset) renders the templates without a nonce
+    #: attribute, preserving back-compat for consumers that have no CSP
+    #: or that allow ``'unsafe-inline'``. Bug-Fab does NOT generate the
+    #: nonce or set the ``Content-Security-Policy`` header itself — the
+    #: nonce string MUST match the value the consumer's middleware emits
+    #: in the response header on the same request. See
+    #: ``docs/CSP.md`` for the full integration recipe.
+    csp_nonce_provider: Callable[[Any], str | None] | None = None
 
     @classmethod
     def from_env(cls, **overrides: Any) -> Settings:

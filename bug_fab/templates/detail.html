@@ -185,7 +185,7 @@
 {% endblock %}
 
 {% block scripts %}
-  <script>
+  <script{% if csp_nonce %} nonce="{{ csp_nonce }}"{% endif %}>
     (function () {
       const reportId = {{ report.id|tojson }};
 

@@ -354,7 +354,7 @@
   <body class="bug-fab-root">
     {% block content %}{% endblock %}
     <div class="bug-fab-toast" id="bug-fab-toast" role="status" aria-live="polite"></div>
-    <script>
+    <script{% if csp_nonce %} nonce="{{ csp_nonce }}"{% endif %}>
       // Tiny vanilla helper used by both viewer pages. Kept inline so the
       // template is fully self-contained (no /static/viewer.js required).
       window.BugFabViewer = (function () {

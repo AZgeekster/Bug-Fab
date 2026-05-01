@@ -89,6 +89,29 @@ require_can_delete = _permission_dep("can_delete")
 require_can_bulk = _permission_dep("can_bulk")
 
 
+def _resolve_csp_nonce(request: Request, settings: Settings) -> str | None:
+    """Invoke the configured nonce provider, swallowing failures.
+
+    A misbehaving provider (raises, returns a non-string) must not crash
+    a viewer page render — CSP integration is opt-in glue and the safe
+    fallback is to render without a nonce attribute. The browser will
+    then refuse the script under strict CSP, which is the same outcome
+    as a missing nonce — visible enough for the consumer to notice
+    without breaking the whole page.
+    """
+    provider = settings.csp_nonce_provider
+    if provider is None:
+        return None
+    try:
+        nonce = provider(request)
+    except Exception:  # pragma: no cover - defensive
+        logger.exception("bug_fab_csp_nonce_provider_failed")
+        return None
+    if nonce is None:
+        return None
+    return str(nonce)
+
+
 def _viewer_actor(request: Request) -> str:
     """Extract a best-effort actor identifier for the lifecycle log.
 
@@ -140,6 +163,7 @@ async def list_reports_html(
             "environment": environment or "",
         },
         "permissions": settings.viewer_permissions,
+        "csp_nonce": _resolve_csp_nonce(request, settings),
     }
     return templates.TemplateResponse(request, "list.html", context)
 
@@ -204,6 +228,7 @@ async def get_report_html(
     context = {
         "report": report,
         "permissions": settings.viewer_permissions,
+        "csp_nonce": _resolve_csp_nonce(request, settings),
     }
     return templates.TemplateResponse(request, "detail.html", context)
 
@@ -218,11 +243,12 @@ async def get_screenshot(
 ) -> Response:
     """Return the report's screenshot image as raw bytes.
 
-    The media type defaults to ``image/png`` because the intake router
-    enforces PNG/JPEG and PNG is the dominant client output (html2canvas
-    renders to PNG). Browsers tolerate the mismatch when the bytes are
-    actually JPEG, but consumers who care can set the ``Content-Type``
-    on a CDN in front of the viewer.
+    The media type is always ``image/png``. PROTOCOL.md v0.1 locks the
+    screenshot wire format to PNG, the intake router rejects anything
+    else with 415, and ``html2canvas`` (the bundled client) only emits
+    PNG. Existing reports persisted before this restriction tightened
+    are served as ``image/png`` for back-compat — the magic-byte sniff
+    on intake means stored bytes are always PNG.
     """
     _validate_report_id(report_id)
     path = await storage.get_screenshot_path(report_id)

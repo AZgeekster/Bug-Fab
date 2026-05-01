@@ -13,7 +13,32 @@ out explicitly in each release entry.
 
 ### Added
 
+- `Settings.csp_nonce_provider` callable hook — when set, the viewer
+  stamps the returned per-request nonce onto every inline `<script>`
+  tag in `list.html`, `detail.html`, and `_base.html`. Lets consumers
+  adopt a strict `Content-Security-Policy` (no `'unsafe-inline'` for
+  `script-src`) without forking the package. See
+  [`docs/CSP.md`](docs/CSP.md) for the FastAPI middleware recipe.
+  Default is `None`, preserving existing rendering behavior.
+
 ### Changed
+
+- Replaced the inline `onclick="window.location.reload()"` on the
+  list-view Refresh button with a `data-bug-fab-action="reload"`
+  attribute and a single `addEventListener` registration in the
+  page's existing `<script>` block. Strict CSP forbids inline event
+  handlers; this keeps the same UX while letting the page render
+  cleanly under `script-src 'nonce-...'` without `'unsafe-inline'`.
+- Tightened the FastAPI intake router's image-format validation to match
+  PROTOCOL.md v0.1: `POST /bug-reports` now accepts only `image/png`
+  screenshots and rejects JPEG (and every other format) with `415
+  Unsupported Media Type`. The bundled `html2canvas` client only emits
+  PNG, the protocol-validation library `bug_fab.intake` already enforced
+  PNG-only, and the viewer's `GET /reports/{id}/screenshot` always
+  returned `image/png`; the router was the lone outlier and silently
+  accepted JPEG bytes that were then served back with the wrong
+  Content-Type. Not a breaking protocol change — the spec and JSON
+  Schema have always been PNG-only.
 
 ### Deprecated
 
@@ -21,7 +46,18 @@ out explicitly in each release entry.
 
 ### Fixed
 
+- Resolved the drift between the intake router (which accepted both PNG
+  and JPEG) and the viewer screenshot endpoint (which always served
+  `image/png`). Stored screenshots are now guaranteed to match the
+  served Content-Type because intake rejects non-PNG bytes by magic
+  signature.
+
 ### Security
+
+- Document the CSP-nonce integration path
+  ([`docs/CSP.md`](docs/CSP.md)) so consumers running strict CSP have
+  a first-class hook into the viewer's inline scripts instead of
+  needing to whitelist `'unsafe-inline'` or fork templates.
 
 ## [0.1.0a1] - 2026-04-27
 

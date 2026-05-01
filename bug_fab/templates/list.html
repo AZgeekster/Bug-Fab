@@ -14,7 +14,7 @@
           Archive closed
         </button>
       {% endif %}
-      <button type="button" class="bug-fab-button" onclick="window.location.reload()">
+      <button type="button" class="bug-fab-button" data-bug-fab-action="reload">
         Refresh
       </button>
     </div>
@@ -126,8 +126,16 @@
 {% endblock %}
 
 {% block scripts %}
-  <script>
+  <script{% if csp_nonce %} nonce="{{ csp_nonce }}"{% endif %}>
     (function () {
+      // Refresh button — wired via data-action so strict CSP (no
+      // 'unsafe-inline') can drop the previous inline onclick handler.
+      document.querySelectorAll("[data-bug-fab-action='reload']").forEach(function (button) {
+        button.addEventListener("click", function () {
+          window.location.reload();
+        });
+      });
+
       // Stat-card click filters the table by status without losing the
       // user's other filter selections.
       document.querySelectorAll("[data-bug-fab-filter-status]").forEach(function (el) {
