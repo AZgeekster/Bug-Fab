@@ -1,10 +1,14 @@
 # POC Hosting on Fly.io
 
 This is the recipe used to host the public Bug-Fab POC on
-[Fly.io](https://fly.io). It runs `examples/fastapi-minimal/` with a
+[Fly.io](https://fly.io). It runs `examples/error-playground/` with a
 persistent volume for screenshots, costs $0 on the free tier, and
 gives anyone with a browser somewhere to click around without
-installing the package locally.
+installing the package locally. The error-playground variant has eight
+"trigger an error" buttons and two intentionally-broken endpoints so
+visitors have something to break before clicking the FAB; the sibling
+`examples/fastapi-minimal/` is a smaller starting point for your own
+integration.
 
 You can use the same recipe to host a demo for your own fork, or to
 stand up a centralized
@@ -74,7 +78,7 @@ RUN pip install --no-cache-dir .
 ENV PORT=8080
 EXPOSE 8080
 
-CMD ["uvicorn", "examples.fastapi-minimal.main:app", \
+CMD ["uvicorn", "examples.error-playground.main:app", \
      "--host", "0.0.0.0", "--port", "8080"]
 ```
 

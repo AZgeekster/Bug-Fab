@@ -1,0 +1,44 @@
+# Fly.io configuration for the public Bug-Fab POC.
+# Deployed at https://bug-fab.fly.dev/. See docs/POC_HOSTING.md for the
+# annotated recipe; this file is the live configuration.
+#
+# Cost discipline: the machine sleeps when idle (`auto_stop_machines =
+# "stop"` + `min_machines_running = 0`), so the only continuous cost is
+# the 1 GB volume (~$0.15/month). First request after idle has a 1-3s
+# cold start; subsequent requests are instant. If you'd rather pay
+# always-on for instant first-clicks, set `min_machines_running = 1` and
+# `auto_stop_machines = false`.
+
+app = "bug-fab"
+primary_region = "sjc"
+
+[build]
+
+[env]
+  BUG_FAB_STORAGE_DIR = "/data/bug_reports"
+  BUG_FAB_RATE_LIMIT_ENABLED = "true"
+  BUG_FAB_RATE_LIMIT_MAX = "50"
+  BUG_FAB_RATE_LIMIT_WINDOW_SECONDS = "3600"
+  BUG_FAB_VIEWER_ENABLED = "true"
+  BUG_FAB_VIEWER_PAGE_SIZE = "20"
+  # Public demo — leave GitHub sync OFF so submissions don't spam any
+  # tracker. Self-hosters who want sync can set BUG_FAB_GITHUB_PAT and
+  # BUG_FAB_GITHUB_REPO via `flyctl secrets set`.
+  BUG_FAB_GITHUB_ENABLED = "false"
+
+[mounts]
+  source = "bug_fab_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256

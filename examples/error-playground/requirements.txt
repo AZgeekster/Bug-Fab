@@ -1,0 +1,8 @@
+# Pinned-for-reference deps for the Bug-Fab POC harness.
+#
+# Install your local checkout with the FastAPI minimal extras:
+#     pip install -e "../..[sqlite]"
+#     pip install uvicorn[standard]
+
+bug-fab[sqlite]
+uvicorn[standard]
