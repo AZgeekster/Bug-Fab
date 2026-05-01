@@ -7,6 +7,7 @@ reaching into submodules.
 
 from __future__ import annotations
 
+from bug_fab import intake
 from bug_fab.routers import submit_router, viewer_router
 from bug_fab.schemas import (
     BugReportContext,
@@ -35,6 +36,7 @@ __all__ = [
     "BugReportSummary",
     "FileStorage",
     "LifecycleEvent",
+    "intake",
     "PostgresStorage",
     "SQLiteStorage",
     "Severity",

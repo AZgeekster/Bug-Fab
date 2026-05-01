@@ -1,0 +1,83 @@
+# Bug-Fab — Cursor rules
+
+Bug-Fab is a framework-agnostic, drop-in bug reporter for web apps. A vanilla-JS
+floating action button captures a screenshot plus console/network buffers and
+POSTs them via a documented multipart HTTP wire protocol. The wire protocol is
+the design center; the FastAPI Python adapter is one reference implementation.
+v0.1 ships the Python package, three storage backends (file / SQLite / Postgres),
+the JS frontend bundle, optional GitHub Issues sync, and a pytest conformance
+plugin for adapter authors.
+
+## Canonical references — load before answering
+
+- `AGENTS.md` — comprehensive AI-coder guide; this file is a shim for it. Read it first.
+- `docs/PROTOCOL.md` — binding wire-protocol spec. Eight endpoints, all the field shapes.
+- `docs/protocol-schema.json` — authoritative JSON Schema (wins over prose if they disagree).
+- `bug_fab/schemas.py` — Pydantic models the schema is generated from.
+- `bug_fab/__init__.py` — public Python API surface (read its `__all__`).
+- `bug_fab/routers/` — `submit.py` (intake) and `viewer.py` (admin) — reference router shapes.
+- `bug_fab/storage/` — `file.py`, `sqlite.py`, `postgres.py` — storage backend implementations.
+- `static/README.md` and `static/bug-fab.js` — frontend bundle public API (`window.BugFab`).
+- `docs/ROADMAP.md` — what's in v0.1 vs deferred vs out-of-scope-forever.
+- `docs/CONFORMANCE.md` — how the pytest plugin verifies adapter compliance.
+- `docs/ADAPTERS.md` — non-Python adapter sketches (Razor, Express, SvelteKit, Go).
+
+## Hard rules — protocol invariants
+
+- The wire protocol is contract. If your code disagrees with `docs/PROTOCOL.md`, your code is wrong.
+- Severity enum is locked: `low | medium | high | critical`. Reject invalid values with `422`. NEVER silently coerce to `medium`.
+- Status enum is locked: `open | investigating | fixed | closed`. Same MUST-reject rule on writes.
+- Enum values are case-sensitive lowercase. No `Low`, no `OPEN`, no `In_Progress`.
+- Adapters MUST accept deprecated enum values on read forever. MAY reject on write.
+- `protocol_version` is required in metadata; current value is the literal string `"0.1"`.
+- Screenshots always live on disk. SQL backends store metadata in the DB plus a `screenshot_path` column. Never blob-in-DB.
+- Wire format is `snake_case` everywhere. Don't default to `camelCase`.
+- `User-Agent` source of truth is the request header captured server-side. Client-supplied value is preserved as `client_reported_user_agent` only.
+- GitHub Issues sync failures MUST NOT block submission. Wrap in try/catch, log server-side, return `github_issue_url: null`, return 2xx.
+- v0.1 has NO `AuthAdapter` and NO Flask Blueprint and NO npm package. Don't invent them. They are deferred to v0.2.
+- v0.1 scope is frozen. New features land in v0.2+. Open an issue before scope-expanding PRs.
+- `POST /bug-reports` is NOT idempotent in v0.1. No content-hash dedup, no `Idempotency-Key` honoring. Each submission produces a fresh `id`.
+- The `lifecycle` array is append-only. Never mutate or remove entries.
+- Bulk operations (`/bulk-close-fixed`, `/bulk-archive-closed`) report counts of reports actually transitioned, not the no-op set.
+- `id` regex is `^bug-[A-Za-z]?\d{3,}$`. Don't change it.
+- `stored_at` is opaque. Adapters MAY return any human-readable persistence reference. Don't parse it client-side.
+
+## Common tasks
+
+- Add Bug-Fab to a FastAPI app — see AGENTS.md Task A; call `submit.configure(storage=...)` BEFORE `include_router`; mount submit at `/api` (router owns `/bug-reports` suffix), not `/api/bug-reports`.
+- Add Bug-Fab to a Flask app — see AGENTS.md Task B; implement the protocol directly with `bug_fab.FileStorage` + `BugReportCreate`; wrap async storage with `asyncio.run()`.
+- Add Bug-Fab to a React/SPA — see AGENTS.md Task C; drop `<script>` tag, call `window.BugFab.init({...})` (NOT `window.BugFabConfig`); call `destroy()` on unmount.
+- Write a new adapter (Razor / Express / SvelteKit / Go) — read `docs/PROTOCOL.md` then `docs/ADAPTERS.md`, validate via `docs/CONFORMANCE.md`.
+- Add a new storage backend — subclass `Storage` in `bug_fab/storage/`, mirror `FileStorage` shape, lazy-import like `SQLiteStorage`/`PostgresStorage`, register against the conformance suite.
+- Configure GitHub sync — env vars `BUG_FAB_GITHUB_ENABLED`, `BUG_FAB_GITHUB_PAT`, `BUG_FAB_GITHUB_REPO`; pre-create `severity:*` labels manually in v0.1.
+- Configure rate limiting — per-IP only in v0.1; opt-in via `BUG_FAB_RATE_LIMIT_ENABLED=true`.
+- Run conformance suite — `pytest --bug-fab-conformance --base-url=<host>` against any HTTP server in any language.
+- Bump the protocol — coordinate `bug_fab/schemas.py`, `docs/PROTOCOL.md`, `docs/protocol-schema.json`, the conformance suite, and `docs/UPGRADE.md` together; deprecation window is required.
+- Add a new error code — extend the standard error table in `docs/PROTOCOL.md`, mirror in adapter, add a conformance test that asserts the wire shape.
+
+## Test conventions
+
+- Unit tests — narrow tests on `bug_fab/` modules. Default place to add coverage.
+- Integration tests — exercise routers + storage together via FastAPI `TestClient`.
+- Conformance tests (`pytest -m conformance`) — protocol-level suite that any adapter (any language) must pass over HTTP. The reference adapter MUST pass its own conformance suite.
+- E2E / examples — `examples/fastapi-minimal`, `examples/flask-minimal`, `examples/react-spa`, `examples/error-playground` (the live POC).
+- Coverage gate is 85% on `bug_fab/`, 100% on the protocol-validation layer.
+
+## Commit conventions (enforced by pre-commit)
+
+- `forbidden-strings` hook blocks private identifiers from `.pre-commit-forbidden-strings.txt`. If it fires, fix the staged content; do NOT edit the forbidden list to bypass it.
+- `ruff check` must pass. `ruff format --check` must pass.
+- CI runs Ruff + pytest on Python 3.10 / 3.11 / 3.12 with the coverage gate.
+- Conformance suite must stay green on every PR touching schemas, routers, or storage.
+
+## Never do this (top anti-patterns)
+
+- Silently coercing an unknown `severity` (or any enum) to a default. Reject with `422`.
+- Mounting submit router at `/api/bug-reports` (the router owns `/bug-reports` — that double-segments to `/api/bug-reports/bug-reports`).
+- Looking for `bug_fab.adapters.flask`, `AuthAdapter`, or `npm install bug-fab` — none exist in v0.1.
+- Putting screenshots in the database, or letting a DB transaction wrap the GitHub PATCH call.
+- Adding consumer-specific logic (auth checks, business rules) inside Bug-Fab routers — Bug-Fab is generic; consumer logic goes in consumer middleware.
+- Passing `directory=...` to `FileStorage`. The keyword is `storage_dir=...` (matches the env var).
+- Importing SQL backends from the top-level (`from bug_fab import SQLiteStorage` is wrong). Use `from bug_fab.storage import SQLiteStorage` — they're lazy-imported.
+
+When unsure, point the user at the relevant section of `AGENTS.md` or `docs/PROTOCOL.md` rather than guessing. The protocol spec wins over any code, doc, or memory.
