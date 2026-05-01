@@ -368,9 +368,30 @@
           toastTimer = setTimeout(() => toastEl.classList.remove("is-visible"), 1800);
         }
         async function copyText(text) {
+          // navigator.clipboard requires a secure context (HTTPS or
+          // localhost). Self-hosted internal POCs frequently run on plain
+          // HTTP, so fall back to the legacy execCommand path before
+          // surfacing an error.
+          if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+            try {
+              await navigator.clipboard.writeText(text);
+              toast("Copied to clipboard");
+              return;
+            } catch (err) { /* fall through to legacy path */ }
+          }
           try {
-            await navigator.clipboard.writeText(text);
-            toast("Copied to clipboard");
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            ta.setAttribute("readonly", "");
+            ta.style.position = "fixed";
+            ta.style.top = "0";
+            ta.style.left = "0";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand && document.execCommand("copy");
+            document.body.removeChild(ta);
+            toast(ok ? "Copied to clipboard" : "Copy failed");
           } catch (err) {
             toast("Copy failed");
           }

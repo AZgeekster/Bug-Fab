@@ -28,6 +28,7 @@ identifies the protocol clause that was violated.
 
 from __future__ import annotations
 
+from importlib.util import find_spec
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -39,6 +40,12 @@ if TYPE_CHECKING:
 
 
 CONFORMANCE_TESTS_DIR = Path(__file__).parent / "tests"
+
+# `pytest-base-url` registers `--base-url` itself. When it is installed
+# (transitively, via `pytest-playwright` for instance) we let it own the
+# option — both plugins want the same string value, so deferring is safe
+# and avoids an `argparse.ArgumentError` on duplicate registration.
+_PYTEST_BASE_URL_INSTALLED = find_spec("pytest_base_url") is not None
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -54,16 +61,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="Run only the bundled bug-fab wire-protocol conformance tests.",
     )
-    group.addoption(
-        "--base-url",
-        action="store",
-        default=None,
-        help=(
-            "Base URL of the adapter's INTAKE endpoint (e.g. http://localhost:8000/api). "
-            "The conformance suite appends `/bug-reports` to this. "
-            "Required when --bug-fab-conformance is set."
-        ),
-    )
+    if not _PYTEST_BASE_URL_INSTALLED:
+        group.addoption(
+            "--base-url",
+            action="store",
+            default=None,
+            help=(
+                "Base URL of the adapter's INTAKE endpoint (e.g. http://localhost:8000/api). "
+                "The conformance suite appends `/bug-reports` to this. "
+                "Required when --bug-fab-conformance is set."
+            ),
+        )
     group.addoption(
         "--viewer-base-url",
         action="store",

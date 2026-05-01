@@ -146,13 +146,6 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "--ignore=tests/e2e",
-    # Disable pytest-base-url here. It is pulled in transitively by
-    # pytest-playwright (the e2e extra) and registers --base-url, which
-    # collides with the bug-fab-conformance plugin's --base-url. The
-    # regular test suite never needs base_url, so disabling it lets devs
-    # have both extras installed in one venv without conflict. The e2e
-    # job opts back in by passing `-p no:bug-fab-conformance` instead.
-    "-p", "no:base_url",
 ]
 markers = [
     "integration: integration tests that exercise the full HTTP cycle",

@@ -161,13 +161,20 @@
         });
       });
 
-      // Bulk action buttons. Both endpoints live one path segment up from
-      // the list page, mirroring how the router mounts them.
+      // Bulk action buttons. The bulk endpoints live as siblings of the
+      // list view, mounted under the same prefix the router sits at.
+      // Resolve relative to the list URL with a guaranteed trailing slash:
+      // the default redirect_slashes strips the slash from
+      // /admin/bug-reports/, and a bare relative href on the no-slash URL
+      // would resolve up one segment to /admin/bulk-* (404).
+      const bulkBase = window.location.pathname.endsWith("/")
+        ? window.location.pathname
+        : window.location.pathname + "/";
       document.querySelectorAll("[data-bug-fab-bulk]").forEach(function (button) {
         button.addEventListener("click", async function () {
           const action = button.getAttribute("data-bug-fab-bulk");
           if (!confirm("Run bulk action: " + action + "?")) return;
-          const url = action === "close-fixed" ? "bulk-close-fixed" : "bulk-archive-closed";
+          const url = bulkBase + (action === "close-fixed" ? "bulk-close-fixed" : "bulk-archive-closed");
           try {
             const resp = await fetch(url, { method: "POST" });
             if (!resp.ok) {

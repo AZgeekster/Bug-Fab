@@ -16,14 +16,13 @@ job in CI.
 ```bash
 pip install -e ".[e2e]"
 python -m playwright install chromium
-pytest tests/e2e -v --browser chromium -p no:bug-fab-conformance
+pytest tests/e2e -v --browser chromium
 ```
 
-The `-p no:bug-fab-conformance` flag disables the wire-protocol conformance
-plugin for this run only. The conformance plugin and `pytest-base-url`
-(pulled in by `pytest-playwright`) both register a `--base-url` option and
-clash on plugin discovery; we don't need the conformance plugin here
-because we are exercising a real browser, not validating the wire protocol.
+The wire-protocol conformance plugin and `pytest-base-url` (pulled in by
+`pytest-playwright`) both want to register a `--base-url` flag. The
+conformance plugin defers to `pytest-base-url` when both are loaded so
+the two coexist in one venv without ceremony.
 
 ## What's exercised
 
