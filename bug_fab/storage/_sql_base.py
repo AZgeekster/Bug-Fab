@@ -222,6 +222,22 @@ class SqlStorageBase(Storage):
             by,
         )
 
+    async def set_github_link(
+        self,
+        report_id: str,
+        issue_number: int,
+        issue_url: str,
+    ) -> BugReportDetail | None:
+        """Persist the GitHub issue link on the report row."""
+        if not _REPORT_ID_RE.match(report_id or ""):
+            return None
+        return await asyncio.to_thread(
+            self._set_github_link_sync,
+            report_id,
+            issue_number,
+            issue_url,
+        )
+
     async def delete_report(self, report_id: str) -> bool:
         """Permanently delete the report and its screenshot."""
         if not _REPORT_ID_RE.match(report_id or ""):
@@ -417,6 +433,28 @@ class SqlStorageBase(Storage):
                 )
                 session.commit()
                 # Re-fetch so the relationship reflects the new lifecycle row.
+                refreshed = session.get(BugReport, report_id)
+                return _to_detail(refreshed) if refreshed is not None else None
+            except Exception:
+                session.rollback()
+                raise
+
+    def _set_github_link_sync(
+        self,
+        report_id: str,
+        issue_number: int,
+        issue_url: str,
+    ) -> BugReportDetail | None:
+        with self._session_factory() as session:
+            session.begin()
+            try:
+                report = session.get(BugReport, report_id)
+                if report is None:
+                    session.rollback()
+                    return None
+                report.github_issue_number = issue_number
+                report.github_issue_url = issue_url
+                session.commit()
                 refreshed = session.get(BugReport, report_id)
                 return _to_detail(refreshed) if refreshed is not None else None
             except Exception:

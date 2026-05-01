@@ -170,6 +170,25 @@ class FileStorage(Storage):
             self._update_index_entry(report_id, status=status)
             return self._coerce_detail(data)
 
+    async def set_github_link(
+        self,
+        report_id: str,
+        issue_number: int,
+        issue_url: str,
+    ) -> BugReportDetail | None:
+        """Stamp the GitHub issue link onto the report's JSON + index entry."""
+        if not _REPORT_ID_RE.match(report_id):
+            return None
+        async with self._lock:
+            data = self._read_report(report_id)
+            if data is None:
+                return None
+            data["github_issue_number"] = issue_number
+            data["github_issue_url"] = issue_url
+            self._write_report(report_id, data)
+            self._update_index_entry(report_id, github_issue_url=issue_url)
+            return self._coerce_detail(data)
+
     async def delete_report(self, report_id: str) -> bool:
         """Hard-delete: remove JSON, PNG, and index entry."""
         if not _REPORT_ID_RE.match(report_id):

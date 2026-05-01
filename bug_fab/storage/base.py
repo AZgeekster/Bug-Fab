@@ -59,6 +59,23 @@ class Storage(ABC):
         """Apply a status change, append a lifecycle entry, return the updated report."""
 
     @abstractmethod
+    async def set_github_link(
+        self,
+        report_id: str,
+        issue_number: int,
+        issue_url: str,
+    ) -> BugReportDetail | None:
+        """Persist the GitHub issue link onto an existing report.
+
+        Called after a successful GitHub Issues sync to record where the
+        upstream issue lives. Returns the updated report on success, or
+        ``None`` if no report has the given id. Implementations MUST be
+        idempotent: calling twice with the same args overwrites the existing
+        link without raising, and the lifecycle log SHOULD NOT grow on
+        repeated calls (the link is metadata, not a state transition).
+        """
+
+    @abstractmethod
     async def delete_report(self, report_id: str) -> bool:
         """Permanently remove the report and its screenshot. Returns True if found."""
 
