@@ -238,7 +238,7 @@ def test_oversize_screenshot_returns_413(app_factory, settings_factory, make_png
 
 
 def test_non_image_bytes_return_415(app_factory) -> None:
-    """Bytes without PNG/JPEG magic header must be rejected as 415."""
+    """Bytes without the PNG magic header must be rejected as 415."""
     client = app_factory()
     response = client.post(
         "/bug-reports",
@@ -248,8 +248,15 @@ def test_non_image_bytes_return_415(app_factory) -> None:
     assert response.status_code == 415
 
 
-def test_jpeg_magic_bytes_accepted(app_factory) -> None:
-    """JPEG magic bytes are accepted alongside PNG."""
+def test_jpeg_magic_bytes_rejected_as_415(app_factory) -> None:
+    """JPEG bytes MUST be rejected; v0.1 locks the wire format to PNG.
+
+    PROTOCOL.md § Request requires ``image/png`` for the screenshot part.
+    The bundled ``html2canvas`` client only emits PNG, and the protocol-
+    validation layer (``bug_fab/intake.py``) already enforces PNG-only;
+    the router previously drifted by accepting JPEG too. This test pins
+    the tightened contract so future regressions surface immediately.
+    """
     jpeg_bytes = b"\xff\xd8\xff" + b"\x00" * 200
     client = app_factory()
     response = client.post(
@@ -257,7 +264,8 @@ def test_jpeg_magic_bytes_accepted(app_factory) -> None:
         data={"metadata": json.dumps(_baseline_metadata())},
         files={"screenshot": ("shot.jpg", jpeg_bytes, "image/jpeg")},
     )
-    assert response.status_code == 201
+    assert response.status_code == 415
+    assert "png" in response.text.lower()
 
 
 def test_json_only_post_rejected(app_factory) -> None:

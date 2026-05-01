@@ -19,7 +19,7 @@ from bug_fab._rate_limit import RateLimiter
 from bug_fab.config import Settings
 from bug_fab.routers.submit import (
     _client_ip,
-    _detect_image_kind,
+    _is_png,
     configure,
     get_github_sync,
     get_rate_limiter,
@@ -155,12 +155,14 @@ def test_client_ip_returns_unknown_when_no_data() -> None:
 @pytest.mark.parametrize(
     "payload,expected",
     [
-        (b"\x89PNG\r\n\x1a\nrest", "png"),
-        (b"\xff\xd8\xff\x00rest", "jpeg"),
-        (b"GIF89a", None),
-        (b"", None),
-        (b"random bytes", None),
+        (b"\x89PNG\r\n\x1a\nrest", True),
+        (b"\xff\xd8\xff\x00rest", False),  # JPEG — rejected per PROTOCOL.md v0.1
+        (b"GIF89a", False),
+        (b"", False),
+        (b"random bytes", False),
     ],
 )
-def test_detect_image_kind(payload: bytes, expected: str | None) -> None:
-    assert _detect_image_kind(payload) == expected
+def test_is_png(payload: bytes, expected: bool) -> None:
+    """Only the PNG magic signature returns True; everything else (including
+    JPEG) is rejected. v0.1 locks the wire format to ``image/png``."""
+    assert _is_png(payload) is expected

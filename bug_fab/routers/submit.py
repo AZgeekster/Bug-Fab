@@ -6,7 +6,9 @@ single endpoint (``POST /bug-reports``) that:
 1. Validates the multipart payload (``metadata`` JSON string +
    ``screenshot`` file).
 2. Enforces per-IP rate limits when the consumer enables them.
-3. Caps screenshot size and verifies PNG / JPEG magic bytes.
+3. Caps screenshot size and verifies PNG magic bytes. Per PROTOCOL.md §
+   Request, v0.1 locks the screenshot media type to ``image/png``;
+   anything else is rejected with ``415 Unsupported Media Type``.
 4. Captures the request-header ``User-Agent`` as the source-of-truth
    ``server_user_agent`` field, preserving any client-supplied value as
    ``client_reported_user_agent`` for diagnostics.
@@ -38,9 +40,11 @@ logger = logging.getLogger(__name__)
 
 submit_router = APIRouter(tags=["bug-fab"])
 
-#: Magic-byte signatures for the two image formats accepted on intake.
+#: Magic-byte signature for the only image format accepted on intake.
+#: PROTOCOL.md v0.1 locks the screenshot media type to ``image/png``;
+#: ``html2canvas`` (the bundled client) only emits PNG. Adapters that
+#: want JPEG support layer it on top after a protocol bump.
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
-_JPEG_SIGNATURE = b"\xff\xd8\xff"
 
 #: Module-level singleton that callers replace via FastAPI dependency
 #: overrides. The router never instantiates a default storage backend
@@ -139,13 +143,9 @@ def _client_ip(request: Request) -> str:
     return "unknown"
 
 
-def _detect_image_kind(payload: bytes) -> str | None:
-    """Return ``"png"`` / ``"jpeg"`` for known signatures, else ``None``."""
-    if payload.startswith(_PNG_SIGNATURE):
-        return "png"
-    if payload.startswith(_JPEG_SIGNATURE):
-        return "jpeg"
-    return None
+def _is_png(payload: bytes) -> bool:
+    """Return ``True`` when ``payload`` starts with the PNG magic signature."""
+    return payload.startswith(_PNG_SIGNATURE)
 
 
 @submit_router.post(
@@ -157,7 +157,7 @@ def _detect_image_kind(payload: bytes) -> str | None:
 async def submit_bug_report(
     request: Request,
     metadata: str = Form(..., description="JSON-encoded BugReportCreate payload"),
-    screenshot: UploadFile = File(..., description="Captured PNG or JPEG image"),
+    screenshot: UploadFile = File(..., description="Captured PNG image"),
     storage: Storage = Depends(get_storage),
     settings: Settings = Depends(get_settings),
     github_sync: GitHubSync | None = Depends(get_github_sync),
@@ -206,10 +206,10 @@ async def submit_bug_report(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"Screenshot exceeds maximum size of {settings.max_upload_mb} MiB",
         )
-    if _detect_image_kind(screenshot_bytes) is None:
+    if not _is_png(screenshot_bytes):
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Screenshot must be a PNG or JPEG image",
+            detail="Screenshot must be a PNG image (image/png)",
         )
 
     # Build the persistence payload. The server is authoritative for
@@ -250,11 +250,7 @@ async def submit_bug_report(
             issue_number, issue_url = await github_sync.create_issue(detail.model_dump(mode="json"))
             if issue_number is not None and issue_url is not None:
                 github_issue_url = issue_url
-                # Persist the link to storage if the backend supports it. If not,
-                # consumers will see it appear on the next GET /reports/{id}.
-                update_hook = getattr(storage, "set_github_link", None)
-                if callable(update_hook):
-                    await update_hook(report_id, issue_number, issue_url)
+                await storage.set_github_link(report_id, issue_number, issue_url)
         except Exception:  # pragma: no cover - defensive
             logger.exception("bug_fab_github_sync_failed", extra={"report_id": report_id})
 
