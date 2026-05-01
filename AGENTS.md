@@ -574,7 +574,8 @@ breaks one of these, it is wrong (not the spec):
 | FastAPI integration example | [`examples/fastapi-minimal/main.py`](examples/fastapi-minimal/main.py) |
 | Flask integration example | [`examples/flask-minimal/main.py`](examples/flask-minimal/main.py) |
 | React provider example | [`examples/react-spa/src/BugFabProvider.tsx`](examples/react-spa/src/BugFabProvider.tsx) |
-| Live POC to play with | URL pending — see the README badge once Fly.io deploy is live |
+| Live POC to play with | <https://bug-fab.fly.dev/> (FAB demo + 8 intentional-error buttons; viewer at `/admin/bug-reports/`) |
+| Public POC source | [`examples/error-playground/main.py`](examples/error-playground/main.py) (the app deployed to Fly.io) |
 
 ---
 

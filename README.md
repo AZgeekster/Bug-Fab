@@ -4,6 +4,10 @@ A drop-in floating action button that lets your users file a bug report
 without leaving the page. Screenshot, on-image annotations, console
 errors, and recent network calls all ride along automatically.
 
+> **Try it live:** <https://bug-fab.fly.dev/> — click any red button,
+> click the bug icon, submit. Reports show up at
+> [/admin/bug-reports/](https://bug-fab.fly.dev/admin/bug-reports/).
+
 It's vibe-coded by a hobbyist who happens to use it at the day job too,
 so it probably has bugs. Don't bash me.
 
@@ -31,9 +35,13 @@ v0.1 ships:
   (file / SQLite / Postgres) and an optional GitHub Issues sync.
 - A **conformance pytest plugin** so adapter authors can verify their
   implementation against the spec.
-- A live demo so you can click around without installing anything (URL
-  coming soon — POC is being deployed to Fly.io alongside the `0.1.0`
-  final release).
+- A live demo so you can click around without installing anything:
+  **<https://bug-fab.fly.dev/>**. Eight intentional-error buttons let you
+  break things on purpose; the FAB captures it all and submits to a
+  shared, public viewer at
+  [/admin/bug-reports/](https://bug-fab.fly.dev/admin/bug-reports/).
+  Don't paste anything you wouldn't post on Twitter — every report is
+  visible to anyone who opens the viewer.
 
 ## Quickstart (FastAPI)
 

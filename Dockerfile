@@ -18,14 +18,7 @@ COPY bug_fab /app/bug_fab
 COPY static /app/static
 
 RUN pip install --no-cache-dir . && \
-    pip install --no-cache-dir 'uvicorn[standard]' && \
-    cp -r /app/static /usr/local/lib/python3.12/site-packages/bug_fab/static
-# WHY the cp: the wheel's `[tool.hatch.build.targets.wheel.shared-data]`
-# hook puts static under `<sys.prefix>/share/bug_fab/static/`, but the
-# example apps probe `<package_root>/static` first. Copying it there lets
-# `_resolve_static_dir()` succeed without modifying the example. The
-# proper fix (either include static as real package_data or extend the
-# probe list) is tracked as a v0.1.x follow-up.
+    pip install --no-cache-dir 'uvicorn[standard]'
 
 # Example app + its little demo-error endpoints.
 COPY examples /app/examples
