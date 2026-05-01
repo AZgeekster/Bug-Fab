@@ -150,7 +150,14 @@
         const id = row.getAttribute("data-bug-fab-detail-href");
         row.addEventListener("click", function (event) {
           if (event.target.closest("a, button")) return;
-          window.location.href = id;
+          // Resolve relative to the list URL with a guaranteed trailing slash.
+          // FastAPI's default redirect_slashes strips the trailing slash from
+          // `/admin/bug-reports/` to `/admin/bug-reports`, which would make
+          // a bare `bug-001` href resolve to `/admin/bug-001` (404).
+          const base = window.location.pathname.endsWith("/")
+            ? window.location.pathname
+            : window.location.pathname + "/";
+          window.location.href = base + id;
         });
       });
 

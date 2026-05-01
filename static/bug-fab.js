@@ -724,7 +724,7 @@
       }
     }
     const segments = path.split("/").filter(Boolean);
-    if (segments.length === 0) return null;
+    if (segments.length === 0) return "";
     const seg = segments[0];
     return seg.charAt(0).toUpperCase() + seg.slice(1);
   };
@@ -1231,7 +1231,19 @@
           const text = await response.text();
           try {
             const parsed = JSON.parse(text);
-            if (parsed && parsed.detail) message = parsed.detail;
+            const detail = parsed && parsed.detail;
+            if (typeof detail === "string") {
+              message = detail;
+            } else if (Array.isArray(detail) && detail.length > 0) {
+              // FastAPI / Pydantic 422 returns an array of {loc, msg, type, ...}
+              // objects. Render the first error in a human-readable form
+              // instead of letting the toast string-coerce it to "[object Object]".
+              const first = detail[0];
+              const loc = Array.isArray(first.loc) ? first.loc.filter((p) => p !== "body").join(".") : "";
+              const msg = first.msg || JSON.stringify(first);
+              message = loc ? `${loc}: ${msg}` : msg;
+              if (detail.length > 1) message += ` (+${detail.length - 1} more)`;
+            }
           } catch (_e) { /* keep default */ }
         } catch (_e) { /* keep default */ }
         throw new Error(message);
