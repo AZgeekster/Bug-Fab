@@ -1,0 +1,181 @@
+{% extends "bug_fab/_base.html" %}
+
+{% block title %}{{ report.id }} - {{ report.title }}{% endblock %}
+
+{% block content %}
+  <div class="bug-fab-header">
+    <h1>
+      <span class="bug-fab-mono">{{ report.id }}</span>
+      &middot; {{ report.title }}
+    </h1>
+    <div class="bug-fab-actions">
+      <a class="bug-fab-button" href="../">&larr; Back to list</a>
+      {% if report.context.url %}
+        <a class="bug-fab-button" href="{{ report.context.url }}" target="_blank" rel="noopener">Reproduce</a>
+      {% endif %}
+      <button type="button" class="bug-fab-button" id="bug-fab-copy-path">Copy Path for Claude</button>
+      {% if report.github_issue_url %}
+        <a class="bug-fab-button" href="{{ report.github_issue_url }}" target="_blank" rel="noopener">GitHub issue</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="bug-fab-detail-grid">
+    <div class="bug-fab-card bug-fab-section">
+      <h2>Screenshot</h2>
+      <img class="bug-fab-screenshot" src="reports/{{ report.id }}/screenshot" alt="Screenshot for {{ report.id }}" />
+
+      <h2>Description</h2>
+      <p>{{ report.description|default:"_No description provided._" }}</p>
+
+      {% if report.expected_behavior %}
+        <h2>Expected behavior</h2>
+        <p>{{ report.expected_behavior }}</p>
+      {% endif %}
+
+      {% if report.tags %}
+        <h2>Tags</h2>
+        <ul class="bug-fab-tag-list">
+          {% for tag in report.tags %}<li>{{ tag }}</li>{% endfor %}
+        </ul>
+      {% endif %}
+    </div>
+
+    <div class="bug-fab-card bug-fab-section">
+      <h2>Metadata</h2>
+      <dl class="bug-fab-meta-grid">
+        <dt>Severity</dt>
+        <dd><span class="bug-fab-badge bug-fab-sev-{{ report.severity }}">{{ report.severity }}</span></dd>
+        <dt>Status</dt>
+        <dd><span class="bug-fab-badge bug-fab-status-{{ report.status }}">{{ report.status }}</span></dd>
+        <dt>Type</dt>
+        <dd>{{ report.report_type }}</dd>
+        <dt>Module</dt>
+        <dd>{{ report.module|default:"-" }}</dd>
+        <dt>Environment</dt>
+        <dd>{{ report.environment|default:"-" }}</dd>
+        <dt>Created</dt>
+        <dd><span class="bug-fab-mono">{{ report.created_at }}</span></dd>
+        {% if report.updated_at %}
+          <dt>Updated</dt>
+          <dd><span class="bug-fab-mono">{{ report.updated_at }}</span></dd>
+        {% endif %}
+        {% if report.server_user_agent %}
+          <dt>Server UA</dt>
+          <dd><span class="bug-fab-mono">{{ report.server_user_agent }}</span></dd>
+        {% endif %}
+        {% if report.client_reported_user_agent %}
+          <dt>Client UA</dt>
+          <dd><span class="bug-fab-mono">{{ report.client_reported_user_agent }}</span></dd>
+        {% endif %}
+      </dl>
+
+      {% if permissions.can_edit_status %}
+        <h2>Update status</h2>
+        <form class="bug-fab-status-form" id="bug-fab-status-form">
+          <label>
+            New status
+            <select name="status">
+              <option value="open" {% if report.status == "open" %}selected{% endif %}>Open</option>
+              <option value="investigating" {% if report.status == "investigating" %}selected{% endif %}>Investigating</option>
+              <option value="fixed" {% if report.status == "fixed" %}selected{% endif %}>Fixed</option>
+              <option value="closed" {% if report.status == "closed" %}selected{% endif %}>Closed</option>
+            </select>
+          </label>
+          <label>
+            Fix commit (optional)
+            <input type="text" name="fix_commit" placeholder="abc1234 or PR link" />
+          </label>
+          <label>
+            Fix description (optional)
+            <textarea name="fix_description" rows="2" placeholder="What changed and why."></textarea>
+          </label>
+          <button type="submit" class="bug-fab-button bug-fab-button-primary">Update</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="bug-fab-card bug-fab-section">
+    <h2>Page context</h2>
+    <details class="bug-fab-collapsible">
+      <summary>URL, viewport, user agent</summary>
+      <dl class="bug-fab-meta-grid">
+        <dt>URL</dt>
+        <dd>{% if report.context.url %}<a href="{{ report.context.url }}" target="_blank" rel="noopener">{{ report.context.url }}</a>{% else %}-{% endif %}</dd>
+        <dt>Viewport</dt>
+        <dd>{{ report.context.viewport_width }}x{{ report.context.viewport_height }}</dd>
+        <dt>User agent</dt>
+        <dd><span class="bug-fab-mono">{{ report.context.user_agent|default:"-" }}</span></dd>
+      </dl>
+    </details>
+  </div>
+
+  <div class="bug-fab-card bug-fab-section">
+    <h2>Lifecycle</h2>
+    {% if report.lifecycle %}
+      <table class="bug-fab-lifecycle-table">
+        <thead>
+          <tr>
+            <th>Action</th><th>By</th><th>At</th><th>Fix commit</th><th>Fix description</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for event in report.lifecycle %}
+            <tr>
+              <td><span class="bug-fab-badge">{{ event.action }}</span></td>
+              <td>{{ event.by|default:"-" }}</td>
+              <td><span class="bug-fab-mono">{{ event.at }}</span></td>
+              <td>{% if event.fix_commit %}<span class="bug-fab-mono">{{ event.fix_commit }}</span>{% else %}-{% endif %}</td>
+              <td>{{ event.fix_description|default:"-" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No lifecycle events recorded.</p>
+    {% endif %}
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  {{ report.id|json_script:"bug-fab-report-id" }}
+  <script>
+    (function () {
+      const reportId = JSON.parse(document.getElementById("bug-fab-report-id").textContent);
+      const copyButton = document.getElementById("bug-fab-copy-path");
+      if (copyButton) {
+        copyButton.addEventListener("click", function () {
+          window.BugFabViewer.copyText("bug_reports/" + reportId + ".json");
+        });
+      }
+      const form = document.getElementById("bug-fab-status-form");
+      if (form) {
+        form.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          const data = new FormData(form);
+          const payload = {
+            status: data.get("status"),
+            fix_commit: data.get("fix_commit") || "",
+            fix_description: data.get("fix_description") || "",
+          };
+          try {
+            const resp = await fetch("reports/" + reportId + "/status", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            if (!resp.ok) {
+              window.BugFabViewer.toast("Update failed (" + resp.status + ")");
+              return;
+            }
+            window.BugFabViewer.toast("Status updated");
+            setTimeout(function () { window.location.reload(); }, 600);
+          } catch (err) {
+            window.BugFabViewer.toast("Network error");
+          }
+        });
+      }
+    })();
+  </script>
+{% endblock %}

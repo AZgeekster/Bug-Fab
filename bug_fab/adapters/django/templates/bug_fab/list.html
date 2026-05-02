@@ -1,0 +1,173 @@
+{% extends "bug_fab/_base.html" %}
+
+{% block title %}Bug Reports - Bug-Fab{% endblock %}
+
+{% block content %}
+  <div class="bug-fab-header">
+    <h1>Bug Reports</h1>
+    <div class="bug-fab-actions">
+      {% if permissions.can_bulk %}
+        <button type="button" class="bug-fab-button" data-bug-fab-bulk="close-fixed">Close all fixed</button>
+        <button type="button" class="bug-fab-button" data-bug-fab-bulk="archive-closed">Archive closed</button>
+      {% endif %}
+      <button type="button" class="bug-fab-button" data-bug-fab-action="reload">Refresh</button>
+    </div>
+  </div>
+
+  <section class="bug-fab-stats" aria-label="Status counts">
+    <button type="button" class="bug-fab-stat bug-fab-stat-open" data-bug-fab-filter-status="open">
+      <div class="bug-fab-stat-label">Open</div>
+      <div class="bug-fab-stat-value">{{ stats.open|default:0 }}</div>
+    </button>
+    <button type="button" class="bug-fab-stat bug-fab-stat-investigating" data-bug-fab-filter-status="investigating">
+      <div class="bug-fab-stat-label">Investigating</div>
+      <div class="bug-fab-stat-value">{{ stats.investigating|default:0 }}</div>
+    </button>
+    <button type="button" class="bug-fab-stat bug-fab-stat-fixed" data-bug-fab-filter-status="fixed">
+      <div class="bug-fab-stat-label">Fixed</div>
+      <div class="bug-fab-stat-value">{{ stats.fixed|default:0 }}</div>
+    </button>
+    <button type="button" class="bug-fab-stat bug-fab-stat-closed" data-bug-fab-filter-status="closed">
+      <div class="bug-fab-stat-label">Closed</div>
+      <div class="bug-fab-stat-value">{{ stats.closed|default:0 }}</div>
+    </button>
+    <button type="button" class="bug-fab-stat bug-fab-stat-total" data-bug-fab-filter-status="">
+      <div class="bug-fab-stat-label">Total</div>
+      <div class="bug-fab-stat-value">{{ stats.total|default:0 }}</div>
+    </button>
+  </section>
+
+  <form class="bug-fab-card bug-fab-filters" method="get" id="bug-fab-filter-form">
+    <label>
+      Status
+      <select name="status">
+        <option value="">All</option>
+        <option value="open" {% if filters.status == "open" %}selected{% endif %}>Open</option>
+        <option value="investigating" {% if filters.status == "investigating" %}selected{% endif %}>Investigating</option>
+        <option value="fixed" {% if filters.status == "fixed" %}selected{% endif %}>Fixed</option>
+        <option value="closed" {% if filters.status == "closed" %}selected{% endif %}>Closed</option>
+      </select>
+    </label>
+    <label>
+      Severity
+      <select name="severity">
+        <option value="">All</option>
+        <option value="low" {% if filters.severity == "low" %}selected{% endif %}>Low</option>
+        <option value="medium" {% if filters.severity == "medium" %}selected{% endif %}>Medium</option>
+        <option value="high" {% if filters.severity == "high" %}selected{% endif %}>High</option>
+        <option value="critical" {% if filters.severity == "critical" %}selected{% endif %}>Critical</option>
+      </select>
+    </label>
+    <label>
+      Module
+      <input type="text" name="module" value="{{ filters.module }}" placeholder="any" />
+    </label>
+    <label>
+      Environment
+      <input type="text" name="environment" value="{{ filters.environment }}" placeholder="any" />
+    </label>
+    <button type="submit" class="bug-fab-button bug-fab-button-primary">Apply</button>
+    <a href="?" class="bug-fab-button">Clear</a>
+  </form>
+
+  <div class="bug-fab-card">
+    {% if items %}
+      <table class="bug-fab-table" aria-label="Bug reports">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Title</th>
+            <th>Severity</th>
+            <th>Status</th>
+            <th>Module</th>
+            <th>Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in items %}
+            <tr data-bug-fab-detail-href="{{ item.id }}">
+              <td><span class="bug-fab-mono">{{ item.id }}</span></td>
+              <td>{{ item.title }}</td>
+              <td><span class="bug-fab-badge bug-fab-sev-{{ item.severity }}">{{ item.severity }}</span></td>
+              <td><span class="bug-fab-badge bug-fab-status-{{ item.status }}">{{ item.status }}</span></td>
+              <td>{{ item.module|default:"-" }}</td>
+              <td><span class="bug-fab-mono">{{ item.created_at }}</span></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="bug-fab-table-empty">
+        No bug reports yet. The first submission will appear here.
+      </div>
+    {% endif %}
+
+    {% if total_pages > 1 %}
+      <nav class="bug-fab-pagination" aria-label="Pagination">
+        {% if page > 1 %}
+          <a class="bug-fab-button" href="?status={{ filters.status }}&amp;severity={{ filters.severity }}&amp;module={{ filters.module }}&amp;environment={{ filters.environment }}&amp;page={{ page|add:'-1' }}">Prev</a>
+        {% endif %}
+        <span class="bug-fab-button bug-fab-page-current">{{ page }} / {{ total_pages }}</span>
+        {% if page < total_pages %}
+          <a class="bug-fab-button" href="?status={{ filters.status }}&amp;severity={{ filters.severity }}&amp;module={{ filters.module }}&amp;environment={{ filters.environment }}&amp;page={{ page|add:'1' }}">Next</a>
+        {% endif %}
+      </nav>
+    {% endif %}
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    (function () {
+      document.querySelectorAll("[data-bug-fab-action='reload']").forEach(function (button) {
+        button.addEventListener("click", function () { window.location.reload(); });
+      });
+
+      document.querySelectorAll("[data-bug-fab-filter-status]").forEach(function (el) {
+        el.addEventListener("click", function () {
+          const params = new URLSearchParams(window.location.search);
+          const target = el.getAttribute("data-bug-fab-filter-status");
+          if (target) { params.set("status", target); }
+          else { params.delete("status"); }
+          params.delete("page");
+          window.location.search = params.toString();
+        });
+      });
+
+      document.querySelectorAll("[data-bug-fab-detail-href]").forEach(function (row) {
+        const id = row.getAttribute("data-bug-fab-detail-href");
+        row.addEventListener("click", function (event) {
+          if (event.target.closest("a, button")) return;
+          const base = window.location.pathname.endsWith("/")
+            ? window.location.pathname
+            : window.location.pathname + "/";
+          window.location.href = base + id;
+        });
+      });
+
+      const bulkBase = window.location.pathname.endsWith("/")
+        ? window.location.pathname
+        : window.location.pathname + "/";
+      document.querySelectorAll("[data-bug-fab-bulk]").forEach(function (button) {
+        button.addEventListener("click", async function () {
+          const action = button.getAttribute("data-bug-fab-bulk");
+          if (!confirm("Run bulk action: " + action + "?")) return;
+          const url = bulkBase + (action === "close-fixed" ? "bulk-close-fixed" : "bulk-archive-closed");
+          try {
+            const resp = await fetch(url, { method: "POST" });
+            if (!resp.ok) {
+              window.BugFabViewer.toast("Bulk action failed (" + resp.status + ")");
+              return;
+            }
+            const data = await resp.json();
+            const count = data.closed ?? data.archived ?? 0;
+            window.BugFabViewer.toast("Done: " + count + " reports affected");
+            setTimeout(function () { window.location.reload(); }, 700);
+          } catch (err) {
+            window.BugFabViewer.toast("Bulk action error");
+          }
+        });
+      });
+    })();
+  </script>
+{% endblock %}
