@@ -501,6 +501,70 @@ def test_status_update_calls_github_state_sync(
     assert sync.state_calls == [(42, "fixed")]
 
 
+# -----------------------------------------------------------------------------
+# Rate limiter wiring (audit F-2) — opt-in via Settings.rate_limit_enabled.
+# Mirrors FastAPI submit.py:167-174.
+# -----------------------------------------------------------------------------
+
+
+def test_rate_limiter_allows_under_threshold(
+    tmp_path: Path,
+    tiny_png: bytes,
+    valid_metadata_dict: dict[str, Any],
+) -> None:
+    """Submissions under the limit succeed normally."""
+    settings = Settings(
+        storage_dir=tmp_path / "bug_reports",
+        rate_limit_enabled=True,
+        rate_limit_max=3,
+        rate_limit_window_seconds=60,
+    )
+    storage = FileStorage(storage_dir=settings.storage_dir)
+    app = flask.Flask(__name__)
+    app.config["MAX_CONTENT_LENGTH"] = 11 * 1024 * 1024
+    app.register_blueprint(make_blueprint(settings, storage=storage), url_prefix="/bug-fab")
+    client = app.test_client()
+    for _ in range(3):
+        rid = _seed_one(client, valid_metadata_dict, tiny_png)
+        assert rid.startswith("bug-")
+
+
+def test_rate_limiter_blocks_over_threshold_with_429_envelope(
+    tmp_path: Path,
+    tiny_png: bytes,
+    valid_metadata_dict: dict[str, Any],
+) -> None:
+    """The (N+1)th submission within the window returns 429 + envelope."""
+    settings = Settings(
+        storage_dir=tmp_path / "bug_reports",
+        rate_limit_enabled=True,
+        rate_limit_max=2,
+        rate_limit_window_seconds=60,
+    )
+    storage = FileStorage(storage_dir=settings.storage_dir)
+    app = flask.Flask(__name__)
+    app.config["MAX_CONTENT_LENGTH"] = 11 * 1024 * 1024
+    app.register_blueprint(make_blueprint(settings, storage=storage), url_prefix="/bug-fab")
+    client = app.test_client()
+
+    for _ in range(2):
+        _seed_one(client, valid_metadata_dict, tiny_png)
+
+    resp = client.post(
+        "/bug-fab/bug-reports",
+        data={
+            "metadata": json.dumps(valid_metadata_dict),
+            "screenshot": (BytesIO(tiny_png), "shot.png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 429
+    body = resp.get_json()
+    assert body["error"] == "rate_limited"
+    assert "Rate limit exceeded" in body["detail"]
+    assert body["retry_after_seconds"] == 60
+
+
 def test_status_update_no_state_sync_when_no_issue_number(
     tmp_path: Path,
     tiny_png: bytes,

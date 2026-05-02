@@ -5,12 +5,14 @@ the FastAPI reference adapter, the Pydantic schemas, three storage
 backends behind a single `Storage` ABC, and the vanilla-JS frontend
 bundle (with `html2canvas` vendored at a pinned version — no CDN).
 
-This guide covers three Python install paths:
+This guide covers four Python install paths:
 
 1. [FastAPI consumer](#fastapi-consumer) — the canonical path.
-2. [Flask consumer](#flask-consumer) — protocol-only integration via
-   direct route handlers.
-3. [React / SPA consumer](#react--spa-consumer) — the JS bundle plus a
+2. [Flask consumer](#flask-consumer) — first-party Blueprint shim
+   (`bug-fab[flask]`).
+3. [Django consumer](#django-consumer) — first-party reusable Django
+   app (`bug-fab[django]`).
+4. [React / SPA consumer](#react--spa-consumer) — the JS bundle plus a
    protocol-honoring backend (any language).
 
 For non-Python integrations (Fastify, Express, Next.js Route Handlers,
@@ -155,65 +157,125 @@ reference and recommended defaults per deployment shape.
 
 ## Flask consumer
 
-Bug-Fab v0.1's reference adapter is FastAPI. A first-party Flask
-adapter is on the v0.2 roadmap. Today, integrating Bug-Fab into a Flask
-app means honoring the wire protocol with two route handlers and
-serving the static bundle. The frontend bundle is identical — it does
-not care which language is on the other side of the POST.
+Bug-Fab ships a first-party Flask Blueprint shim. A Flask consumer's
+integration code is ~10 LOC — the Blueprint exposes all 8 wire-protocol
+endpoints, the HTML viewer, the status workflow, bulk operations, and
+the static bundle. Validation flows through the same
+`bug_fab.intake.validate_payload` the FastAPI router uses, so the wire
+contract is shared by construction.
 
 ### 1. Install
 
 ```bash
-pip install --pre bug-fab
+pip install --pre 'bug-fab[flask]'
 ```
 
-You still get the Pydantic schemas and the static bundle, even from a
-Flask process — they have no FastAPI runtime requirement.
+The `[flask]` extra adds Flask as a dependency. The Pydantic schemas,
+storage backends, and static bundle ship in the main package.
 
-### 2. Implement the two routes
+### 2. Wire the Blueprint
 
 ```python
-from flask import Flask, request, jsonify, send_from_directory
-from importlib.resources import files
-from bug_fab import FileStorage, BugReportCreate
-import json
+from flask import Flask
+from bug_fab.adapters.flask import make_blueprint
+from bug_fab.config import Settings
 
+settings = Settings(storage_dir="./bug_reports")
 app = Flask(__name__)
-storage = FileStorage(storage_dir="./bug_reports")
-
-@app.post("/api/bug-reports")
-def submit():
-    metadata_raw = request.form["metadata"]
-    metadata = BugReportCreate.model_validate_json(metadata_raw)
-    screenshot = request.files["screenshot"].read()
-    report_id = storage.save_report(metadata.model_dump(), screenshot)
-    return jsonify({
-        "id": report_id,
-        "received_at": "...",  # set with datetime.utcnow().isoformat()+"Z"
-        "stored_at": f"file://{storage.storage_dir}/{report_id}/",
-        "github_issue_url": None,
-    }), 201
-
-@app.get("/bug-fab/static/<path:asset>")
-def static_bundle(asset):
-    static_root = files("bug_fab").joinpath("static")
-    return send_from_directory(str(static_root), asset)
+app.register_blueprint(make_blueprint(settings), url_prefix="/bug-fab")
 ```
 
-This is the bare minimum — strict severity validation, rate limiting,
-the viewer pages, status workflow, and bulk operations are not
-included in the snippet above. They're implemented in the FastAPI
-reference adapter; see [`PROTOCOL.md`](PROTOCOL.md) and
-[`CONFORMANCE.md`](CONFORMANCE.md) for what your handlers must do to
-pass the conformance suite.
+That's it. `GET /bug-fab/` renders the HTML viewer index; `POST
+/bug-fab/bug-reports` accepts intake; the static bundle lives at
+`GET /bug-fab/static/bug-fab.js`. The mount prefix MUST be non-empty —
+the Blueprint's HTML list page lives at the prefix root.
+
+GitHub Issues sync, rate limiting, and CSP-nonce support are wired
+through the same `Settings` knobs the FastAPI router uses
+(`github_enabled`, `rate_limit_enabled`, `csp_nonce_provider`).
 
 ### 3. Add the FAB to your templates
-
-Same as the FastAPI path:
 
 ```html
 <script src="/bug-fab/static/bug-fab.js" defer></script>
 ```
+
+See `examples/flask-minimal/` for a complete reference consumer.
+
+## Django consumer
+
+Bug-Fab ships a first-party Django reusable app. Add it to
+`INSTALLED_APPS`, run `manage.py migrate`, and mount the URLconfs.
+Native Django ORM models, a free `BugReportAdmin` for the admin UI,
+plain Django views (no DRF dependency), and a `LoginRequiredMixin`-based
+auth helper.
+
+### 1. Install
+
+```bash
+pip install --pre 'bug-fab[django]'
+```
+
+The `[django]` extra adds Django ≥ 4.2 as a dependency.
+
+### 2. Register the app + run migrations
+
+```python
+# settings.py
+INSTALLED_APPS = [
+    # ...your apps...
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    "bug_fab.adapters.django",
+]
+
+# Django default DATA_UPLOAD_MAX_MEMORY_SIZE is 2.5 MiB which would
+# silently truncate Bug-Fab's 10 MiB cap. Bump it explicitly.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 12 * 1024 * 1024  # 10 MiB + multipart overhead
+MEDIA_ROOT = BASE_DIR / "media"
+```
+
+```bash
+python manage.py migrate
+```
+
+### 3. Mount the URLconfs
+
+The intake and viewer URLconfs are split so consumers can guard each
+under different middleware (e.g., open intake, auth-required viewer):
+
+```python
+# project/urls.py
+from django.urls import include, path
+
+urlpatterns = [
+    path("api/",                include("bug_fab.adapters.django.urls_intake")),
+    path("admin/bug-reports/",  include("bug_fab.adapters.django.urls_viewer")),
+    # ...your project's urls...
+]
+```
+
+The viewer prefix MUST be non-empty; the HTML list page renders at the
+prefix root.
+
+### 4. Add the FAB to your templates
+
+The package's `bundle_view` streams the canonical `bug-fab.js` from
+`<site-packages>/bug_fab/static/bug-fab.js` so consumers don't need to
+copy it into their `staticfiles` tree:
+
+```html
+{% load static %}
+<script src="{% url 'bug_fab:bundle' %}" defer></script>
+```
+
+In production, prefer serving the bundle from your own CDN /
+collected-static directory instead of through `bundle_view`. See
+`examples/django-minimal/` for a complete reference consumer.
 
 ## React / SPA consumer
 

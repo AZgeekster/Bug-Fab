@@ -37,6 +37,7 @@ from typing import Any
 from flask import Blueprint, Response, abort, jsonify, render_template, request, send_from_directory
 from pydantic import ValidationError
 
+from bug_fab._rate_limit import RateLimiter
 from bug_fab.adapters.flask._runtime import (
     resolve_static_dir,
     resolve_template_dir,
@@ -63,6 +64,22 @@ logger = logging.getLogger(__name__)
 #: Any input outside this character class is rejected with 404 before it
 #: reaches the storage layer.
 _REPORT_ID_RE = re.compile(r"^bug-[A-Za-z]?\d{1,12}$")
+
+
+def _client_ip() -> str:
+    """Best-effort source-IP extraction — mirrors FastAPI router's helper.
+
+    Honors ``X-Forwarded-For`` (first hop) when present so deployments
+    behind a reverse proxy still meter per-end-user. Falls back to
+    Flask's ``request.remote_addr``. Returns ``"unknown"`` when nothing
+    is available so the limiter still sees a stable key.
+    """
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        first = forwarded.split(",", 1)[0].strip()
+        if first:
+            return first
+    return request.remote_addr or "unknown"
 
 
 def _error(code: str, detail: Any, status_code: int, **extra: Any) -> tuple[Response, int]:
@@ -166,6 +183,7 @@ def make_blueprint(
     *,
     storage: Storage | None = None,
     github_sync: GitHubSync | None = None,
+    rate_limiter: RateLimiter | None = None,
     name: str = "bug_fab",
 ) -> Blueprint:
     """Build a Flask ``Blueprint`` exposing the full Bug-Fab wire protocol.
@@ -219,6 +237,17 @@ def make_blueprint(
             api_base=settings.github_api_base,
         )
 
+    # Per-IP rate limiter — opt-in via ``settings.rate_limit_enabled``.
+    # Same module-state caveat as the FastAPI router: a multi-worker
+    # WSGI server (gunicorn -w N, uwsgi --workers N, mod_wsgi multi-proc)
+    # gives each worker an independent counter. Front-door rate limiting
+    # (nginx, Cloudflare) remains the right answer for production.
+    if rate_limiter is None and settings.rate_limit_enabled:
+        rate_limiter = RateLimiter(
+            max_per_window=settings.rate_limit_max,
+            window_seconds=settings.rate_limit_window_seconds,
+        )
+
     template_dir = resolve_template_dir()
     static_dir = resolve_static_dir()
 
@@ -255,6 +284,17 @@ def make_blueprint(
     @bp.post("/bug-reports")
     def submit_bug_report() -> tuple[Response, int]:
         """Persist a new bug report per ``docs/PROTOCOL.md`` § Intake."""
+        if rate_limiter is not None and not rate_limiter.check(_client_ip()):
+            return _error(
+                "rate_limited",
+                (
+                    f"Rate limit exceeded: max {settings.rate_limit_max} reports "
+                    f"per {settings.rate_limit_window_seconds} seconds"
+                ),
+                429,
+                retry_after_seconds=settings.rate_limit_window_seconds,
+            )
+
         metadata_raw = request.form.get("metadata")
         screenshot_file = request.files.get("screenshot")
         if not metadata_raw or screenshot_file is None:
