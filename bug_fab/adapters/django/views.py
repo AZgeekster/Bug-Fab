@@ -337,6 +337,22 @@ def report_detail_json(request: HttpRequest, report_id: str) -> HttpResponse:
     return JsonResponse(report.model_dump(mode="json"))
 
 
+def _safe_context_url(report_dict: dict) -> str:
+    """Return ``context.url`` only when its scheme is in the allowlist.
+
+    Bug-Fab's intake doesn't validate the URL scheme on the way in (the
+    field is a free-form string the bundle captures from the host page),
+    so the viewer is responsible for refusing to render `javascript:`,
+    `data:`, etc. as a clickable href. Per the v0.1.x security pass
+    flagged in `SECURITY.md` § "no stored-XSS sinks" residual item.
+    """
+    ctx = report_dict.get("context") or {}
+    url = ctx.get("url") or ""
+    if isinstance(url, str) and url.startswith(("http://", "https://", "/")):
+        return url
+    return ""
+
+
 @require_http_methods(["GET"])
 def report_detail_html(request: HttpRequest, report_id: str) -> HttpResponse:
     """Render the HTML detail page (screenshot + metadata + lifecycle)."""
@@ -346,11 +362,13 @@ def report_detail_html(request: HttpRequest, report_id: str) -> HttpResponse:
     report = storage.get_report(report_id)
     if report is None:
         return _err("not_found", "Bug report not found", 404)
+    report_dict = report.model_dump(mode="json")
     return render(
         request,
         "bug_fab/detail.html",
         {
-            "report": report.model_dump(mode="json"),
+            "report": report_dict,
+            "safe_context_url": _safe_context_url(report_dict),
             "permissions": _viewer_permissions(),
         },
     )

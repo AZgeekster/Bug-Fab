@@ -195,7 +195,14 @@ class BugReportDetail(BugReportSummary):
 
 
 class BugReportListResponse(BaseModel):
-    """Pagination envelope for `GET /reports`."""
+    """Pagination envelope for `GET /reports`.
+
+    `stats` is a count-by-status aggregate over the **filtered** result set
+    (before pagination). The four lifecycle states are always emitted —
+    even when zero — so consumers can rely on a stable shape for stat
+    cards. See `docs/PROTOCOL.md` § "GET /reports" for the wire-level
+    contract.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
@@ -203,6 +210,7 @@ class BugReportListResponse(BaseModel):
     total: int
     page: int = 1
     page_size: int = 20
+    stats: dict[str, int] = Field(default_factory=dict)
 
 
 class BugReportIntakeResponse(BaseModel):

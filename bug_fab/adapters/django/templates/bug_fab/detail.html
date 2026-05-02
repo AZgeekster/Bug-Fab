@@ -10,8 +10,8 @@
     </h1>
     <div class="bug-fab-actions">
       <a class="bug-fab-button" href="../">&larr; Back to list</a>
-      {% if report.context.url %}
-        <a class="bug-fab-button" href="{{ report.context.url }}" target="_blank" rel="noopener">Reproduce</a>
+      {% if safe_context_url %}
+        <a class="bug-fab-button" href="{{ safe_context_url }}" target="_blank" rel="noopener">Reproduce</a>
       {% endif %}
       <button type="button" class="bug-fab-button" id="bug-fab-copy-path">Copy Path for Claude</button>
       {% if report.github_issue_url %}
@@ -102,7 +102,7 @@
       <summary>URL, viewport, user agent</summary>
       <dl class="bug-fab-meta-grid">
         <dt>URL</dt>
-        <dd>{% if report.context.url %}<a href="{{ report.context.url }}" target="_blank" rel="noopener">{{ report.context.url }}</a>{% else %}-{% endif %}</dd>
+        <dd>{% if safe_context_url %}<a href="{{ safe_context_url }}" target="_blank" rel="noopener">{{ report.context.url }}</a>{% elif report.context.url %}<span title="URL scheme blocked by safe-URL allowlist">{{ report.context.url }}</span>{% else %}-{% endif %}</dd>
         <dt>Viewport</dt>
         <dd>{{ report.context.viewport_width }}x{{ report.context.viewport_height }}</dd>
         <dt>User agent</dt>

@@ -52,7 +52,7 @@ def test_list_returns_pagination_envelope(
     conformance_client: httpx.Client,
     conformance_viewer_client: httpx.Client,
 ) -> None:
-    """`GET /reports` MUST return `{items, total, page, page_size}`."""
+    """`GET /reports` MUST return `{items, total, page, page_size, stats}`."""
     _seed_report(conformance_client, title="List pagination envelope check")
     response = conformance_viewer_client.get(LIST_PATH)
     if response.status_code != 200:
@@ -60,7 +60,7 @@ def test_list_returns_pagination_envelope(
             f"GET /reports MUST return 200; got {response.status_code}. Body: {response.text[:500]}"
         )
     body = response.json()
-    required_keys = {"items", "total", "page", "page_size"}
+    required_keys = {"items", "total", "page", "page_size", "stats"}
     missing = required_keys - set(body.keys())
     if missing:
         pytest.fail(
@@ -72,6 +72,41 @@ def test_list_returns_pagination_envelope(
         pytest.fail(f"`items` MUST be a list; got {type(body['items']).__name__}")
     if not isinstance(body["total"], int):
         pytest.fail(f"`total` MUST be an int; got {type(body['total']).__name__}")
+
+
+def test_list_stats_block_has_four_lifecycle_states(
+    conformance_client: httpx.Client,
+    conformance_viewer_client: httpx.Client,
+) -> None:
+    """`stats` MUST contain integer counts for the four lifecycle states.
+
+    Per PROTOCOL.md § "GET /reports", the four keys (open, investigating,
+    fixed, closed) are always present — even when zero — so consumers can
+    rely on a stable stat-card shape.
+    """
+    _seed_report(conformance_client, title="Stats-shape conformance")
+    response = conformance_viewer_client.get(LIST_PATH)
+    if response.status_code != 200:
+        pytest.fail(
+            f"GET /reports MUST return 200; got {response.status_code}. Body: {response.text[:500]}"
+        )
+    body = response.json()
+    if "stats" not in body:
+        pytest.fail(f"GET /reports MUST include a `stats` block; got keys {sorted(body.keys())}")
+    stats = body["stats"]
+    if not isinstance(stats, dict):
+        pytest.fail(f"`stats` MUST be an object; got {type(stats).__name__}")
+    required_states = {"open", "investigating", "fixed", "closed"}
+    missing = required_states - set(stats.keys())
+    if missing:
+        pytest.fail(
+            f"`stats` MUST include the four lifecycle states "
+            f"{sorted(required_states)}; missing: {sorted(missing)}. "
+            f"Got: {sorted(stats.keys())}"
+        )
+    for state in required_states:
+        if not isinstance(stats[state], int):
+            pytest.fail(f"`stats[{state!r}]` MUST be an int; got {type(stats[state]).__name__}")
 
 
 def test_list_filter_by_status_open(

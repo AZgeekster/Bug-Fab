@@ -90,6 +90,58 @@ def test_get_html_detail_unknown_id_returns_404(app_factory) -> None:
     assert response.status_code == 404
 
 
+@pytest.mark.parametrize(
+    "context_url",
+    [
+        "javascript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "file:///etc/passwd",
+        "vbscript:msgbox(1)",
+    ],
+)
+def test_detail_view_blocks_unsafe_url_schemes(
+    app_factory, tiny_png: bytes, context_url: str
+) -> None:
+    """`context.url` schemes outside http(s)/relative are not rendered as href."""
+    client = app_factory()
+    vp = _vp(client)
+    md = _baseline_metadata()
+    md["context"]["url"] = context_url
+    response = client.post(
+        "/bug-reports",
+        data={"metadata": json.dumps(md)},
+        files={"screenshot": ("shot.png", tiny_png, "image/png")},
+    )
+    assert response.status_code == 201, response.text
+    bid = response.json()["id"]
+    detail = client.get(f"{vp}/{bid}")
+    assert detail.status_code == 200
+    body = detail.text
+    # The unsafe URL must NOT appear as an href value. The text MAY appear
+    # inside an HTML-escaped <span> per the safe-URL allowlist UX, but never
+    # inside a clickable href="...".
+    assert f'href="{context_url}"' not in body
+    # The Reproduce button is suppressed when the URL is unsafe.
+    assert ">Reproduce<" not in body and ">\n          Reproduce" not in body
+
+
+def test_detail_view_renders_safe_url_as_href(app_factory, tiny_png: bytes) -> None:
+    """Standard http/https URLs DO render as href on the Reproduce + URL row."""
+    client = app_factory()
+    vp = _vp(client)
+    md = _baseline_metadata()
+    md["context"]["url"] = "https://example.com/page"
+    response = client.post(
+        "/bug-reports",
+        data={"metadata": json.dumps(md)},
+        files={"screenshot": ("shot.png", tiny_png, "image/png")},
+    )
+    bid = response.json()["id"]
+    detail = client.get(f"{vp}/{bid}")
+    assert detail.status_code == 200
+    assert 'href="https://example.com/page"' in detail.text
+
+
 def test_list_filter_by_module_query_param(app_factory, tiny_png: bytes) -> None:
     """The ``module`` query param filters list results."""
     client = app_factory()
@@ -151,6 +203,34 @@ def test_get_reports_returns_pagination_envelope(app_factory, tiny_png: bytes) -
     assert body["total"] == 2
     assert body["page"] == 1
     assert isinstance(body["items"], list)
+
+
+def test_get_reports_includes_stats_block(app_factory, tiny_png: bytes) -> None:
+    """`GET /reports` MUST return the documented `stats` block.
+
+    Per PROTOCOL.md § "GET /reports", the list response includes a
+    `stats` object keyed by the four lifecycle states (open,
+    investigating, fixed, closed). Always emitted, even when zero, so
+    stat-card UIs have a stable shape.
+    """
+    client = app_factory()
+    vp = _vp(client)
+    fixed_id = _seed(client, tiny_png, title="A")
+    _seed(client, tiny_png, title="B")
+    client.put(f"{vp}/reports/{fixed_id}/status", json={"status": "fixed"})
+
+    response = client.get(f"{vp}/reports")
+    assert response.status_code == 200
+    body = response.json()
+    assert "stats" in body, f"list response missing `stats` block; got keys {sorted(body)}"
+    stats = body["stats"]
+    assert set(stats.keys()) == {"open", "investigating", "fixed", "closed"}
+    for key, value in stats.items():
+        assert isinstance(value, int), f"stats[{key!r}] must be an int; got {type(value).__name__}"
+    assert stats["open"] == 1
+    assert stats["fixed"] == 1
+    assert stats["investigating"] == 0
+    assert stats["closed"] == 0
 
 
 def test_reports_filter_by_status(app_factory, tiny_png: bytes) -> None:

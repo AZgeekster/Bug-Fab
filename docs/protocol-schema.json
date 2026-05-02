@@ -302,7 +302,7 @@
       "type": "object"
     },
     "BugReportListResponse": {
-      "description": "Pagination envelope for `GET /reports`.",
+      "description": "Pagination envelope for `GET /reports`.\n\n`stats` is a count-by-status aggregate over the **filtered** result set\n(before pagination). The four lifecycle states are always emitted \u2014\neven when zero \u2014 so consumers can rely on a stable shape for stat\ncards. See `docs/PROTOCOL.md` \u00a7 \"GET /reports\" for the wire-level\ncontract.",
       "properties": {
         "items": {
           "items": {
@@ -324,6 +324,13 @@
           "default": 20,
           "title": "Page Size",
           "type": "integer"
+        },
+        "stats": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Stats",
+          "type": "object"
         }
       },
       "required": [

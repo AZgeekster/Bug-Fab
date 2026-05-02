@@ -2,6 +2,12 @@
 
 {% block title %}{{ report.id }} - {{ report.title }}{% endblock %}
 
+{# Scheme-allowlist `report.context.url` so a `javascript:` or `data:` URL submitted
+   by an untrusted reporter cannot navigate when an admin clicks the Reproduce link.
+   v0.1.x security hardening per SECURITY.md § "no stored-XSS sinks" residual item. #}
+{% set _ctx_url = report.context.url if report.context and report.context.url else "" %}
+{% set safe_context_url = _ctx_url if _ctx_url.startswith(("http://", "https://", "/")) else "" %}
+
 {% block content %}
   <div class="bug-fab-header">
     <h1>
@@ -10,8 +16,8 @@
     </h1>
     <div class="bug-fab-actions">
       <a class="bug-fab-button" href="./">&larr; Back to list</a>
-      {% if report.context and report.context.url %}
-        <a class="bug-fab-button" href="{{ report.context.url }}" target="_blank" rel="noopener">
+      {% if safe_context_url %}
+        <a class="bug-fab-button" href="{{ safe_context_url }}" target="_blank" rel="noopener">
           Reproduce
         </a>
       {% endif %}
@@ -113,7 +119,7 @@
       <summary>URL, viewport, user agent</summary>
       <dl class="bug-fab-meta-grid">
         <dt>URL</dt>
-        <dd>{% if report.context.url %}<a href="{{ report.context.url }}" target="_blank" rel="noopener">{{ report.context.url }}</a>{% else %}-{% endif %}</dd>
+        <dd>{% if safe_context_url %}<a href="{{ safe_context_url }}" target="_blank" rel="noopener">{{ report.context.url }}</a>{% elif report.context.url %}<span title="URL scheme blocked by safe-URL allowlist">{{ report.context.url }}</span>{% else %}-{% endif %}</dd>
         <dt>Viewport</dt>
         <dd>{{ report.context.viewport_width }}x{{ report.context.viewport_height }}</dd>
         <dt>User agent</dt>

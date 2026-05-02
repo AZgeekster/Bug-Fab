@@ -189,7 +189,18 @@ async def list_reports_json(
         status=status_filter, severity=severity, module=module, environment=environment
     )
     items, total = await storage.list_reports(filters, page, effective_page_size)
-    return BugReportListResponse(items=items, total=total, page=page, page_size=effective_page_size)
+    stats = await _compute_stats(storage)
+    # Match the Flask adapter's wire shape — drop the "total" rollup key
+    # (the envelope's top-level ``total`` is already authoritative) and
+    # always emit the four lifecycle states, even when zero, so consumers
+    # can rely on a stable stat-card shape.
+    return BugReportListResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=effective_page_size,
+        stats={k: stats.get(k, 0) for k in ("open", "investigating", "fixed", "closed")},
+    )
 
 
 @viewer_router.get(
