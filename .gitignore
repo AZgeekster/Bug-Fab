@@ -100,3 +100,6 @@ bug_reports/
 *.db
 *.sqlite
 *.sqlite3
+
+# Django example's MEDIA_ROOT — populated at runtime; never tracked.
+examples/django-minimal/media/
