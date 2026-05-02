@@ -13,6 +13,27 @@ out explicitly in each release entry.
 
 ### Added
 
+- First-party Flask adapter at `bug_fab.adapters.flask.make_blueprint(settings)`.
+  Returns a Flask Blueprint exposing the full v0.1 wire protocol (all 8
+  endpoints + HTML viewer + static bundle). Install with
+  `pip install bug-fab[flask]`. A Flask consumer's integration code drops
+  from ~250 LOC to ~10 LOC. Reuses `bug_fab.intake.validate_payload()` so
+  the adapter is protocol-conformant by construction; reuses the same
+  Jinja2 templates and static bundle the FastAPI router serves. GitHub
+  Issues sync wired on intake + status update (best-effort, mirrors the
+  FastAPI router). 24 integration tests covering all 8 endpoints +
+  lifecycle + bulk + HTML viewer + GitHub-sync wiring +
+  GitHub-failure-still-persists path.
+- First-party Django reusable app at `bug_fab.adapters.django` —
+  `pip install bug-fab[django]`, add to `INSTALLED_APPS`, run
+  `manage.py migrate`, mount the intake + viewer URLconfs. Native
+  Django ORM models (`BugReport` + `BugReportLifecycle`), a free
+  `BugReportAdmin` for the admin UI, plain Django views (no DRF
+  dependency), and a `LoginRequiredMixin`-based auth helper.
+  Validation flows through `bug_fab.intake.validate_payload` so the
+  wire-protocol contract is shared with the FastAPI reference.
+  28 integration tests + 29/29 conformance suite passing against a
+  live `runserver`. Example app at `examples/django-minimal/`.
 - `Settings.csp_nonce_provider` callable hook — when set, the viewer
   stamps the returned per-request nonce onto every inline `<script>`
   tag in `list.html`, `detail.html`, and `_base.html`. Lets consumers
@@ -51,6 +72,17 @@ out explicitly in each release entry.
   `image/png`). Stored screenshots are now guaranteed to match the
   served Content-Type because intake rejects non-PNG bytes by magic
   signature.
+- Flask adapter audit (F-3): `abort(404)` and `abort(403)` calls inside
+  blueprint handlers returned Flask's default HTML error pages instead
+  of the protocol's `{error, detail}` JSON envelope. Registered
+  `@bp.errorhandler(404)` and `@bp.errorhandler(403)` so every non-2xx
+  body matches the documented envelope per `PROTOCOL.md` § Error
+  responses.
+- Flask adapter audit (F-1): GitHub Issues sync was entirely missing
+  from `bug_fab.adapters.flask` — silent feature regression for any
+  consumer with `github_enabled=True`. Wired `create_issue` after
+  intake save and `sync_issue_state` after status update, both
+  best-effort with try/except logging mirroring the FastAPI router.
 
 ### Security
 

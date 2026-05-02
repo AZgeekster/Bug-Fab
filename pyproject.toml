@@ -15,7 +15,10 @@ authors = [
 keywords = ["bug-report", "feedback", "screenshot", "annotation", "fastapi", "web"]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Framework :: Django",
+    "Framework :: Django :: 4.2",
     "Framework :: FastAPI",
+    "Framework :: Flask",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
@@ -46,6 +49,12 @@ postgres = [
     "sqlalchemy>=2.0",
     "alembic",
     "psycopg[binary]",
+]
+flask = [
+    "flask>=3.0",
+]
+django = [
+    "django>=4.2",
 ]
 dev = [
     "pytest>=7.0",
@@ -81,6 +90,16 @@ packages = ["bug_fab"]
 # Fly.io build before this fix.
 [tool.hatch.build.targets.wheel.force-include]
 "static" = "bug_fab/static"
+# Django adapter ships its own DTL templates, static manifest, and migrations
+# next to the Python source. Without these force-include entries the wheel
+# would be missing them and any consumer registering the adapter via
+# `INSTALLED_APPS` would crash with `TemplateDoesNotExist: bug_fab/list.html`
+# at first request. Editable installs work without these because hatch resolves
+# the package path back to the source tree, masking the bug — caught by the
+# 2026-05-01 Django audit.
+"bug_fab/adapters/django/templates" = "bug_fab/adapters/django/templates"
+"bug_fab/adapters/django/static" = "bug_fab/adapters/django/static"
+"bug_fab/adapters/django/migrations" = "bug_fab/adapters/django/migrations"
 
 [tool.hatch.build.targets.sdist]
 include = [

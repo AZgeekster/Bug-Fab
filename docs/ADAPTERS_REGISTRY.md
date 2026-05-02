@@ -88,17 +88,17 @@ Mainstream stacks where adapter demand is likely from real consumers. Bug-Fab ac
 | Field | Value |
 |---|---|
 | Stack | Flask ≥ 3, Python ≥ 3.10 |
-| Status | 🟡 sketch |
+| Status | 🟢 reference (first-party shim) |
 | Tier | 1 |
-| Package | (unpublished) |
-| Repository | `examples/flask-minimal/` |
+| Package | `bug-fab[flask]` extra (ships in main wheel; Flask installed only when extra is selected) |
+| Repository | `bug_fab/adapters/flask/` (shim) + `examples/flask-minimal/` (reference consumer) |
 | Language | Python |
 | Tracks Bug-Fab | v0.1 |
-| Conformance | ⚠️ untested formally — but example boots and serves real reports |
-| Reference doc | [`docs/ADAPTERS.md` § Flask](./ADAPTERS.md) — currently inside Task B section |
-| Last updated | 2026-04-29 |
-| Maintainer | (none — Bug-Fab maintains the example only) |
-| Notes | First-class example app. A maintained `bug-fab-flask` Blueprint shim is a v0.1.x backlog item if a real consumer asks. |
+| Conformance | ✅ passing 2026-05-01 — `pytest --bug-fab-conformance --base-url=http://127.0.0.1:8000/bug-fab` returns 29/29 against `examples/flask-minimal/main.py` |
+| Reference doc | `bug_fab/adapters/flask/` source + `examples/flask-minimal/README.md` |
+| Last updated | 2026-05-01 |
+| Maintainer | Bug-Fab core (AZgeekster) |
+| Notes | First-party `make_blueprint(settings)` factory. Consumer integration drops to ~10 LOC. Reuses `bug_fab.intake.validate_payload` so protocol drift is impossible by construction. GitHub Issues sync wired on intake + status update (mirrors FastAPI router). Async bridge via `asyncio.run` per request — see module docstring for the trade-off. Mount-prefix MUST be non-empty; the viewer's HTML list page lives at the blueprint's root path. |
 
 ### Express (TypeScript / Node)
 
@@ -139,17 +139,17 @@ Mainstream stacks where adapter demand is likely from real consumers. Bug-Fab ac
 | Field | Value |
 |---|---|
 | Stack | Django ≥ 4.2, Python ≥ 3.10 |
-| Status | 🟡 sketch |
+| Status | 🟢 reference (first-party reusable app) |
 | Tier | 1 |
-| Package | (sketch) |
-| Repository | — |
+| Package | `bug-fab[django]` extra (ships in main wheel; Django installed only when extra is selected) |
+| Repository | `bug_fab/adapters/django/` (reusable app) + `examples/django-minimal/` (reference consumer) |
 | Language | Python |
 | Tracks Bug-Fab | v0.1 |
-| Conformance | untested |
-| Reference doc | [`docs/ADAPTERS.md#django-django--42-python--310`](./ADAPTERS.md#django-django--42-python--310) |
-| Last updated | 2026-04-30 |
-| Maintainer | (none — sketch only) |
-| Notes | Reusable Django app pattern — `BugReport` + `BugReportLifecycle` models, plain Django views (no DRF dependency), admin auth via `LoginRequiredMixin`. Sketch covers all 8 endpoints, multi-process safe (DB-backed), and the 7 most-common Django integration pitfalls (DRF camelCase, csrf_exempt, MEDIA_ROOT, upload-size settings, etc.). |
+| Conformance | ✅ passing 2026-05-01 — `pytest --bug-fab-conformance --base-url=http://127.0.0.1:8765/api --viewer-base-url=http://127.0.0.1:8765/admin/bug-reports` returns 29/29 against a live `runserver` |
+| Reference doc | `bug_fab/adapters/django/` source + `examples/django-minimal/README.md` |
+| Last updated | 2026-05-01 |
+| Maintainer | Bug-Fab core (AZgeekster) |
+| Notes | First-party reusable Django app: register in `INSTALLED_APPS`, run `migrate`, mount the intake + viewer URLconfs. Native Django ORM models, `BugReportAdmin` for admin UI, plain Django views (no DRF dependency). Validation reuses `bug_fab.intake.validate_payload` so the wire-protocol contract is shared with the FastAPI reference. Sync-by-design (`DjangoORMStorage`); not a thin shim over `bug_fab.storage.Storage` ABC because Django's ORM is sync. |
 
 ### NestJS (TypeScript)
 
