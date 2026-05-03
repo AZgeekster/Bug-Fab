@@ -71,6 +71,50 @@ Or set `BUG_FAB_STORAGE_DIR` in the environment and use
 `Settings.from_env()`. See [INSTALLATION.md](INSTALLATION.md) for the
 env-var list.
 
+### Docker — point storage at a mounted volume
+
+When the host app runs in Docker, both the SQLite database file (or the
+`FileStorage` directory) and the screenshot directory MUST live on a
+mounted volume — otherwise reports disappear on every redeploy.
+
+A canonical Compose snippet for an app that mounts its data on `./data`:
+
+```yaml
+services:
+  app:
+    build: .
+    volumes:
+      - ./data:/app/data
+    environment:
+      BUG_FAB_DATA_DIR: /app/data
+      # Or, if you instantiate storage explicitly:
+      # BUG_FAB_DB_PATH: /app/data/bug-fab.db
+      # BUG_FAB_SCREENSHOT_DIR: /app/data/bug_fab_screenshots
+```
+
+In `main.py`:
+
+```python
+import os
+from bug_fab.storage import SQLiteStorage
+
+DATA = os.environ.get("BUG_FAB_DATA_DIR", "./data")
+storage = SQLiteStorage(
+    db_path=f"{DATA}/bug-fab.db",
+    screenshot_dir=f"{DATA}/bug_fab_screenshots",
+)
+```
+
+The `examples/fastapi-jinja-docker/` reference consumer ships exactly
+this pattern.
+
+**Windows note:** Docker Desktop on Windows handles bind-mounts via the
+WSL2 backend, so `./data` is treated as a Linux path inside the
+container regardless of the host's drive letter. If you're scripting
+the deploy from Git Bash and hit `MSYS_NO_PATHCONV` issues with
+`docker run -v` paths, prefix the command (or just use Compose, which
+handles this transparently).
+
 ## Router mount-point auth pattern
 
 Bug-Fab v0.1 ships **no auth abstraction**. A proper `AuthAdapter` ABC
