@@ -53,13 +53,13 @@ storage = FileStorage(storage_dir="/var/bug-fab/reports")
 
 # from bug_fab.storage import SQLiteStorage
 # storage = SQLiteStorage(
-#     db_url="sqlite:///./bug-fab.db",
+#     db_path="./bug-fab.db",                       # filesystem path, NOT a SQLAlchemy URL
 #     screenshot_dir="/var/bug-fab/screenshots",
 # )
 
 # from bug_fab.storage import PostgresStorage
 # storage = PostgresStorage(
-#     db_url="postgresql+psycopg://user:pw@host/dbname",
+#     dsn="postgresql+psycopg://user:pw@host/dbname",  # SQLAlchemy DSN
 #     screenshot_dir="/var/bug-fab/screenshots",
 # )
 ```

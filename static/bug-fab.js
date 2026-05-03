@@ -517,6 +517,12 @@
 
   /** Should the FAB be visible right now? */
   const isEnabled = () => {
+    // Honor the literal boolean BEFORE the function-call branch — passing
+    // `enabled: false` was previously a silent no-op because `isEnabled()`
+    // only treated `enabled` as a gate when it was a callable. Surfaced
+    // by a 2026-05-03 consumer-integration audit.
+    if (config.enabled === false) return false;
+    if (config.enabled === true) return true;
     if (typeof config.enabled === "function") {
       try { return Boolean(config.enabled()); } catch (_e) { return false; }
     }

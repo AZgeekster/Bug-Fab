@@ -12,7 +12,7 @@ It's vibe-coded by a hobbyist who happens to use it at the day job too,
 so it probably has bugs. Don't bash me.
 
 [![CI](https://img.shields.io/badge/CI-pending-lightgrey)](https://github.com/AZgeekster/Bug-Fab/actions)
-[![PyPI](https://img.shields.io/pypi/v/bug-fab?label=pypi)](https://pypi.org/project/bug-fab/)
+[![PyPI](https://img.shields.io/badge/pypi-not%20yet%20published-lightgrey)](https://github.com/AZgeekster/Bug-Fab/blob/main/docs/INSTALLATION.md#pre-release-vs-final)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/AZgeekster/Bug-Fab/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://github.com/AZgeekster/Bug-Fab)
 
@@ -45,9 +45,17 @@ v0.1 ships:
 
 ## Quickstart (FastAPI)
 
+Bug-Fab is **not yet on PyPI** — the alpha is gated behind PyPI Trusted
+Publishing setup. Until then, install from GitHub pinned to a SHA:
+
 ```bash
-pip install --pre bug-fab    # the alpha; drop --pre after v0.1.0 final
+# Replace <sha> with a 7+ character commit SHA from
+# https://github.com/AZgeekster/Bug-Fab/commits/main
+pip install "bug-fab @ git+https://github.com/AZgeekster/Bug-Fab.git@<sha>"
 ```
+
+Once `0.1.0a1` lands on PyPI: `pip install --pre bug-fab` (drop `--pre`
+after `0.1.0` final). See [`docs/INSTALLATION.md`](https://github.com/AZgeekster/Bug-Fab/blob/main/docs/INSTALLATION.md#pre-release-vs-final) for the full install matrix.
 
 ```python
 from fastapi import FastAPI
@@ -112,11 +120,13 @@ for the full list.
 
 ## Status
 
-Pre-release alpha. The `0.1.0a1` build on PyPI exists to reserve the
-name and validate the publish workflow; the wire protocol is not yet
-locked. The first `0.1.0` final release ships once the protocol is
-exercised against a real consumer integration. Don't pin production
-work to the alpha — but please kick the tires and file issues.
+Pre-release alpha. `0.1.0a1` is built but **not yet on PyPI** — Trusted
+Publishing setup is the gating step. Until then, install from GitHub
+pinned to a SHA (see [Quickstart](#quickstart-fastapi)). The wire
+protocol is not yet locked; the first `0.1.0` final release ships once
+the protocol is exercised against a real consumer integration. Don't
+pin production work to the alpha — but please kick the tires and file
+issues.
 
 ## License
 

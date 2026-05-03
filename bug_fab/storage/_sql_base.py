@@ -118,6 +118,18 @@ class SqlStorageBase(Storage):
         self.archive_dir = self.screenshot_dir / _ARCHIVE_SUBDIR
         self.archive_dir.mkdir(parents=True, exist_ok=True)
         self._session_factory = make_session_factory(engine)
+        # Auto-init the schema on construction. ``Base.metadata.create_all``
+        # is idempotent — every CREATE TABLE statement is wrapped in
+        # ``IF NOT EXISTS`` semantics, so this is safe to call on every
+        # process start. Without this, the viewer 500s on its first GET
+        # because the index page's ``SELECT count(*) FROM bug_reports``
+        # runs eagerly even though the submit path lazy-inits. Surfaced
+        # by a 2026-05-03 consumer-integration audit.
+        # Production deployments that prefer Alembic-tracked migrations
+        # can call ``alembic upgrade head`` separately; this auto-init
+        # never fights an Alembic-managed schema because ``create_all``
+        # respects existing tables.
+        self.create_all()
 
     # ---- schema lifecycle helpers ---------------------------------------
 
