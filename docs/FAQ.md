@@ -239,3 +239,102 @@ into it; it's stuck around because it reads OK on a resume and
 doesn't conflict with anything established. If a blocking
 trademark or branding issue surfaces before v0.1 final, it gets
 revisited.
+
+## Common integration gotchas
+
+Surfaced by real consumer integrations during v0.1 development.
+Each one is a one-line fix once you know it; collected here so
+future integrators (human or AI) can find the answer faster than
+the original consumer did.
+
+### My FAB renders but clicking it does nothing — what's wrong?
+
+Almost certainly a `submitUrl` mismatch. The bundle's auto-init
+defaults `submitUrl` to `/api/bug-reports` (the canonical mount
+documented in the Quickstart). If your submit router is mounted
+under a different prefix, override via one of:
+
+```html
+<!-- Zero-JS: data-attribute on the bundle's own <script> tag -->
+<script src="/bug-fab/static/bug-fab.js"
+        data-submit-url="/internal/api/bug-reports" defer></script>
+
+<!-- Or explicit init for full control -->
+<script>window.BugFabAutoInit = false;</script>
+<script src="/bug-fab/static/bug-fab.js" defer></script>
+<script>
+  window.addEventListener("DOMContentLoaded", () => {
+    window.BugFab.init({ submitUrl: "/internal/api/bug-reports" });
+  });
+</script>
+```
+
+This was the #1 first-time-integrator footgun until v0.1.x — the
+old default was `null`, which meant the FAB rendered, the user
+clicked, and nothing visible happened. Now it always has a working
+default.
+
+### My viewer 500s on first load with `no such table: bug_reports`
+
+You're using `SQLiteStorage` or `PostgresStorage` and the schema
+hasn't been created yet. As of v0.1.x, `SqlStorageBase.__init__`
+auto-calls `create_all()` on construction, so this should not
+happen with current main. If you're pinned to an older SHA, either
+upgrade or call `storage.create_all()` explicitly at startup.
+
+For Alembic-managed migrations (column adds, etc.), still run
+`alembic upgrade head` separately — auto-init never fights an
+Alembic-managed schema because `create_all` skips existing tables.
+
+### My existing chat / help FAB collides with Bug-Fab's FAB
+
+Both are at `bottom: 24px; right: 24px` by default and stack on
+top of each other. Pick one of:
+
+```js
+// Move Bug-Fab to the opposite corner
+BugFab.init({ position: "bottom-left" });
+
+// Free-form pixel offsets (e.g., stack Bug-Fab to the LEFT of your existing FAB)
+BugFab.init({ position: { bottom: "24px", right: "120px" } });
+
+// Anchor to the existing element so theme switches / resizes don't break it
+BugFab.init({ stackAbove: ".chat-fab", gap: 12 });
+```
+
+The `stackAbove` form (also `stackBelow` / `stackLeft` /
+`stackRight`) measures the anchor's `getBoundingClientRect()` and
+re-positions on `window.resize` and via `IntersectionObserver` /
+`MutationObserver` so layout reflows don't desync the FAB.
+
+### How do I turn the FAB off on specific pages?
+
+Three off-switches, ranked from "fully off everywhere" to "this
+page only":
+
+```html
+<!-- Zero-JS, applies to whichever pages have this attribute -->
+<script src="/bug-fab/static/bug-fab.js"
+        data-bug-fab-disabled="true" defer></script>
+```
+
+```js
+// Programmatic, runtime
+BugFab.init({ enabled: false });   // never creates the FAB at all
+BugFab.disable();                  // hides it (created or not)
+BugFab.enable();                   // shows it again
+```
+
+The "fully off across the entire app" pattern: gate BOTH the
+backend route mount AND the `<script>` tag in your base template
+on a single env-var (e.g., `BUG_FAB_ENABLED=true`). One env-var
+flip and Bug-Fab is fully gone — no FAB, no admin route, no
+schema init.
+
+### How do I send every report to Slack / Linear / Pushover?
+
+Set `BUG_FAB_WEBHOOK_ENABLED=true` and `BUG_FAB_WEBHOOK_URL=...`.
+The bundle POSTs the full `BugReportDetail` JSON to that URL after
+every successful save. See
+[`docs/DEPLOYMENT_OPTIONS.md` § Webhook delivery](DEPLOYMENT_OPTIONS.md#webhook-delivery)
+for the complete recipe including custom auth headers.
