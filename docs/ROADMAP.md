@@ -26,7 +26,7 @@ The first publishable version. Establishes the wire protocol as the project's de
 - **Server-side User-Agent capture** — request-header User-Agent is the source of truth; client-supplied `client_reported_user_agent` preserved for diagnostics.
 - **Python (FastAPI) reference adapter** — `bug_fab/` package, two routers (`submit_router` + `viewer_router`) for mount-point auth delegation.
 - **Three storage backends** — `FileStorage` (default, no external deps), `SQLiteStorage` (`pip install bug-fab[sqlite]`), `PostgresStorage` (`pip install bug-fab[postgres]`). Single `Storage` ABC; screenshots always on disk regardless of metadata backend.
-- **Vanilla-JS frontend bundle** — floating action button (FAB), report overlay, annotation canvas (red pen), screenshot capture via vendored `html2canvas`, console error buffer, network log buffer, page context capture, multipart submit, CSS isolation via Shadow DOM / scoped class names.
+- **Vanilla-JS frontend bundle** — floating action button (FAB), report overlay, annotation canvas (free-draw + rectangle / arrow / blur / text-label tool palette + undo + keyboard shortcuts), screenshot capture via vendored `html2canvas`, console error buffer, network log buffer, page context capture, multipart submit, CSS isolation via Shadow DOM / scoped class names. FAB position is configurable (4 corners, free-form offsets, or anchor-to-element via `stackAbove` / `stackBelow` / `stackLeft` / `stackRight`); runtime `BugFab.disable()` / `BugFab.enable()` API; per-report category dropdown; `data-submit-url` and `data-bug-fab-disabled` attributes for zero-JS configuration.
 - **Vendored `html2canvas`** — pinned version, MIT license preserved. No CDN, no third-party network call. Air-gapped consumers work out of the box.
 - **HTML viewer pages** — list view (filter by status / severity / environment), detail view (annotated screenshot, console / network buffers, lifecycle audit log). Severity color-coding. Configurable on/off via `viewer_enabled: bool`. Per-row "Copy Path for Claude Code" + "Reproduce" action buttons.
 - **Status workflow** — inline status editor in detail view. `PUT /reports/{id}/status` endpoint with optional `fix_commit` and `fix_description`. Lifecycle audit log appends on every change.
@@ -110,7 +110,7 @@ These are speculative — they will land when there is concrete demand from a re
 |---------|---------|
 | Comment threads on bug reports | First consumer asks |
 | Assignment (assignee field per report) | First consumer asks |
-| Webhook outbound (Slack / Discord / Teams / arbitrary URL) | First consumer asks |
+| ~~Webhook outbound (Slack / Discord / Teams / arbitrary URL)~~ | **SHIPPED in v0.1** — `bug_fab.integrations.webhook.WebhookSync` (FastAPI/Flask) + `bug_fab.adapters.django.webhook_sync.send` (Django). See [`DEPLOYMENT_OPTIONS.md` § Webhook delivery](DEPLOYMENT_OPTIONS.md#webhook-delivery). |
 | Email notifications on new submission / status change | First consumer asks |
 | i18n of the frontend overlay strings | First non-English consumer |
 | Theming (CSS variables for FAB / overlay colors) | First consumer with strict brand requirements |

@@ -70,13 +70,35 @@ app.mount("/bug-fab/static", StaticFiles(packages=["bug_fab"]),
           name="bug-fab-static")
 ```
 
-Then add the bundle to your base template:
+Then add the bundle to your base template. The simplest form (uses
+the canonical `/api/bug-reports` mount as the default):
 
 ```html
 <script src="/bug-fab/static/bug-fab.js" defer></script>
+```
+
+If you mount the submit router under a different prefix, override
+either via the `data-submit-url` attribute (zero-JS) or explicit init:
+
+```html
+<!-- Zero-JS override -->
+<script src="/bug-fab/static/bug-fab.js"
+        data-submit-url="/internal/api/bug-reports" defer></script>
+
+<!-- Or explicit init for full config control -->
+<script>window.BugFabAutoInit = false;</script>
+<script src="/bug-fab/static/bug-fab.js" defer></script>
 <script>
   window.addEventListener("DOMContentLoaded", () => {
-    window.BugFab.init({ submitUrl: "/api/bug-reports" });
+    window.BugFab.init({
+      submitUrl: "/internal/api/bug-reports",
+      // Optional knobs (all default to off / unset):
+      // position: "bottom-left",                 // or "top-right" etc.
+      // position: { bottom: "24px", right: "120px" },  // or free-form
+      // stackAbove: ".chat-fab", gap: 12,        // anchor-to-element
+      // categories: ["Bug", "Feature request"],  // dropdown in form
+      // enabled: false,                          // boolean OR function
+    });
   });
 </script>
 ```
@@ -92,6 +114,10 @@ Then add the bundle to your base template:
 - Setting `window.BugFabConfig = {...}` instead of calling
   `window.BugFab.init({...})`. There is no `BugFabConfig` global — the
   bundle takes config through `init()`.
+- Forgetting that the FAB collides with existing fixed-position UI
+  (chat widgets, AI assistants, sticky help buttons). Use
+  `stackAbove: ".chat-fab"` to anchor adjacent — Bug-Fab measures the
+  anchor's `getBoundingClientRect()` and re-positions on layout changes.
 
 **Where to look next:** [`docs/INSTALLATION.md`](docs/INSTALLATION.md),
 [`docs/DEPLOYMENT_OPTIONS.md`](docs/DEPLOYMENT_OPTIONS.md),

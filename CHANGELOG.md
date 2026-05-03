@@ -13,6 +13,21 @@ out explicitly in each release entry.
 
 ### Added
 
+- Annotation tools: rectangle, arrow, blur, text label. The screenshot
+  canvas in the report overlay now ships a small tool palette above the
+  image with the existing free-draw + eraser plus four new tools:
+  click-and-drag rectangle outline, click-and-drag arrow (line + 30°
+  arrowhead at the end point), click-and-drag blur (privacy-redact a
+  region via `ctx.filter = "blur(12px)"` — Chromium 88+ / Firefox 103+ /
+  Safari 17+), and click-to-place text label (rendered with `ctx.fillText`
+  + drop shadow). Adds an undo stack (Ctrl+Z / `u`, capped at 30 strokes)
+  that captures one snapshot per stroke for every tool — so undo behaves
+  uniformly. Keyboard shortcuts: `d` draw, `r` rectangle, `a` arrow,
+  `b` blur, `t` text, `e` eraser, `u` undo. New `annotationColor` init
+  option configures the stroke color (default unchanged: `#f44336`). The
+  cursor changes per tool (crosshair / IBeam / cell). No protocol change —
+  the annotated PNG bytes still flow through the same `screenshot`
+  multipart field. (TH-14.)
 - Generic webhook delivery — `bug_fab.integrations.webhook.WebhookSync`
   (FastAPI / Flask) plus `bug_fab.adapters.django.webhook_sync.send`
   (Django sync flavor) best-effort `POST`s every successfully persisted
