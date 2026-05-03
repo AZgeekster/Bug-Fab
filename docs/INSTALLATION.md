@@ -36,10 +36,39 @@ ships the conformance suite as a Python pytest plugin, so you may want
 
 ## Pre-release vs final
 
-Until `0.1.0` final ships, only the alpha is on PyPI:
+Bug-Fab is **not yet on PyPI** — the first alpha is gated behind PyPI
+Trusted Publishing setup (tracked separately). Until that ships, the
+canonical install path is the public GitHub repo, pinned to a commit
+SHA so your build is reproducible:
 
 ```bash
-pip install --pre bug-fab    # installs 0.1.0a1
+pip install "bug-fab @ git+https://github.com/AZgeekster/Bug-Fab.git@<sha>"
+```
+
+Replace `<sha>` with a 7+ character commit SHA from
+[the main branch](https://github.com/AZgeekster/Bug-Fab/commits/main).
+Pinning matters: without `@<sha>` you'll silently auto-update on every
+`pip install`, and the wire protocol may bump.
+
+To use a framework extra (Flask, Django, etc.), put the extra inside
+the quotes BEFORE the `@`:
+
+```bash
+pip install "bug-fab[flask] @ git+https://github.com/AZgeekster/Bug-Fab.git@<sha>"
+pip install "bug-fab[django] @ git+https://github.com/AZgeekster/Bug-Fab.git@<sha>"
+pip install "bug-fab[sqlite] @ git+https://github.com/AZgeekster/Bug-Fab.git@<sha>"
+```
+
+In a `requirements.txt`, the same pin looks like:
+
+```
+bug-fab[flask] @ git+https://github.com/AZgeekster/Bug-Fab.git@<sha>
+```
+
+Once `0.1.0a1` lands on PyPI, switch to:
+
+```bash
+pip install --pre bug-fab    # installs 0.1.0a1 from PyPI
 ```
 
 Once `0.1.0` final lands, the `--pre` flag goes away:
@@ -59,16 +88,22 @@ routers (intake + viewer) and a single configurable `Storage` instance.
 
 ### 1. Install
 
+Until Bug-Fab is on PyPI, use the GitHub-pinned form (see § Pre-release
+vs final above for the SHA and extras-in-quotes pattern):
+
 ```bash
 # Default: file-based storage, zero external deps
-pip install --pre bug-fab
+pip install "bug-fab @ git+https://github.com/AZgeekster/Bug-Fab.git@<sha>"
 
 # Or with SQLAlchemy + SQLite
-pip install --pre "bug-fab[sqlite]"
+pip install "bug-fab[sqlite] @ git+https://github.com/AZgeekster/Bug-Fab.git@<sha>"
 
 # Or with SQLAlchemy + Postgres (psycopg)
-pip install --pre "bug-fab[postgres]"
+pip install "bug-fab[postgres] @ git+https://github.com/AZgeekster/Bug-Fab.git@<sha>"
 ```
+
+Once Bug-Fab is on PyPI, the install line collapses to
+`pip install --pre bug-fab` (or `pip install --pre "bug-fab[sqlite]"`).
 
 ### 2. Wire it into your app
 
