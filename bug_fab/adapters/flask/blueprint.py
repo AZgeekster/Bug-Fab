@@ -54,6 +54,7 @@ from bug_fab.intake import (
     ValidationError as IntakeValidationError,
 )
 from bug_fab.integrations.github import GitHubSync
+from bug_fab.integrations.webhook import WebhookSync
 from bug_fab.schemas import BugReportStatusUpdate
 from bug_fab.storage.base import Storage
 from bug_fab.storage.files import FileStorage
@@ -183,6 +184,7 @@ def make_blueprint(
     *,
     storage: Storage | None = None,
     github_sync: GitHubSync | None = None,
+    webhook_sync: WebhookSync | None = None,
     rate_limiter: RateLimiter | None = None,
     name: str = "bug_fab",
 ) -> Blueprint:
@@ -235,6 +237,17 @@ def make_blueprint(
             pat=settings.github_pat,
             repo=settings.github_repo,
             api_base=settings.github_api_base,
+        )
+
+    # Generic webhook delivery — same opt-in shape as the GitHub sync
+    # above. Explicit ``webhook_sync`` argument wins (useful for tests
+    # injecting a fake or for consumers wrapping the call site with
+    # custom retry logic).
+    if webhook_sync is None and settings.webhook_enabled and settings.webhook_url:
+        webhook_sync = WebhookSync(
+            settings.webhook_url,
+            headers=settings.webhook_headers,
+            timeout_seconds=settings.webhook_timeout_seconds,
         )
 
     # Per-IP rate limiter — opt-in via ``settings.rate_limit_enabled``.
@@ -372,6 +385,20 @@ def make_blueprint(
                     run_sync(storage.set_github_link(report_id, issue_number, issue_url))
             except Exception:  # pragma: no cover - defensive
                 logger.exception("bug_fab_github_sync_failed", extra={"report_id": report_id})
+
+        # Generic webhook delivery — fires AFTER GitHub sync so any
+        # ``github_issue_url`` populated above rides along in the
+        # outbound payload. Best-effort: failures log at WARN and do
+        # not affect the 201 response. See
+        # :mod:`bug_fab.integrations.webhook`.
+        if webhook_sync is not None:
+            try:
+                payload = detail.model_dump(mode="json")
+                if github_issue_url is not None:
+                    payload["github_issue_url"] = github_issue_url
+                run_sync(webhook_sync.send(payload))
+            except Exception:  # pragma: no cover - defensive
+                logger.exception("bug_fab_webhook_sync_failed", extra={"report_id": report_id})
 
         # Per PROTOCOL.md § Response — minimal envelope, NOT the full
         # BugReportDetail. ``stored_at`` is opaque; consumers wanting the

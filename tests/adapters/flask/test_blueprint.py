@@ -582,3 +582,104 @@ def test_status_update_no_state_sync_when_no_issue_number(
 
     resp = client.put(f"/bug-fab/reports/{rid}/status", json={"status": "fixed"})
     assert resp.status_code == 200
+
+
+# -----------------------------------------------------------------------------
+# Generic webhook sync wiring — adapter must call ``send`` on intake;
+# failures must NOT roll back the local save (mirrors GitHub-sync tests).
+# -----------------------------------------------------------------------------
+
+
+class _FakeWebhookSync:
+    """Test-double honoring the WebhookSync surface without HTTP."""
+
+    def __init__(self, *, fail: bool = False, raise_on_send: bool = False) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self._fail = fail
+        self._raise = raise_on_send
+
+    async def send(self, report: dict[str, Any]) -> bool:
+        self.calls.append(report)
+        if self._raise:
+            raise RuntimeError("simulated webhook transport failure")
+        return not self._fail
+
+
+def _make_app_with_webhook(
+    *,
+    tmp_path: Path,
+    sync: _FakeWebhookSync,
+) -> tuple[flask.Flask, flask.testing.FlaskClient]:
+    """Build an app with the fake webhook sync injected via make_blueprint."""
+    settings = Settings(storage_dir=tmp_path / "bug_reports")
+    storage = FileStorage(storage_dir=settings.storage_dir)
+    app = flask.Flask(__name__)
+    app.config["MAX_CONTENT_LENGTH"] = 11 * 1024 * 1024
+    app.register_blueprint(
+        make_blueprint(settings, storage=storage, webhook_sync=sync),
+        url_prefix="/bug-fab",
+    )
+    return app, app.test_client()
+
+
+def test_intake_calls_webhook_send_with_full_payload(
+    tmp_path: Path,
+    tiny_png: bytes,
+    valid_metadata_dict: dict[str, Any],
+) -> None:
+    """Submitting with a webhook wired calls ``send`` with the report dict."""
+    sync = _FakeWebhookSync()
+    _, client = _make_app_with_webhook(tmp_path=tmp_path, sync=sync)
+    rid = _seed_one(client, valid_metadata_dict, tiny_png)
+
+    assert len(sync.calls) == 1
+    delivered = sync.calls[0]
+    assert delivered["id"] == rid
+    assert delivered["title"] == valid_metadata_dict["title"]
+    # Full BugReportDetail shape — context + lifecycle ride along.
+    assert "context" in delivered
+    assert "lifecycle" in delivered
+
+
+def test_intake_webhook_failure_still_persists_report(
+    tmp_path: Path,
+    tiny_png: bytes,
+    valid_metadata_dict: dict[str, Any],
+) -> None:
+    """A raising ``send`` must not break the 201 response."""
+    sync = _FakeWebhookSync(raise_on_send=True)
+    _, client = _make_app_with_webhook(tmp_path=tmp_path, sync=sync)
+    rid = _seed_one(client, valid_metadata_dict, tiny_png)
+
+    # Local persistence still wins — the report is fetchable.
+    detail = client.get(f"/bug-fab/reports/{rid}").get_json()
+    assert detail["id"] == rid
+
+
+def test_intake_webhook_returning_false_still_returns_201(
+    tmp_path: Path,
+    tiny_png: bytes,
+    valid_metadata_dict: dict[str, Any],
+) -> None:
+    """A soft-failure ``send`` (returns False, no raise) is also tolerated."""
+    sync = _FakeWebhookSync(fail=True)
+    _, client = _make_app_with_webhook(tmp_path=tmp_path, sync=sync)
+    rid = _seed_one(client, valid_metadata_dict, tiny_png)
+    assert rid.startswith("bug-")
+    assert len(sync.calls) == 1
+
+
+def test_no_webhook_call_when_sync_is_none(
+    tmp_path: Path,
+    tiny_png: bytes,
+    valid_metadata_dict: dict[str, Any],
+) -> None:
+    """No webhook configured = no outbound traffic and no error."""
+    settings = Settings(storage_dir=tmp_path / "bug_reports")
+    storage = FileStorage(storage_dir=settings.storage_dir)
+    app = flask.Flask(__name__)
+    app.config["MAX_CONTENT_LENGTH"] = 11 * 1024 * 1024
+    app.register_blueprint(make_blueprint(settings, storage=storage), url_prefix="/bug-fab")
+    client = app.test_client()
+    rid = _seed_one(client, valid_metadata_dict, tiny_png)
+    assert rid.startswith("bug-")

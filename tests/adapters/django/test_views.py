@@ -329,3 +329,110 @@ def test_status_update_rejects_post(client, metadata_json, png_bytes):
     rid = _post_intake(client, metadata_json, png_bytes).json()["id"]
     response = client.post(f"/reports/{rid}/status")
     assert response.status_code == 405
+
+
+# ---------------------------------------------------------------------------
+# Generic webhook delivery — best-effort, fires after intake save.
+# ---------------------------------------------------------------------------
+
+
+def test_intake_calls_webhook_send_with_full_payload(client, metadata_json, png_bytes, monkeypatch):
+    """When the webhook module's ``send`` is patched, intake calls it with the report dict."""
+    from bug_fab.adapters.django import webhook_sync
+
+    captured: list[dict] = []
+
+    def _fake_send(report):
+        captured.append(report)
+        return True
+
+    monkeypatch.setattr(webhook_sync, "send", _fake_send)
+
+    response = _post_intake(client, metadata_json, png_bytes)
+    assert response.status_code == 201
+    assert len(captured) == 1
+    payload = captured[0]
+    assert payload["id"].startswith("bug-")
+    assert payload["title"] == "Save button is unresponsive"
+    # Full BugReportDetail shape — context + lifecycle ride along.
+    assert "context" in payload
+    assert "lifecycle" in payload
+
+
+def test_intake_webhook_failure_still_persists_report(
+    client, metadata_json, png_bytes, monkeypatch
+):
+    """A raising ``send`` must not break the 201 response."""
+    from bug_fab.adapters.django import webhook_sync
+
+    def _raising_send(report):
+        raise RuntimeError("simulated webhook transport failure")
+
+    monkeypatch.setattr(webhook_sync, "send", _raising_send)
+
+    response = _post_intake(client, metadata_json, png_bytes)
+    assert response.status_code == 201
+    body = response.json()
+    assert body["id"].startswith("bug-")
+
+
+def test_webhook_disabled_makes_no_outbound_call(client, metadata_json, png_bytes, monkeypatch):
+    """With no webhook env vars set, ``send`` resolves to a no-op (returns False)."""
+    # Nothing in the environment means ``_enabled()`` returns False and
+    # ``send`` short-circuits without ever importing httpx-on-the-wire.
+    monkeypatch.delenv("BUG_FAB_WEBHOOK_ENABLED", raising=False)
+    monkeypatch.delenv("BUG_FAB_WEBHOOK_URL", raising=False)
+
+    from bug_fab.adapters.django import webhook_sync
+
+    assert webhook_sync.send({"id": "bug-test"}) is False
+    response = _post_intake(client, metadata_json, png_bytes)
+    assert response.status_code == 201
+
+
+def test_webhook_send_returns_false_on_non_2xx(monkeypatch):
+    """The Django sync module returns False on a 5xx response (no raise)."""
+    monkeypatch.setenv("BUG_FAB_WEBHOOK_ENABLED", "true")
+    monkeypatch.setenv("BUG_FAB_WEBHOOK_URL", "https://hook.example.test/in")
+
+    import httpx
+
+    from bug_fab.adapters.django import webhook_sync
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="downstream broken")
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+
+    class _MockClient(real_client):  # type: ignore[misc]
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", _MockClient)
+    assert webhook_sync.send({"id": "bug-test"}) is False
+
+
+def test_webhook_send_returns_false_on_connection_error(monkeypatch):
+    """Transport-level failures resolve to False, never an exception."""
+    monkeypatch.setenv("BUG_FAB_WEBHOOK_ENABLED", "true")
+    monkeypatch.setenv("BUG_FAB_WEBHOOK_URL", "https://hook.example.test/in")
+
+    import httpx
+
+    from bug_fab.adapters.django import webhook_sync
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+
+    class _MockClient(real_client):  # type: ignore[misc]
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", _MockClient)
+    assert webhook_sync.send({"id": "bug-test"}) is False

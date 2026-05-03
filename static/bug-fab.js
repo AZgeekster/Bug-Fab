@@ -9,9 +9,19 @@
  *   window.BugFab.init(config)   — explicit init; auto-runs on
  *                                  DOMContentLoaded unless
  *                                  window.BugFabAutoInit === false.
+ *                                  config.enabled accepts boolean OR
+ *                                  () => boolean. (FAB UX TH-7.)
  *   window.BugFab.open()         — programmatic open (capture + overlay).
+ *   window.BugFab.disable()      — hide the FAB at runtime; closes any
+ *                                  open overlay. Idempotent. (TH-7.)
+ *   window.BugFab.enable()       — re-show the FAB at runtime; lazily
+ *                                  creates it if init() ran while
+ *                                  disabled. Idempotent. (TH-7.)
  *   window.BugFab.destroy()      — remove FAB + overlay, restore globals.
  *   window.BugFab.version        — semver string.
+ *
+ * Bundle <script> tag may also carry `data-bug-fab-disabled="true"` to
+ * flip the kill-switch from non-JS templates. (FAB UX TH-7.)
  *
  * Requires html2canvas. By default it loads from
  *   <baseUrl>/vendor/html2canvas.min.js
@@ -47,6 +57,18 @@
     onSubmitSuccess: null,
     onSubmitError: null,
     html2canvasUrl: null,
+    // Annotation tools (TH-14): stroke color used by free-draw, rectangle,
+    // and arrow tools. Defaults to the same red the v0.1 free-draw used.
+    annotationColor: "#f44336",
+    // FAB UX (TH-5/6/15)
+    position: "bottom-right",
+    stackAbove: null,
+    stackBelow: null,
+    stackLeft: null,
+    stackRight: null,
+    gap: 12,
+    categories: null,
+    categoryLabel: "Category",
   });
 
   /**
@@ -71,6 +93,20 @@
   let cooldownRemaining = 0;
   let isCapturing = false;
 
+  /**
+   * FAB UX (TH-5/6/7): runtime disable + anchor-to-element bookkeeping.
+   * `userDisabled` is a kill-switch flipped by the public disable()/enable()
+   * API or the `data-bug-fab-disabled` script attribute. `anchorEl` and the
+   * observers below back the stackAbove/stackBelow/stackLeft/stackRight
+   * anchoring mode (TH-6).
+   */
+  let userDisabled = false;
+  let anchorEl = null;
+  let anchorMode = null; // "above" | "below" | "left" | "right"
+  let anchorResizeHandler = null;
+  let anchorIntersectionObserver = null;
+  let anchorMutationObserver = null;
+
   /** Overlay element + state. */
   let overlay = null;
   let annotationCanvasEl = null;
@@ -82,6 +118,24 @@
   let isDrawing = false;
   let lastX = 0;
   let lastY = 0;
+
+  // Annotation tools (TH-14) — additional state for the tool palette.
+  // `activeTool` is one of "draw" (free-draw, default), "rectangle",
+  // "arrow", "blur", "eraser", "text". `toolStartX/Y` records the start
+  // of a click-and-drag stroke for shape tools. `preStrokeSnapshot` is
+  // an ImageData captured at mousedown; shape previews redraw it on each
+  // mousemove so the in-progress shape doesn't leave a trail. `undoStack`
+  // holds full-canvas ImageData snapshots, one per committed stroke.
+  // `pendingTextInput` is the live <input> element when the text tool
+  // is mid-entry. The toolbar buttons are looked up via `toolButtonEls`.
+  let activeTool = "draw";
+  let toolStartX = 0;
+  let toolStartY = 0;
+  let preStrokeSnapshot = null;
+  const undoStack = [];
+  const UNDO_STACK_LIMIT = 30;
+  let pendingTextInput = null;
+  let toolButtonEls = null;
 
   /** Error/network buffers. */
   const errors = [];
@@ -122,8 +176,10 @@
   const STYLES = `
     .bug-fab {
       position: fixed;
-      bottom: 24px;
-      right: 24px;
+      /* Default offsets are applied via inline style at FAB-element
+         creation time (FAB UX TH-5). Caller can override via
+         BugFab.init({ position: ... }) or anchor it to another element
+         via stackAbove/stackBelow/stackLeft/stackRight (TH-6). */
       width: 56px;
       height: 56px;
       border-radius: 50%;
@@ -185,14 +241,15 @@
     .bug-fab-spinner {
       animation: bug-fab-spin 1s linear infinite;
     }
-    /* Mobile/tablet: bigger touch target, lifted clear of bottom nav. */
+    /* Mobile/tablet: bigger touch target. Bottom-lift only applies when
+       no caller-customized position is in effect (FAB UX TH-5). */
     @media (max-width: 899px) {
       .bug-fab {
         width: 64px;
         height: 64px;
-        bottom: 64px;
       }
     }
+    .bug-fab--hidden { display: none !important; }
 
     /* ---- Overlay ---- */
     .bug-fab-overlay {
@@ -248,7 +305,8 @@
     .bug-fab-overlay__canvas-wrap {
       position: relative;
       max-width: 100%;
-      max-height: calc(100% - 56px);
+      /* Annotation tools (TH-14): toolbar (~46px) + clear-btn (~56px) */
+      max-height: calc(100% - 110px);
       overflow: hidden;
       display: flex;
       align-items: center;
@@ -262,6 +320,71 @@
       cursor: crosshair;
       touch-action: none;
       background: #fff;
+    }
+    /* Annotation tools (TH-14) — tool palette / toolbar above canvas */
+    .bug-fab-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 6px 8px;
+      margin-bottom: 8px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 4px;
+      align-items: center;
+      max-width: 100%;
+    }
+    .bug-fab-tool {
+      min-width: 36px;
+      height: 32px;
+      padding: 0 8px;
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      background: rgba(255, 255, 255, 0.04);
+      color: #fff;
+      border-radius: 4px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.8125rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+    }
+    .bug-fab-tool:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.14);
+    }
+    .bug-fab-tool[aria-pressed="true"] {
+      background: #f44336;
+      border-color: #f44336;
+      color: #fff;
+    }
+    .bug-fab-tool:focus-visible {
+      outline: 2px solid #fff;
+      outline-offset: 1px;
+    }
+    .bug-fab-toolbar__sep {
+      width: 1px;
+      align-self: stretch;
+      background: rgba(255, 255, 255, 0.25);
+      margin: 0 2px;
+    }
+    .bug-fab-toolbar__help {
+      margin-left: auto;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 0.75rem;
+    }
+    .bug-fab-canvas-text-input {
+      position: absolute;
+      z-index: 10000;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      font-size: 18px;
+      padding: 2px 4px;
+      background: rgba(255, 255, 255, 0.95);
+      color: #212529;
+      border: 1px dashed #f44336;
+      border-radius: 2px;
+      outline: none;
+      min-width: 80px;
     }
     .bug-fab-overlay__form-panel {
       background: #fff;
@@ -515,12 +638,27 @@
     return h || {};
   };
 
-  /** Should the FAB be visible right now? */
+  /**
+   * Should the FAB be visible right now?
+   *
+   * Resolves three independent gates:
+   *
+   *   1. `userDisabled` — runtime kill-switch flipped by `BugFab.disable()`
+   *      or by a `data-bug-fab-disabled="true"` attribute on the bundle's
+   *      <script> tag (FAB UX TH-7). Wins over everything else.
+   *   2. `config.enabled` — boolean OR () => boolean. `false` and a
+   *      callable returning falsy hide the FAB; `true` and a callable
+   *      returning truthy show it. `null`/`undefined` means "default-on".
+   *      The literal-boolean branch is honored BEFORE the function-call
+   *      branch — `enabled: false` was previously a silent no-op because
+   *      `isEnabled()` only treated `enabled` as a gate when it was a
+   *      callable. Surfaced by a 2026-05-03 consumer-integration audit.
+   *   3. Default-on.
+   *
+   * @returns {boolean} whether the FAB should currently render.
+   */
   const isEnabled = () => {
-    // Honor the literal boolean BEFORE the function-call branch — passing
-    // `enabled: false` was previously a silent no-op because `isEnabled()`
-    // only treated `enabled` as a gate when it was a callable. Surfaced
-    // by a 2026-05-03 consumer-integration audit.
+    if (userDisabled) return false;
     if (config.enabled === false) return false;
     if (config.enabled === true) return true;
     if (typeof config.enabled === "function") {
@@ -528,6 +666,62 @@
     }
     return true;
   };
+
+  /**
+   * Read the bundle's <script> tag for `data-bug-fab-disabled="true"` so
+   * non-JS templates can flip the kill-switch without rebuilding config.
+   * Uses document.currentScript when available (during initial parse) and
+   * falls back to a getElementsByTagName scan for late-loaded contexts.
+   */
+  const readScriptDisabledAttr = () => {
+    let scriptEl = document.currentScript;
+    if (!scriptEl) {
+      const scripts = document.getElementsByTagName("script");
+      for (let i = scripts.length - 1; i >= 0; i--) {
+        const src = scripts[i].src || "";
+        if (src.includes("bug-fab.js")) { scriptEl = scripts[i]; break; }
+      }
+    }
+    if (!scriptEl) return false;
+    const v = scriptEl.getAttribute("data-bug-fab-disabled");
+    return v === "true" || v === "";
+  };
+
+  /**
+   * Read the bundle's <script> tag for `data-submit-url="..."` so the
+   * "drop in a single <script> tag" Quickstart actually works without
+   * an explicit BugFab.init({ submitUrl }) call. Surfaced by the
+   * 2026-05-03 post-e2e consumer audit (TH-Critical): without this
+   * fallback, the FAB renders, the user clicks it, and nothing
+   * visible happens — silent failure mode.
+   */
+  const readScriptSubmitUrlAttr = () => {
+    let scriptEl = document.currentScript;
+    if (!scriptEl) {
+      const scripts = document.getElementsByTagName("script");
+      for (let i = scripts.length - 1; i >= 0; i--) {
+        const src = scripts[i].src || "";
+        if (src.includes("bug-fab.js")) { scriptEl = scripts[i]; break; }
+      }
+    }
+    if (!scriptEl) return null;
+    const v = scriptEl.getAttribute("data-submit-url");
+    return v || null;
+  };
+
+  /** Cached at script-load: the bundle's own <script> data-* state. */
+  const SCRIPT_DISABLED_AT_LOAD = readScriptDisabledAttr();
+  const SCRIPT_SUBMIT_URL_AT_LOAD = readScriptSubmitUrlAttr();
+
+  /**
+   * Default intake path applied when neither explicit init config nor
+   * a `data-submit-url` script attribute supplies one. Matches the
+   * canonical FastAPI mount documented in `docs/INSTALLATION.md`
+   * (the `submit_router` mounted under `/api`). Consumers using a
+   * different prefix override this via `BugFab.init({ submitUrl: ... })`
+   * or `<script src="..." data-submit-url="...">`.
+   */
+  const DEFAULT_SUBMIT_URL = "/api/bug-reports";
 
   /** Promise wrapper for dynamic <script> injection. */
   const loadScript = (src) =>
@@ -736,6 +930,168 @@
   };
 
   // ====================================================================
+  // FAB positioning (TH-5 corners + free-form, TH-6 anchor-to-element)
+  // ====================================================================
+
+  /** CSS offsets for the four supported corner keywords. */
+  const CORNER_OFFSETS = Object.freeze({
+    "bottom-right": { bottom: "24px", right: "24px" },
+    "bottom-left": { bottom: "24px", left: "24px" },
+    "top-right": { top: "24px", right: "24px" },
+    "top-left": { top: "24px", left: "24px" },
+  });
+
+  /**
+   * Resolve `config.position` (string keyword OR free-form
+   * {top,bottom,left,right} object) into a { top, bottom, left, right }
+   * object whose values are CSS strings or null. Unknown keywords fall
+   * back to bottom-right.
+   */
+  const resolvePositionOffsets = () => {
+    const pos = config.position;
+    if (pos && typeof pos === "object") {
+      return {
+        top: pos.top != null ? String(pos.top) : null,
+        bottom: pos.bottom != null ? String(pos.bottom) : null,
+        left: pos.left != null ? String(pos.left) : null,
+        right: pos.right != null ? String(pos.right) : null,
+      };
+    }
+    const key = typeof pos === "string" ? pos : "bottom-right";
+    const corner = CORNER_OFFSETS[key] || CORNER_OFFSETS["bottom-right"];
+    return {
+      top: corner.top || null,
+      bottom: corner.bottom || null,
+      left: corner.left || null,
+      right: corner.right || null,
+    };
+  };
+
+  /** Apply a {top,bottom,left,right} offset object to the FAB. */
+  const applyFabOffsets = (offsets) => {
+    if (!fab) return;
+    fab.style.top = offsets.top || "";
+    fab.style.bottom = offsets.bottom || "";
+    fab.style.left = offsets.left || "";
+    fab.style.right = offsets.right || "";
+  };
+
+  /** Resolve a selector-or-element ref into an HTMLElement, or null. */
+  const resolveAnchorRef = (ref) => {
+    if (!ref) return null;
+    if (ref instanceof HTMLElement) return ref;
+    if (typeof ref === "string") {
+      try { return document.querySelector(ref); } catch (_e) { return null; }
+    }
+    return null;
+  };
+
+  /** Pick the active anchor mode + ref from config, or [null, null]. */
+  const pickAnchorConfig = () => {
+    if (config.stackAbove) return ["above", config.stackAbove];
+    if (config.stackBelow) return ["below", config.stackBelow];
+    if (config.stackLeft) return ["left", config.stackLeft];
+    if (config.stackRight) return ["right", config.stackRight];
+    return [null, null];
+  };
+
+  /**
+   * Recompute the FAB's offsets based on the anchor element's bounding
+   * rect. Called on init, on window resize, and via observers when the
+   * anchor's geometry changes.
+   */
+  const repositionToAnchor = () => {
+    if (!fab || !anchorEl || !anchorMode) return;
+    const rect = anchorEl.getBoundingClientRect();
+    const gap = Math.max(0, Number(config.gap) || 0);
+    const fabW = fab.offsetWidth || 56;
+    const fabH = fab.offsetHeight || 56;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let top = null;
+    let left = null;
+    if (anchorMode === "above") {
+      top = `${Math.max(0, rect.top - fabH - gap)}px`;
+      left = `${Math.max(0, rect.left + (rect.width - fabW) / 2)}px`;
+    } else if (anchorMode === "below") {
+      top = `${Math.min(vh - fabH, rect.bottom + gap)}px`;
+      left = `${Math.max(0, rect.left + (rect.width - fabW) / 2)}px`;
+    } else if (anchorMode === "left") {
+      top = `${Math.max(0, rect.top + (rect.height - fabH) / 2)}px`;
+      left = `${Math.max(0, rect.left - fabW - gap)}px`;
+    } else if (anchorMode === "right") {
+      top = `${Math.max(0, rect.top + (rect.height - fabH) / 2)}px`;
+      left = `${Math.min(vw - fabW, rect.right + gap)}px`;
+    }
+    applyFabOffsets({ top, bottom: null, left, right: null });
+  };
+
+  /** Wire up resize + intersection + mutation observers for the anchor. */
+  const installAnchorObservers = () => {
+    if (!anchorEl) return;
+    anchorResizeHandler = () => repositionToAnchor();
+    window.addEventListener("resize", anchorResizeHandler);
+    if (typeof IntersectionObserver === "function") {
+      anchorIntersectionObserver = new IntersectionObserver(() => {
+        repositionToAnchor();
+      });
+      anchorIntersectionObserver.observe(anchorEl);
+    }
+    if (typeof MutationObserver === "function") {
+      anchorMutationObserver = new MutationObserver(() => {
+        repositionToAnchor();
+      });
+      // Watch the anchor for class/style changes that might shift it.
+      anchorMutationObserver.observe(anchorEl, {
+        attributes: true,
+        attributeFilter: ["class", "style"],
+      });
+    }
+  };
+
+  /** Tear down anchor observers (called by destroy()). */
+  const teardownAnchorObservers = () => {
+    if (anchorResizeHandler) {
+      window.removeEventListener("resize", anchorResizeHandler);
+      anchorResizeHandler = null;
+    }
+    if (anchorIntersectionObserver) {
+      anchorIntersectionObserver.disconnect();
+      anchorIntersectionObserver = null;
+    }
+    if (anchorMutationObserver) {
+      anchorMutationObserver.disconnect();
+      anchorMutationObserver = null;
+    }
+    anchorEl = null;
+    anchorMode = null;
+  };
+
+  /**
+   * Apply position to the FAB based on config: anchor first, fall back to
+   * `position` if the anchor selector doesn't resolve.
+   */
+  const applyConfiguredPosition = () => {
+    if (!fab) return;
+    const [mode, ref] = pickAnchorConfig();
+    if (mode) {
+      const el = resolveAnchorRef(ref);
+      if (el) {
+        anchorMode = mode;
+        anchorEl = el;
+        installAnchorObservers();
+        repositionToAnchor();
+        return;
+      }
+      console.warn(
+        `Bug-Fab: stack${mode.charAt(0).toUpperCase() + mode.slice(1)} ` +
+          `anchor not found; falling back to position config.`
+      );
+    }
+    applyFabOffsets(resolvePositionOffsets());
+  };
+
+  // ====================================================================
   // FAB
   // ====================================================================
 
@@ -758,6 +1114,10 @@
     fab.addEventListener("click", () => { openOverlayCapture(); });
 
     document.body.appendChild(fab);
+
+    // FAB UX (TH-5/6): apply configured position now that the element is
+    // in the DOM (offsetWidth/offsetHeight need a layout pass).
+    applyConfiguredPosition();
   };
 
   /** Refresh the badge to reflect the current error count. */
@@ -832,6 +1192,32 @@
   // ====================================================================
   // Annotation canvas
   // ====================================================================
+  //
+  // Annotation tools (TH-14) — the canvas section below was extended to
+  // support a small tool palette: free-draw (default, the v0.1 behavior),
+  // eraser, rectangle, arrow, blur (privacy redact), and text label,
+  // plus an undo stack and keyboard shortcuts.
+  //
+  // Design notes:
+  //   - One snapshot per committed stroke is pushed onto `undoStack` at
+  //     mousedown (BEFORE the stroke renders), so undo restores the
+  //     pre-stroke state. Every tool's commit path opts into the same
+  //     model — uniform undo, no per-tool branching for history.
+  //   - Shape tools (rectangle, arrow, blur) preview by re-blitting the
+  //     `preStrokeSnapshot` ImageData on each mousemove and drawing the
+  //     in-progress shape on top. On mouseup the in-progress shape is
+  //     committed by drawing it once more on the snapshot.
+  //   - Blur uses `ctx.filter = 'blur(12px)'`. Both Chromium 88+ and
+  //     Firefox 103+ support canvas filters (Safari 17+ also). For the
+  //     POC and shipped browser test target this is fine. Adapter authors
+  //     who need older-browser fallback can polyfill via a downscale +
+  //     upscale pixelation trick (out of scope for now).
+  //   - Text labels are entered via a transient absolute-positioned
+  //     <input> over the canvas — lets the user use IME, clipboard,
+  //     RTL input, and a11y tools naturally. Committed on Enter/blur,
+  //     cancelled on Escape, then rendered with `ctx.fillText` and a
+  //     soft black drop shadow so the glyph stays readable on busy
+  //     backgrounds.
 
   /** Compute a canvas-coordinate position from a mouse/pointer event. */
   const getMousePos = (e) => {
@@ -856,45 +1242,332 @@
     };
   };
 
-  const startDraw = (pos) => {
-    isDrawing = true;
+  // ----- Annotation tools (TH-14): undo stack helpers -----------------
+
+  /** Snapshot the current canvas pixels onto the undo stack. */
+  const pushUndoSnapshot = () => {
+    if (!canvasCtx || !annotationCanvasEl) return;
+    try {
+      const snap = canvasCtx.getImageData(
+        0, 0, annotationCanvasEl.width, annotationCanvasEl.height
+      );
+      undoStack.push(snap);
+      while (undoStack.length > UNDO_STACK_LIMIT) undoStack.shift();
+    } catch (_e) {
+      // getImageData can throw on a tainted canvas (cross-origin image
+      // without CORS). html2canvas keeps the canvas same-origin so this
+      // is unexpected, but swallow defensively rather than crashing the
+      // overlay — undo just becomes a no-op for that session.
+    }
+  };
+
+  /** Pop the latest snapshot and re-paint it. */
+  const undoLastStroke = () => {
+    if (!canvasCtx || !annotationCanvasEl) return;
+    if (undoStack.length === 0) return;
+    const snap = undoStack.pop();
+    canvasCtx.putImageData(snap, 0, 0);
+  };
+
+  // ----- Annotation tools (TH-14): per-tool commit helpers ------------
+
+  /** Resolve the live stroke color from config, falling back to v0.1 red. */
+  const getStrokeColor = () =>
+    (config && config.annotationColor) || "#f44336";
+
+  /** Free-draw stroke segment. Used by both `draw` and `eraser` tools. */
+  const drawFreeSegment = (pos) => {
+    if (!canvasCtx) return;
+    canvasCtx.save();
+    if (activeTool === "eraser") {
+      // Eraser paints the pristine screenshot back through a clipped
+      // circle. Using destination-out would cut a hole through to
+      // transparency, which would composite badly when toBlob() flattens
+      // to PNG; re-drawing the pristine screenshot inside a circular
+      // clip keeps the output an opaque PNG.
+      canvasCtx.beginPath();
+      canvasCtx.arc(pos.x, pos.y, 14, 0, Math.PI * 2);
+      canvasCtx.clip();
+      if (screenshotImage) {
+        canvasCtx.drawImage(
+          screenshotImage, 0, 0,
+          annotationCanvasEl.width, annotationCanvasEl.height
+        );
+      }
+    } else {
+      canvasCtx.strokeStyle = getStrokeColor();
+      canvasCtx.lineWidth = 3;
+      canvasCtx.lineCap = "round";
+      canvasCtx.lineJoin = "round";
+      canvasCtx.beginPath();
+      canvasCtx.moveTo(lastX, lastY);
+      canvasCtx.lineTo(pos.x, pos.y);
+      canvasCtx.stroke();
+    }
+    canvasCtx.restore();
     lastX = pos.x;
     lastY = pos.y;
   };
 
-  const continueDraw = (pos) => {
-    if (!isDrawing || !canvasCtx) return;
-    canvasCtx.strokeStyle = "#f44336";
+  /** Re-paint the snapshot taken at mousedown (shape-tool preview). */
+  const restorePreStrokeSnapshot = () => {
+    if (!canvasCtx || !preStrokeSnapshot) return;
+    canvasCtx.putImageData(preStrokeSnapshot, 0, 0);
+  };
+
+  /** Draw a rectangle outline from (toolStartX/Y) to (pos.x/y). */
+  const drawRectOutline = (pos) => {
+    if (!canvasCtx) return;
+    canvasCtx.save();
+    canvasCtx.strokeStyle = getStrokeColor();
+    canvasCtx.lineWidth = 3;
+    canvasCtx.lineJoin = "miter";
+    canvasCtx.strokeRect(
+      toolStartX, toolStartY,
+      pos.x - toolStartX, pos.y - toolStartY
+    );
+    canvasCtx.restore();
+  };
+
+  /** Draw a line + arrowhead from (toolStartX/Y) to (pos.x/y). */
+  const drawArrow = (pos) => {
+    if (!canvasCtx) return;
+    const dx = pos.x - toolStartX;
+    const dy = pos.y - toolStartY;
+    const len = Math.hypot(dx, dy);
+    if (len < 1) return; // ignore tiny clicks
+    canvasCtx.save();
+    canvasCtx.strokeStyle = getStrokeColor();
+    canvasCtx.fillStyle = getStrokeColor();
     canvasCtx.lineWidth = 3;
     canvasCtx.lineCap = "round";
     canvasCtx.lineJoin = "round";
     canvasCtx.beginPath();
-    canvasCtx.moveTo(lastX, lastY);
+    canvasCtx.moveTo(toolStartX, toolStartY);
     canvasCtx.lineTo(pos.x, pos.y);
     canvasCtx.stroke();
-    lastX = pos.x;
-    lastY = pos.y;
+    // Arrowhead: two short lines from the end point at +/- 30° back
+    // from the direction the line was drawn in.
+    const headLen = Math.min(18, len * 0.4);
+    const angle = Math.atan2(dy, dx);
+    const wing = Math.PI / 6; // 30°
+    canvasCtx.beginPath();
+    canvasCtx.moveTo(pos.x, pos.y);
+    canvasCtx.lineTo(
+      pos.x - headLen * Math.cos(angle - wing),
+      pos.y - headLen * Math.sin(angle - wing)
+    );
+    canvasCtx.moveTo(pos.x, pos.y);
+    canvasCtx.lineTo(
+      pos.x - headLen * Math.cos(angle + wing),
+      pos.y - headLen * Math.sin(angle + wing)
+    );
+    canvasCtx.stroke();
+    canvasCtx.restore();
   };
 
-  const stopDraw = () => { isDrawing = false; };
+  /** Preview rectangle for the blur tool — dashed outline, no fill yet. */
+  const drawBlurPreview = (pos) => {
+    if (!canvasCtx) return;
+    canvasCtx.save();
+    canvasCtx.strokeStyle = "rgba(0, 0, 0, 0.7)";
+    canvasCtx.lineWidth = 1;
+    canvasCtx.setLineDash([6, 4]);
+    canvasCtx.strokeRect(
+      toolStartX, toolStartY,
+      pos.x - toolStartX, pos.y - toolStartY
+    );
+    canvasCtx.restore();
+  };
 
-  const onMouseDown = (e) => { e.preventDefault(); startDraw(getMousePos(e)); };
+  /**
+   * Commit a blur over the rectangle defined by (toolStartX/Y, pos).
+   * Routes through a scratch canvas because drawing a canvas onto itself
+   * with `filter` set is unreliable across browsers.
+   */
+  const commitBlurRect = (pos) => {
+    if (!canvasCtx || !annotationCanvasEl) return;
+    const x = Math.min(toolStartX, pos.x);
+    const y = Math.min(toolStartY, pos.y);
+    const w = Math.abs(pos.x - toolStartX);
+    const h = Math.abs(pos.y - toolStartY);
+    if (w < 4 || h < 4) return; // ignore stray clicks
+
+    const scratch = document.createElement("canvas");
+    scratch.width = annotationCanvasEl.width;
+    scratch.height = annotationCanvasEl.height;
+    const scratchCtx = scratch.getContext("2d");
+    if (!scratchCtx) return;
+    if (preStrokeSnapshot) {
+      scratchCtx.putImageData(preStrokeSnapshot, 0, 0);
+    } else {
+      scratchCtx.drawImage(annotationCanvasEl, 0, 0);
+    }
+
+    canvasCtx.save();
+    canvasCtx.beginPath();
+    canvasCtx.rect(x, y, w, h);
+    canvasCtx.clip();
+    canvasCtx.filter = "blur(12px)";
+    canvasCtx.drawImage(scratch, 0, 0);
+    canvasCtx.filter = "none";
+    canvasCtx.restore();
+  };
+
+  /** Render a single text-label glyph at the recorded toolStart position. */
+  const commitTextLabel = (text) => {
+    if (!canvasCtx) return;
+    const trimmed = (text || "").trim();
+    if (!trimmed) return;
+    canvasCtx.save();
+    canvasCtx.font = "18px system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+    canvasCtx.textBaseline = "top";
+    canvasCtx.shadowColor = "rgba(0, 0, 0, 0.6)";
+    canvasCtx.shadowBlur = 4;
+    canvasCtx.shadowOffsetX = 1;
+    canvasCtx.shadowOffsetY = 1;
+    canvasCtx.fillStyle = getStrokeColor();
+    canvasCtx.fillText(trimmed, toolStartX, toolStartY);
+    canvasCtx.restore();
+  };
+
+  /** Float a transient input over the canvas at the given client coords. */
+  const openTextInputAt = (clientX, clientY, canvasPos) => {
+    if (!annotationCanvasEl || !annotationCanvasEl.parentNode) return;
+    closePendingTextInput(false);
+    toolStartX = canvasPos.x;
+    toolStartY = canvasPos.y;
+    const wrap = annotationCanvasEl.parentNode;
+    const wrapRect = wrap.getBoundingClientRect();
+    const inputEl = document.createElement("input");
+    inputEl.type = "text";
+    inputEl.className = "bug-fab-canvas-text-input";
+    inputEl.style.left = (clientX - wrapRect.left) + "px";
+    inputEl.style.top = (clientY - wrapRect.top) + "px";
+    inputEl.setAttribute("aria-label", "Text annotation");
+    inputEl.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        closePendingTextInput(true);
+      } else if (ev.key === "Escape") {
+        ev.preventDefault();
+        closePendingTextInput(false);
+      }
+      ev.stopPropagation();
+    });
+    inputEl.addEventListener("blur", () => closePendingTextInput(true));
+    wrap.appendChild(inputEl);
+    pendingTextInput = inputEl;
+    setTimeout(() => inputEl.focus(), 0);
+  };
+
+  /** Tear down the floating text input; commit the value if `commit`. */
+  const closePendingTextInput = (commit) => {
+    if (!pendingTextInput) return;
+    const value = pendingTextInput.value;
+    const el = pendingTextInput;
+    pendingTextInput = null;
+    if (el.parentNode) el.parentNode.removeChild(el);
+    if (commit && value) {
+      pushUndoSnapshot();
+      commitTextLabel(value);
+    }
+  };
+
+  // ----- Annotation tools (TH-14): pointer-event dispatch -------------
+
+  const startDraw = (pos) => {
+    isDrawing = true;
+    lastX = pos.x;
+    lastY = pos.y;
+    toolStartX = pos.x;
+    toolStartY = pos.y;
+    pushUndoSnapshot();
+    if (
+      activeTool === "rectangle" ||
+      activeTool === "arrow" ||
+      activeTool === "blur"
+    ) {
+      try {
+        preStrokeSnapshot = canvasCtx.getImageData(
+          0, 0, annotationCanvasEl.width, annotationCanvasEl.height
+        );
+      } catch (_e) {
+        preStrokeSnapshot = null;
+      }
+    }
+  };
+
+  const continueDraw = (pos) => {
+    if (!isDrawing || !canvasCtx) return;
+    if (activeTool === "draw" || activeTool === "eraser") {
+      drawFreeSegment(pos);
+      return;
+    }
+    // Shape tools — preview by restoring snapshot then drawing on top.
+    restorePreStrokeSnapshot();
+    if (activeTool === "rectangle") drawRectOutline(pos);
+    else if (activeTool === "arrow") drawArrow(pos);
+    else if (activeTool === "blur") drawBlurPreview(pos);
+  };
+
+  const stopDraw = (pos) => {
+    if (!isDrawing) return;
+    isDrawing = false;
+    if (canvasCtx && pos) {
+      // Commit the final shape on mouseup.
+      if (activeTool === "rectangle") {
+        restorePreStrokeSnapshot();
+        drawRectOutline(pos);
+      } else if (activeTool === "arrow") {
+        restorePreStrokeSnapshot();
+        drawArrow(pos);
+      } else if (activeTool === "blur") {
+        restorePreStrokeSnapshot();
+        commitBlurRect(pos);
+      }
+    }
+    preStrokeSnapshot = null;
+  };
+
+  const onMouseDown = (e) => {
+    e.preventDefault();
+    if (activeTool === "text") {
+      const pos = getMousePos(e);
+      openTextInputAt(e.clientX, e.clientY, pos);
+      return;
+    }
+    startDraw(getMousePos(e));
+  };
   const onMouseMove = (e) => {
     if (!isDrawing) return;
     e.preventDefault();
     continueDraw(getMousePos(e));
   };
-  const onMouseUp = (e) => { e.preventDefault(); stopDraw(); };
+  const onMouseUp = (e) => {
+    e.preventDefault();
+    stopDraw(isDrawing ? getMousePos(e) : null);
+  };
   const onTouchStart = (e) => {
     e.preventDefault();
-    if (e.touches.length === 1) startDraw(getTouchPos(e));
+    if (e.touches.length !== 1) return;
+    if (activeTool === "text") {
+      const t = e.touches[0];
+      const pos = getTouchPos(e);
+      openTextInputAt(t.clientX, t.clientY, pos);
+      return;
+    }
+    startDraw(getTouchPos(e));
   };
   const onTouchMove = (e) => {
     e.preventDefault();
     if (!isDrawing || e.touches.length !== 1) return;
     continueDraw(getTouchPos(e));
   };
-  const onTouchEnd = (e) => { e.preventDefault(); stopDraw(); };
+  const onTouchEnd = (e) => {
+    e.preventDefault();
+    stopDraw(isDrawing ? getTouchPos(e) : null);
+  };
 
   /** Bind drawing events to the annotation canvas. */
   const bindCanvasEvents = () => {
@@ -928,6 +1601,108 @@
     canvasCtx.drawImage(screenshotImage, 0, 0, annotationCanvasEl.width, annotationCanvasEl.height);
   };
 
+  // ----- Annotation tools (TH-14): tool palette + cursor + shortcuts --
+
+  /** Map of single-key shortcuts (lowercased) to tool names. */
+  const TOOL_SHORTCUTS = Object.freeze({
+    d: "draw",
+    r: "rectangle",
+    a: "arrow",
+    b: "blur",
+    t: "text",
+    e: "eraser",
+  });
+
+  /** CSS cursor per active tool. */
+  const cursorForTool = (tool) => {
+    if (tool === "text") return "text";
+    if (tool === "eraser") return "cell";
+    // draw / rectangle / arrow / blur all share the crosshair cursor.
+    return "crosshair";
+  };
+
+  /** Switch the active tool and update toolbar + canvas cursor state. */
+  const setActiveTool = (tool) => {
+    // Drop any in-flight text input when switching tools.
+    closePendingTextInput(false);
+    activeTool = tool;
+    if (annotationCanvasEl) {
+      annotationCanvasEl.style.cursor = cursorForTool(tool);
+    }
+    if (toolButtonEls) {
+      for (const btn of toolButtonEls) {
+        const isActive = btn.getAttribute("data-bug-fab-tool") === tool;
+        btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+      }
+    }
+  };
+
+  /** Toolbar HTML. Plain text labels — no font-icon CDN dependency. */
+  const buildToolbarHtml = () => `
+    <div class="bug-fab-toolbar" role="toolbar" aria-label="Annotation tools"
+         data-bug-fab-toolbar>
+      <button type="button" class="bug-fab-tool" data-bug-fab-tool="draw"
+        aria-pressed="true" aria-label="Free draw (d)" title="Free draw (d)">Draw</button>
+      <button type="button" class="bug-fab-tool" data-bug-fab-tool="rectangle"
+        aria-pressed="false" aria-label="Rectangle (r)" title="Rectangle (r)">Rect</button>
+      <button type="button" class="bug-fab-tool" data-bug-fab-tool="arrow"
+        aria-pressed="false" aria-label="Arrow (a)" title="Arrow (a)">Arrow</button>
+      <button type="button" class="bug-fab-tool" data-bug-fab-tool="blur"
+        aria-pressed="false" aria-label="Blur / privacy redact (b)" title="Blur (b)">Blur</button>
+      <button type="button" class="bug-fab-tool" data-bug-fab-tool="text"
+        aria-pressed="false" aria-label="Text label (t)" title="Text (t)">Text</button>
+      <span class="bug-fab-toolbar__sep" aria-hidden="true"></span>
+      <button type="button" class="bug-fab-tool" data-bug-fab-tool="eraser"
+        aria-pressed="false" aria-label="Eraser (e)" title="Eraser (e)">Erase</button>
+      <button type="button" class="bug-fab-tool" data-bug-fab-undo
+        aria-label="Undo (u or Ctrl+Z)" title="Undo (u / Ctrl+Z)">Undo</button>
+      <span class="bug-fab-toolbar__help"
+        title="d=draw, r=rect, a=arrow, b=blur, t=text, e=erase, u=undo (Ctrl+Z also undoes)">?</span>
+    </div>
+  `;
+
+  /** Wire toolbar button handlers. */
+  const bindToolbar = (toolbarEl) => {
+    if (!toolbarEl) return;
+    toolButtonEls = toolbarEl.querySelectorAll("[data-bug-fab-tool]");
+    for (const btn of toolButtonEls) {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        const tool = btn.getAttribute("data-bug-fab-tool");
+        if (tool) setActiveTool(tool);
+      });
+    }
+    const undoBtn = toolbarEl.querySelector("[data-bug-fab-undo]");
+    if (undoBtn) {
+      undoBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        undoLastStroke();
+      });
+    }
+  };
+
+  /** Document-level keyboard shortcut handler installed with the overlay. */
+  const onAnnotationKey = (e) => {
+    // Ignore keystrokes when the user is typing in an input/textarea/select
+    // — including the floating text-label input (which sets pendingTextInput).
+    const target = e.target;
+    const tag = target && target.tagName ? target.tagName.toLowerCase() : "";
+    if (tag === "input" || tag === "textarea" || tag === "select") return;
+    if (pendingTextInput) return;
+    if ((e.ctrlKey || e.metaKey) && (e.key || "").toLowerCase() === "z") {
+      e.preventDefault();
+      undoLastStroke();
+      return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = (e.key || "").toLowerCase();
+    if (k === "u") { e.preventDefault(); undoLastStroke(); return; }
+    if (Object.prototype.hasOwnProperty.call(TOOL_SHORTCUTS, k)) {
+      e.preventDefault();
+      setActiveTool(TOOL_SHORTCUTS[k]);
+    }
+  };
+
   /**
    * Initialize the annotation canvas with a screenshot source. Source can
    * be an HTMLCanvasElement (the typical html2canvas return value), an
@@ -938,6 +1713,10 @@
     annotationCanvasEl = canvasEl;
     canvasCtx = canvasEl.getContext("2d");
     screenshotImage = new Image();
+    // Annotation tools (TH-14): reset tool state for each fresh open.
+    undoStack.length = 0;
+    activeTool = "draw";
+    preStrokeSnapshot = null;
 
     if (imageSource instanceof HTMLCanvasElement) {
       screenshotImage.src = imageSource.toDataURL("image/png");
@@ -952,6 +1731,7 @@
       annotationCanvasEl.height = screenshotImage.naturalHeight || screenshotImage.height;
       drawScreenshot();
       bindCanvasEvents();
+      annotationCanvasEl.style.cursor = cursorForTool(activeTool);
     };
 
     screenshotImage.onload = onReady;
@@ -961,6 +1741,8 @@
   /** Wipe annotations, restoring the original screenshot. */
   const clearAnnotations = () => {
     if (!canvasCtx || !screenshotImage) return;
+    closePendingTextInput(false);
+    pushUndoSnapshot();
     canvasCtx.clearRect(0, 0, annotationCanvasEl.width, annotationCanvasEl.height);
     drawScreenshot();
   };
@@ -972,6 +1754,10 @@
         reject(new Error("Canvas not initialized"));
         return;
       }
+      // Annotation tools (TH-14): commit any in-flight text input before
+      // toBlob runs, so the user doesn't lose typed-but-not-yet-committed
+      // labels by clicking submit.
+      closePendingTextInput(true);
       annotationCanvasEl.toBlob((blob) => {
         if (blob) resolve(blob);
         else reject(new Error("Failed to create image blob"));
@@ -1058,6 +1844,31 @@
     return html;
   };
 
+  /**
+   * Build the category-dropdown field HTML for the report form.
+   * FAB UX (TH-15) — coordinate with annotation subagent: this slots
+   * between the title and description fields. Returns "" when categories
+   * is unset, preserving the original form layout for back-compat.
+   */
+  const buildCategoryFieldHtml = () => {
+    const cats = config.categories;
+    if (!Array.isArray(cats) || cats.length === 0) return "";
+    const label = escapeHtml(config.categoryLabel || "Category");
+    let opts = `<option value="">--</option>`;
+    for (const c of cats) {
+      const v = escapeHtml(c);
+      opts += `<option value="${v}">${v}</option>`;
+    }
+    return `
+            <div class="bug-fab-field">
+              <label for="bug-fab-category">${label}</label>
+              <select id="bug-fab-category" name="category" class="bug-fab-select"
+                data-bug-fab-category>
+                ${opts}
+              </select>
+            </div>`;
+  };
+
   /** Build the overlay DOM tree. Returns the root element + context. */
   const buildOverlay = () => {
     const context = gatherContext();
@@ -1072,6 +1883,7 @@
     overlay.innerHTML = `
       <div class="bug-fab-overlay__container">
         <div class="bug-fab-overlay__preview">
+          ${buildToolbarHtml()}
           <div class="bug-fab-overlay__canvas-wrap">
             <canvas class="bug-fab-overlay__canvas"
               aria-label="Screenshot annotation canvas. Draw to annotate."></canvas>
@@ -1091,6 +1903,7 @@
                 placeholder="Brief description of the issue" aria-required="true">
               <span class="bug-fab-invalid-hint" hidden>Please enter a title.</span>
             </div>
+            ${buildCategoryFieldHtml()}
             <div class="bug-fab-field">
               <label for="bug-fab-description">Description</label>
               <textarea id="bug-fab-description" name="description" class="bug-fab-textarea"
@@ -1205,6 +2018,14 @@
     errorBox.hidden = true;
     errorBox.textContent = "";
 
+    // FAB UX (TH-15): if a category dropdown is rendered, prepend the
+    // chosen value to the tags array (only when a non-empty option is
+    // selected — the placeholder maps to "").
+    const userTags = parseTags(overlay.querySelector("#bug-fab-tags").value);
+    const categorySel = overlay.querySelector("[data-bug-fab-category]");
+    const categoryValue = categorySel ? (categorySel.value || "").trim() : "";
+    const tags = categoryValue ? [categoryValue, ...userTags] : userTags;
+
     const metadata = {
       protocol_version: "0.1",
       title,
@@ -1213,7 +2034,7 @@
       description: overlay.querySelector("#bug-fab-description").value.trim(),
       expected_behavior: overlay.querySelector("#bug-fab-expected").value.trim(),
       severity: overlay.querySelector("#bug-fab-severity").value,
-      tags: parseTags(overlay.querySelector("#bug-fab-tags").value),
+      tags,
       context,
     };
 
@@ -1293,6 +2114,10 @@
     const canvasEl = overlay.querySelector(".bug-fab-overlay__canvas");
     initAnnotationCanvas(canvasEl, screenshotCanvas);
 
+    // Annotation tools (TH-14): wire toolbar buttons + keyboard shortcuts.
+    bindToolbar(overlay.querySelector("[data-bug-fab-toolbar]"));
+    document.addEventListener("keydown", onAnnotationKey);
+
     overlay.querySelector("[data-bug-fab-clear]")
       .addEventListener("click", clearAnnotations);
     overlay.querySelector("[data-bug-fab-cancel]")
@@ -1319,6 +2144,13 @@
   const closeOverlay = () => {
     if (!overlay) return;
     document.removeEventListener("keydown", onKeyDown);
+    // Annotation tools (TH-14): unbind tool key handler + reset state.
+    document.removeEventListener("keydown", onAnnotationKey);
+    closePendingTextInput(false);
+    toolButtonEls = null;
+    undoStack.length = 0;
+    activeTool = "draw";
+    preStrokeSnapshot = null;
     unbindCanvasEvents();
     annotationCanvasEl = null;
     canvasCtx = null;
@@ -1404,6 +2236,22 @@
     if (initialized) return;
     config = { ...DEFAULT_CONFIG, ...userConfig };
 
+    // TH-Critical (post-e2e): `submitUrl: null` after merge is the
+    // single biggest first-time-integrator footgun. Resolve a working
+    // default in priority order:
+    //   1. Explicit init: userConfig.submitUrl wins (already merged above).
+    //   2. <script src="..." data-submit-url="..."> on the bundle tag.
+    //   3. Hard-coded /api/bug-reports default (canonical FastAPI mount).
+    // Consumers who mount under a non-canonical prefix override via 1 or 2.
+    if (!config.submitUrl) {
+      config.submitUrl = SCRIPT_SUBMIT_URL_AT_LOAD || DEFAULT_SUBMIT_URL;
+    }
+
+    // FAB UX (TH-7): honor `data-bug-fab-disabled="true"` on the bundle's
+    // own <script> tag so non-JS templates have a kill-switch without
+    // rebuilding the init config.
+    if (SCRIPT_DISABLED_AT_LOAD) userDisabled = true;
+
     // Buffer must install ASAP so it captures errors fired before the
     // user opens the FAB. (Doing it inside init() rather than at script
     // load keeps tests / SPAs free to no-op the bundle if they want.)
@@ -1430,6 +2278,35 @@
   const open = () => { openOverlayCapture(); };
 
   /**
+   * FAB UX (TH-7): hide the FAB at runtime. If the overlay is currently
+   * open it's closed first so the user can't continue editing a report
+   * while the host considers Bug-Fab disabled. Idempotent.
+   */
+  const disable = () => {
+    userDisabled = true;
+    if (overlay) closeOverlay();
+    if (fab) fab.classList.add("bug-fab--hidden");
+  };
+
+  /**
+   * FAB UX (TH-7): re-show the FAB at runtime. Idempotent. If init() has
+   * run but the FAB was never created (because `enabled` was false or the
+   * script-tag kill-switch was set), this lazily creates it so a host's
+   * `init()` + later `enable()` flow works.
+   */
+  const enable = () => {
+    userDisabled = false;
+    if (!initialized) return;
+    if (!fab) {
+      injectStyles();
+      createFab();
+      startBadgePolling();
+    } else {
+      fab.classList.remove("bug-fab--hidden");
+    }
+  };
+
+  /**
    * Tear everything down. Removes the FAB and overlay from the DOM,
    * clears intervals, restores window.fetch and console.* to their
    * pre-init originals (best effort), and resets state. Useful for
@@ -1444,17 +2321,21 @@
       window.clearInterval(cooldownTimer);
       cooldownTimer = null;
     }
+    teardownAnchorObservers();
     if (fab && fab.parentNode) fab.parentNode.removeChild(fab);
     fab = null;
     badge = null;
     closeOverlay();
     if (__origFetch) window.fetch = __origFetch;
+    userDisabled = false;
     initialized = false;
   };
 
   window.BugFab = Object.freeze({
     init,
     open,
+    disable,
+    enable,
     destroy,
     version: VERSION,
   });

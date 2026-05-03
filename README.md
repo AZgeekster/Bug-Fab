@@ -90,7 +90,72 @@ Add one line to your base template:
 ```
 
 That's it — a FAB now appears on every page, and submitted reports
-land in `./bug_reports/`.
+land in `./bug_reports/`. The bundle defaults its `submitUrl` to
+`/api/bug-reports`, matching the canonical mount above. If you mount
+the submit router under a different prefix, point the bundle at it
+with one of:
+
+```html
+<!-- Zero-JS: data-attribute on the bundle's own <script> tag -->
+<script src="/bug-fab/static/bug-fab.js"
+        data-submit-url="/internal/api/bug-reports" defer></script>
+
+<!-- Or explicit init for full config control -->
+<script>window.BugFabAutoInit = false;</script>
+<script src="/bug-fab/static/bug-fab.js" defer></script>
+<script>
+  window.addEventListener("DOMContentLoaded", () => {
+    window.BugFab.init({ submitUrl: "/internal/api/bug-reports" });
+  });
+</script>
+```
+
+### What the FAB POSTs (curl-equivalent)
+
+The bundle POSTs `multipart/form-data` to `submitUrl` (default
+`/api/bug-reports`). The two parts are a JSON `metadata` field and a PNG
+`screenshot` file. To exercise the wire from a script or CI fixture:
+
+```bash
+curl -X POST http://localhost:8000/api/bug-reports \
+  -F 'metadata={"protocol_version":"0.1","title":"curl smoke","client_ts":"2026-05-03T12:00:00Z","report_type":"bug","severity":"low","tags":[],"context":{"url":"/","user_agent":"curl/8.0","viewport_width":1024,"viewport_height":768,"console_errors":[],"network_log":[]}};type=application/json' \
+  -F 'screenshot=@./tiny.png;type=image/png'
+```
+
+Full schema in [`docs/PROTOCOL.md`](https://github.com/AZgeekster/Bug-Fab/blob/main/docs/PROTOCOL.md);
+machine-readable in [`docs/protocol-schema.json`](https://github.com/AZgeekster/Bug-Fab/blob/main/docs/protocol-schema.json).
+
+### Compatibility notes
+
+- **CSP:** the bundle is shipped as a single external `<script>` and
+  uses no `eval`, no `data:` images, and no inline `style.cssText` on
+  host elements. Compatible with `Content-Security-Policy: script-src
+  'self'`. The viewer's inline `<script>` blocks support nonce mode
+  via `Settings.csp_nonce_provider` — see
+  [`docs/CSP.md`](https://github.com/AZgeekster/Bug-Fab/blob/main/docs/CSP.md).
+- **Z-index:** the FAB renders at `z-index: 9998` and the overlay
+  modal at `z-index: 9999`. Host-app modals/toasts/dropdowns should
+  stay below 9998, OR use the `position` / `stackAbove` config knobs
+  to relocate the FAB.
+- **Tested in the wild with:** Alpine.js + HTMX + Pico CSS,
+  Bootstrap 5, plain Jinja2, Razor Pages, and the Next.js POC. Zero
+  conflicts observed; the FAB's CSS is namespaced under `bug-fab-*`.
+- **Accessibility:** v0.1 ships keyboard-focusable FAB
+  (`tab` reaches it, `Enter`/`Space` opens), `role="dialog"` +
+  `aria-modal="true"` on the overlay, focus trap inside the overlay,
+  and `Escape` to close. Full screen-reader announcements
+  (`aria-live` regions for capture/submit state) are tracked for
+  v0.2.
+- **Observability hooks:** every Bug-Fab log record uses the
+  standard Python `logging` module under the `bug_fab` logger name.
+  Failure paths (storage save, GitHub sync, webhook delivery, CSP
+  nonce provider, etc.) carry an `extra={"event": "<name>", ...}`
+  block so integrators can subscribe and forward to Datadog / OTel /
+  Cloud Logging by attaching their own handler. Example:
+  ```python
+  import logging
+  logging.getLogger("bug_fab").addHandler(my_otel_handler)
+  ```
 
 ## Where to read next
 

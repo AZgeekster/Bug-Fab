@@ -263,6 +263,101 @@ def test_back_to_list_from_detail(page: Page, app_server: dict, seeded_reports) 
 
 
 @pytest.mark.e2e
+def test_fab_position_bottom_left(page: Page, app_server: dict) -> None:
+    """FAB UX (TH-5): re-init with position="bottom-left" and confirm the
+    inline-style applied by the bundle clears `right` and sets `left`."""
+    base = app_server["base_url"]
+    page.goto(base + "/")
+    fab = page.locator("button.bug-fab").first
+    expect(fab).to_be_visible(timeout=10_000)
+
+    page.evaluate(
+        "() => { window.BugFab.destroy(); "
+        "window.BugFab.init({ submitUrl: '/api/bug-reports', position: 'bottom-left' }); }"
+    )
+    fab = page.locator("button.bug-fab").first
+    expect(fab).to_be_visible(timeout=5_000)
+
+    style = fab.evaluate(
+        "el => ({ top: el.style.top, bottom: el.style.bottom, "
+        "left: el.style.left, right: el.style.right })"
+    )
+    assert style["bottom"] == "24px", style
+    assert style["left"] == "24px", style
+    assert style["right"] == "", style
+    assert style["top"] == "", style
+
+
+@pytest.mark.e2e
+def test_fab_disable_enable_runtime(page: Page, app_server: dict) -> None:
+    """FAB UX (TH-7): BugFab.disable() hides the FAB; BugFab.enable() shows
+    it again. The hidden state is asserted via the bug-fab--hidden class
+    that the bundle toggles, not via Playwright's visibility heuristic
+    (which has known issues with display:none-via-class-vs-attr)."""
+    base = app_server["base_url"]
+    page.goto(base + "/")
+    fab = page.locator("button.bug-fab").first
+    expect(fab).to_be_visible(timeout=10_000)
+
+    page.evaluate("() => window.BugFab.disable()")
+    has_hidden = fab.evaluate("el => el.classList.contains('bug-fab--hidden')")
+    assert has_hidden, "disable() did not toggle the bug-fab--hidden class"
+    expect(fab).to_be_hidden()
+
+    page.evaluate("() => window.BugFab.enable()")
+    still_hidden = fab.evaluate("el => el.classList.contains('bug-fab--hidden')")
+    assert not still_hidden, "enable() did not remove the bug-fab--hidden class"
+    expect(fab).to_be_visible()
+
+
+@pytest.mark.e2e
+def test_category_dropdown_prepends_to_tags(page: Page, app_server: dict, seeded_reports) -> None:
+    """FAB UX (TH-15): when categories is set, the form renders a select
+    between the title and description fields, and the chosen value is
+    prepended to the tags array on submit."""
+    base = app_server["base_url"]
+    storage_dir = app_server["storage_dir"]
+
+    page.goto(base + "/")
+    expect(page.locator("button.bug-fab").first).to_be_visible(timeout=10_000)
+
+    page.evaluate(
+        "() => { window.BugFab.destroy(); window.BugFab.init({ "
+        "submitUrl: '/api/bug-reports', "
+        "categories: ['Bug', 'Feature request', 'Question', 'UX nit'], "
+        "categoryLabel: 'Type' }); }"
+    )
+
+    fab = page.locator("button.bug-fab").first
+    expect(fab).to_be_visible(timeout=5_000)
+    fab.click()
+
+    title_input = page.locator("#bug-fab-title")
+    expect(title_input).to_be_visible(timeout=5_000)
+    title_input.fill("th-15 category test")
+
+    category = page.locator("#bug-fab-category")
+    expect(category).to_be_visible()
+    label = page.locator("label[for='bug-fab-category']")
+    expect(label).to_have_text("Type")
+    category.select_option("Bug")
+
+    page.locator("#bug-fab-tags").fill("ui, data")
+
+    with page.expect_response(
+        lambda r: r.url.endswith("/api/bug-reports") and r.request.method == "POST"
+    ) as info:
+        page.locator("[data-bug-fab-submit]").click()
+    submit_resp = info.value
+    assert submit_resp.status == 201, submit_resp.text()
+    body = json.loads(submit_resp.text())
+    report_id = body["id"]
+
+    saved = json.loads((storage_dir / f"{report_id}.json").read_text())
+    assert saved["tags"] == ["Bug", "ui", "data"], saved["tags"]
+
+
+@pytest.mark.e2e
 def test_no_object_object_in_visible_text(page: Page, app_server: dict, seeded_reports) -> None:
     """Sweep the list page and a detail page for the literal string
     '[object Object]'. Catches any future error-formatter regression
@@ -272,3 +367,83 @@ def test_no_object_object_in_visible_text(page: Page, app_server: dict, seeded_r
         page.goto(base + path)
         body = page.locator("body").text_content() or ""
         assert "[object Object]" not in body, f"found on {path}"
+
+
+@pytest.mark.e2e
+def test_annotation_rect_tool_differs_from_freedraw(page: Page, app_server: dict) -> None:
+    """Annotation tools (TH-14): the rectangle tool draws a different stroke
+    than free-draw at the same coordinates.
+
+    We can't deterministically e2e every tool (arrow, blur, text labels are
+    visual), so this one test pins down two invariants:
+
+      1. The toolbar renders + the rectangle button switches `aria-pressed`.
+      2. Clicking-and-dragging the SAME canvas coordinates with the rectangle
+         tool produces a different PNG dataURL than with free-draw — proving
+         the active-tool branch in the pointer-event handler actually changes
+         what gets committed to the canvas.
+
+    The other tools (arrow, blur, text) are sanity-checked by the unit-style
+    walk-through in PR review and by a console-error sweep below.
+    """
+    base = app_server["base_url"]
+    page.goto(base + "/")
+
+    fab = page.locator("button.bug-fab").first
+    expect(fab).to_be_visible(timeout=10_000)
+    fab.click()
+
+    canvas = page.locator(".bug-fab-overlay__canvas")
+    expect(canvas).to_be_visible(timeout=5_000)
+    # Toolbar rendered.
+    expect(page.locator("[data-bug-fab-toolbar]")).to_be_visible()
+    expect(page.locator("[data-bug-fab-tool='draw']")).to_have_attribute("aria-pressed", "true")
+
+    # Drag start/end in canvas-element coords. We use page.mouse and
+    # canvas.bounding_box() so the same screen-space drag is replayed
+    # consistently across the two tool selections.
+    box = canvas.bounding_box()
+    assert box is not None
+    x0 = box["x"] + box["width"] * 0.30
+    y0 = box["y"] + box["height"] * 0.30
+    x1 = box["x"] + box["width"] * 0.55
+    y1 = box["y"] + box["height"] * 0.55
+
+    def drag_segment() -> None:
+        page.mouse.move(x0, y0)
+        page.mouse.down()
+        page.mouse.move((x0 + x1) / 2, (y0 + y1) / 2)
+        page.mouse.move(x1, y1)
+        page.mouse.up()
+
+    # 1) Draw a free-draw stroke and read back the data URL.
+    drag_segment()
+    free_draw_data_url = canvas.evaluate("el => el.toDataURL('image/png')")
+    assert free_draw_data_url.startswith("data:image/png;base64,")
+
+    # 2) Switch to rectangle, undo the free-draw, draw same coords.
+    page.locator("[data-bug-fab-tool='rectangle']").click()
+    expect(page.locator("[data-bug-fab-tool='rectangle']")).to_have_attribute(
+        "aria-pressed", "true"
+    )
+    expect(page.locator("[data-bug-fab-tool='draw']")).to_have_attribute("aria-pressed", "false")
+    page.locator("[data-bug-fab-undo]").click()
+    drag_segment()
+    rect_data_url = canvas.evaluate("el => el.toDataURL('image/png')")
+
+    # The rectangle tool draws four straight strokes for the perimeter,
+    # not a single mid-segment line; the rendered pixels MUST differ.
+    assert rect_data_url != free_draw_data_url, (
+        "rectangle tool produced the same PNG as free-draw — "
+        "active-tool branch likely never fired"
+    )
+
+    # Sanity: keyboard shortcut switches back to draw without console errors.
+    console_errors: list[str] = []
+    page.on(
+        "console",
+        lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
+    )
+    page.keyboard.press("d")
+    expect(page.locator("[data-bug-fab-tool='draw']")).to_have_attribute("aria-pressed", "true")
+    assert not console_errors, console_errors

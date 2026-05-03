@@ -8,13 +8,16 @@ Topics:
 
 - [Storage backend choice](#storage-backend-choice)
 - [Router mount-point auth pattern](#router-mount-point-auth-pattern)
+- [Auth recipes](#auth-recipes)
 - [Viewer permissions config](#viewer-permissions-config)
 - [Rate limiting](#rate-limiting)
 - [GitHub Issues sync](#github-issues-sync)
+- [Webhook delivery](#webhook-delivery)
 - [html2canvas vendoring](#html2canvas-vendoring)
 - [Remote-collector pattern](#remote-collector-pattern)
 - [Cross-origin intake (CORS)](#cross-origin-intake-cors)
 - [Content Security Policy (CSP)](#content-security-policy-csp)
+- [Upgrading between Bug-Fab versions](#upgrading-between-bug-fab-versions)
 
 ## Storage backend choice
 
@@ -160,6 +163,157 @@ identity unless your submit handler enriches the metadata payload
 with the logged-in user's name/email before forwarding to the storage
 backend. That gap closes when `AuthAdapter` lands in v0.2.
 
+## Auth recipes
+
+The mount-point auth pattern above tells you *where* to attach auth.
+This section gives you copy-paste-able snippets for the three most
+common auth shapes. Bug-Fab does not ship these helpers — they are
+ten-line stock-framework patterns that wire into the existing
+`Depends(...)` slot in Pattern 1 / 2 above.
+
+### FastAPI: HTTP Basic (single admin password)
+
+The smallest viable gate for an internal tool. One env var, one
+hardcoded user, no database. Good for a hobby app or a private POC;
+not appropriate for anything multi-tenant.
+
+```python
+import os, secrets
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+
+security = HTTPBasic()
+ADMIN_USER = os.environ.get("BUGS_ADMIN_USER", "admin")
+ADMIN_PASS = os.environ["BUGS_ADMIN_PASS"]   # crash early if unset
+
+def require_admin(creds: HTTPBasicCredentials = Depends(security)) -> str:
+    user_ok = secrets.compare_digest(creds.username, ADMIN_USER)
+    pass_ok = secrets.compare_digest(creds.password, ADMIN_PASS)
+    if not (user_ok and pass_ok):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid credentials",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return creds.username
+```
+
+Wire it into Pattern 1 above by passing `require_admin` to the viewer
+APIRouter's `dependencies=[Depends(...)]`. `secrets.compare_digest`
+avoids a timing-leak that lets attackers guess the password one
+character at a time.
+
+### FastAPI: cookie session (reuse host app's login)
+
+When the host FastAPI app already has a login form that sets a
+session cookie, lift the same lookup into a `Depends(...)` so the
+viewer reuses the existing identity.
+
+```python
+from fastapi import Cookie, Depends, HTTPException, status
+from .auth import lookup_session   # your existing session store
+
+async def require_admin(session_id: str | None = Cookie(default=None)) -> str:
+    if not session_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+    user = await lookup_session(session_id)
+    if user is None or not user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
+    return user.username
+```
+
+The cookie name (`session_id` here) must match whatever your login
+form sets. Pair this with `Pattern 1` from the mount-point section so
+end-users can submit without logging in but only admins can view.
+
+### FastAPI: OAuth2 / JWT bearer
+
+For consumers already running a token-based login flow (FastAPI's
+own `/token` endpoint, an external IdP, or a third-party SSO),
+FastAPI's standard `OAuth2PasswordBearer` recipe drops in unchanged.
+The full recipe is documented at
+<https://fastapi.tiangolo.com/tutorial/security/> — once you have
+`get_current_user`, gate the viewer with:
+
+```python
+from fastapi import APIRouter, Depends
+from .auth import get_current_user, require_admin_role
+
+admin = APIRouter(dependencies=[
+    Depends(get_current_user),
+    Depends(require_admin_role),
+])
+admin.include_router(viewer_router, prefix="/bug-reports")
+app.include_router(admin, prefix="/admin")
+```
+
+The two-dependency pattern keeps the "is logged in" check independent
+of the "is an admin" check — useful when the same JWT scope set
+covers multiple roles.
+
+### Flask: `flask-login`
+
+The same delegation pattern works under Flask. Wrap the blueprint
+with the standard `@login_required` decorator from
+[flask-login](https://flask-login.readthedocs.io/), then add a
+role check inside `before_request`:
+
+```python
+from flask_login import login_required, current_user
+from flask import abort
+
+@admin_bp.before_request
+@login_required
+def require_admin():
+    if not current_user.is_admin:
+        abort(403)
+
+register_bug_fab_viewer_routes(admin_bp, storage)
+app.register_blueprint(admin_bp, url_prefix="/admin/bug-reports")
+```
+
+### Django: `LoginRequiredMixin` + role check
+
+For the Django reusable app (`bug-fab[django]`), gate the viewer
+URLconf in your project's `urls.py` and apply the role check via the
+project's existing `UserPassesTestMixin`:
+
+```python
+# project/urls.py
+from django.contrib.auth.decorators import user_passes_test
+from django.urls import include, path
+
+def admin_required(user):
+    return user.is_authenticated and user.is_staff
+
+urlpatterns = [
+    path(
+        "admin/bug-reports/",
+        user_passes_test(admin_required, login_url="/login/")(
+            include("bug_fab.adapters.django.urls")
+        ),
+    ),
+]
+```
+
+This delegates to Django's existing auth machinery — no Bug-Fab-specific
+identity model. The `is_staff` check is appropriate for self-hosted
+single-tenant deployments; multi-tenant consumers should swap in a
+group or permission check that matches their model.
+
+### Across all recipes
+
+These are patterns, not Bug-Fab features. Two rules apply:
+
+- **Bug-Fab v0.1 cannot ask "who is logged in"** — the recipes above
+  protect *which* requests reach the routers. They do not feed the
+  identity back to Bug-Fab. Submitter attribution remains the
+  consumer's responsibility until `AuthAdapter` lands in v0.2.
+- **Test the gate before you trust it.** A missing `Depends(...)`
+  silently opens the viewer to the public internet. After wiring,
+  hit the viewer URL from an incognito window with no cookies — you
+  should get a 401 / 403, not the report list.
+
 ## Viewer permissions config
 
 Mount-point auth gates **whether the viewer is reachable**. The
@@ -254,6 +408,113 @@ The integration does not auto-create labels in v0.1. If you want
 severity-tagged issues, pre-create labels in your repo (`severity:low`,
 `severity:medium`, etc.) — Bug-Fab will apply them when present. A
 configurable label-mapping lands in v0.2.
+
+## Webhook delivery
+
+Opt-in generic webhook. When enabled, every successfully persisted
+bug report is best-effort `POST`ed as JSON to the URL you configure.
+The body is the same `BugReportDetail` shape `GET /reports/{id}`
+returns — id, title, severity, status, full context, lifecycle, and
+the `github_issue_url` when GitHub sync is also enabled.
+
+This is the universal escape hatch: pipe reports into Slack, Linear,
+Pushover, n8n, Zapier, an internal collector, a Kafka producer
+sidecar — anything that accepts a JSON POST. No code change to
+Bug-Fab; you just point it at a URL.
+
+### Enable
+
+```bash
+BUG_FAB_WEBHOOK_ENABLED=true
+BUG_FAB_WEBHOOK_URL=https://hooks.example.com/services/T0/B0/abcdef
+BUG_FAB_WEBHOOK_HEADERS='{"Authorization": "Bearer xyz", "X-Source": "bug-fab"}'
+BUG_FAB_WEBHOOK_TIMEOUT_SECONDS=5.0
+```
+
+Or in code:
+
+```python
+from bug_fab.config import Settings
+settings = Settings(
+    webhook_enabled=True,
+    webhook_url="https://hooks.example.com/services/T0/B0/abcdef",
+    webhook_headers={"Authorization": "Bearer xyz"},
+    webhook_timeout_seconds=5.0,
+)
+```
+
+`BUG_FAB_WEBHOOK_HEADERS` accepts two formats so it survives any
+shell / .env file's quoting quirks:
+
+- **JSON object** (recommended): `'{"Authorization": "Bearer xyz", "X-Foo": "bar"}'`
+- **Semicolon-separated pairs**: `Authorization=Bearer xyz;X-Foo=bar`
+
+A malformed headers value falls back to `{}` rather than crashing
+the process at startup.
+
+### Order of operations on intake
+
+For each successful submission, Bug-Fab runs:
+
+1. `storage.save_report(...)` — local persistence (always succeeds
+   or returns 500 to the client).
+2. GitHub Issues sync (when configured) — best-effort, populates
+   `github_issue_url` on the stored report.
+3. Webhook delivery (when configured) — best-effort, fires last so
+   the outbound payload includes `github_issue_url` when both
+   integrations are enabled.
+
+This ordering means a Slack notification or a Linear ticket can link
+directly to the GitHub issue without requiring a follow-up update.
+
+### Failure-doesn't-block guarantee
+
+The webhook follows the same hard contract the GitHub sync does:
+**a failed `POST` MUST NOT cause the intake response to be non-2xx.**
+Specifically, all of these soft-fail to a structured `WARNING` log
+line and leave the 201 response intact:
+
+- 4xx / 5xx response from the webhook receiver
+- TCP connect refused, DNS NXDOMAIN
+- Request timeout (default 5 seconds, configurable)
+- Any other `httpx.HTTPError`
+
+The submission is already persisted by the time the webhook fires;
+losing the notification is annoying, losing the report would be a
+bug. Bug-Fab is biased toward never losing the report.
+
+### Slack incoming webhook recipe
+
+Slack's incoming webhooks accept a JSON object — they don't require
+any of the rich `blocks` / `attachments` shaping. Bug-Fab posts the
+full `BugReportDetail` and Slack renders the `text`-equivalent fields
+verbatim. For a prettier card, run the JSON through n8n / Zapier /
+your own tiny relay and shape it into Slack's preferred
+[Block Kit format](https://api.slack.com/block-kit).
+
+```bash
+# 1. Create a Slack incoming webhook in your workspace's app settings.
+# 2. Copy the URL Slack gives you.
+# 3. Set Bug-Fab's webhook config:
+BUG_FAB_WEBHOOK_ENABLED=true
+BUG_FAB_WEBHOOK_URL=https://hooks.slack.com/services/T0/B0/abcdef
+```
+
+### When to skip the webhook and use the GitHub sync instead
+
+If your team already lives in GitHub Issues, the [GitHub Issues
+sync](#github-issues-sync) is the more polished path — it auto-
+formats the issue body, applies severity labels, and round-trips
+status changes back to the upstream issue. The webhook is the
+right tool when:
+
+- Your destination isn't GitHub (Linear, Jira, Slack, custom).
+- You want the raw payload to feed into a transformation /
+  notification pipeline you already run.
+- You need to fan out one report to many destinations — chain a
+  workflow tool (n8n, Zapier) behind the single webhook URL.
+
+Both can run side-by-side; turning one on doesn't disable the other.
 
 ## html2canvas vendoring
 
@@ -545,6 +806,110 @@ After deploying a CSP header, exercise the FAB end to end:
 A `Content-Security-Policy-Report-Only` header is a useful first
 step: ship it, exercise the FAB, watch the console for refusals,
 then promote to enforcing once it's quiet.
+
+## Upgrading between Bug-Fab versions
+
+Most version bumps are no-op for consumers — `pip install -U` and
+restart. This section covers the cases that aren't.
+
+### What auto-init covers (and what it doesn't)
+
+`SqlStorageBase.__init__` calls `Base.metadata.create_all(self.engine)`
+on every process start. This is **idempotent** — every CREATE TABLE
+is wrapped in `IF NOT EXISTS` semantics — so it's safe across
+restarts. It handles two cases automatically:
+
+- **Fresh install.** A consumer with no existing Bug-Fab database
+  gets the full v0.1 schema on first `submit.configure(storage=...)`
+  call. No `alembic upgrade head` step required.
+- **Identical schema.** A consumer who restarts after a Bug-Fab patch
+  release with no schema changes sees zero database churn.
+
+What auto-init does **not** do: add columns to existing tables, drop
+columns, change column types, or rename anything. `create_all` skips
+tables that already exist — it never alters them. When a Bug-Fab
+release adds a column to `bug_reports` (or any other tracked table),
+auto-init alone leaves your database one schema version behind. You
+need Alembic for that.
+
+### SQLite / Postgres: `alembic upgrade head`
+
+The package ships a complete Alembic environment at
+`bug_fab/storage/_alembic/`. From any consumer project, point the
+Alembic CLI at the bundled `alembic.ini`:
+
+```bash
+# Resolve the bundled alembic.ini path once
+ALEMBIC_INI=$(python -c "import bug_fab.storage._alembic, os; \
+  print(os.path.join(os.path.dirname(bug_fab.storage._alembic.__file__), 'alembic.ini'))")
+
+# SQLite
+alembic -c "$ALEMBIC_INI" -x url=sqlite:///./bug-fab.db upgrade head
+
+# Postgres
+alembic -c "$ALEMBIC_INI" -x url=postgresql+psycopg://user:pw@host/db upgrade head
+```
+
+The `-x url=...` argument overrides the default URL inside the
+`alembic.ini` and matches the same DSN you pass to
+`SQLiteStorage(db_path=...)` / `PostgresStorage(dsn=...)` at runtime.
+Alembic records its current revision in the `alembic_version` table —
+re-running `upgrade head` after a no-op release is a no-op.
+
+A more ergonomic CLI shipping as `python -m bug_fab.storage.migrate`
+is on the v0.2 roadmap. Today, the one-liner above is the supported
+path.
+
+### FileStorage: per-version `_migrate.py` script
+
+`FileStorage` writes one directory per report containing
+`metadata.json` + `screenshot.png`. There is no schema in the
+RDBMS sense — but there *is* a metadata-shape contract, and breaking
+changes to that shape need a migration.
+
+The pattern Bug-Fab will commit to from v0.2 onward: every release
+that mutates `metadata.json` ships a `_migrate_<from>_to_<to>.py`
+script under `bug_fab/storage/_file_migrations/`. Each script:
+
+1. Walks every `<storage_dir>/<report_id>/metadata.json`.
+2. Loads, transforms in-memory, writes atomically (temp-file +
+   rename) so an interrupted migration leaves the report
+   readable in either the old or new shape.
+3. Skips files already at the target version (idempotent).
+
+Run from the consumer project:
+
+```bash
+python -m bug_fab.storage.file_migrate \
+    --storage-dir ./bug_reports \
+    --target 0.2.0
+```
+
+v0.1 ships with no `_migrate.py` scripts because the metadata shape
+is what we're committing to. The first migration will land alongside
+whichever v0.2 change first mutates `metadata.json`.
+
+### Test a migration locally before deploying
+
+Whichever backend you use, the same dry-run pattern catches problems:
+
+1. **Snapshot the storage dir.** `cp -r ./bug-reports ./bug-reports.bak`
+   (and a SQL `pg_dump` / SQLite file copy for the metadata DB).
+2. **Run the migration against the snapshot.** Point the new
+   Bug-Fab version at the snapshot directory + restored DB on a
+   non-production host. `alembic upgrade head` runs in seconds; a
+   FileStorage `_migrate.py` walks every report once.
+3. **Smoke-test the viewer.** Hit `/admin/bug-reports`, open three
+   reports, exercise status changes. Anything that 500s is a
+   migration bug — file an issue with the migration script's stderr
+   and the affected report's metadata before applying to production.
+4. **Production cutover.** Stop the app, run the migration against
+   the live storage, restart. With idempotent migrations a brief
+   outage is the only cost; rollback is "restore the snapshot."
+
+A single Bug-Fab consumer can mix `FileStorage` for hobby
+deployments and `SQLiteStorage` for production — the dry-run pattern
+applies to both.
 
 ## Recommended baselines
 

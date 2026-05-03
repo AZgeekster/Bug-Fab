@@ -36,6 +36,7 @@ from bug_fab.routers.submit import (
     get_rate_limiter,
     get_settings,
     get_storage,
+    get_webhook_sync,
     submit_router,
 )
 from bug_fab.routers.viewer import viewer_router
@@ -203,15 +204,17 @@ def settings_factory() -> Callable[..., Settings]:
 def reset_router_module_state() -> Callable[[], None]:
     """Restore the submit-router's module-level singletons after a test.
 
-    The router stores ``_STORAGE``, ``_SETTINGS``, ``_GITHUB_SYNC``, and
-    ``_RATE_LIMITER`` at module scope. Tests that call ``configure(...)``
-    must reset them so unrelated tests do not inherit a leftover state.
+    The router stores ``_STORAGE``, ``_SETTINGS``, ``_GITHUB_SYNC``,
+    ``_WEBHOOK_SYNC``, and ``_RATE_LIMITER`` at module scope. Tests that
+    call ``configure(...)`` must reset them so unrelated tests do not
+    inherit a leftover state.
     """
 
     def _reset() -> None:
         submit_module._STORAGE = None
         submit_module._SETTINGS = None
         submit_module._GITHUB_SYNC = None
+        submit_module._WEBHOOK_SYNC = None
         submit_module._RATE_LIMITER = None
 
     return _reset
@@ -238,6 +241,7 @@ def app_factory(
         storage: Storage | None = None,
         settings: Settings | None = None,
         github_sync: Any = None,
+        webhook_sync: Any = None,
         rate_limiter: Any = None,
         viewer_prefix: str = "/viewer",
     ) -> TestClient:
@@ -254,6 +258,7 @@ def app_factory(
         app.dependency_overrides[get_storage] = lambda: chosen_storage
         app.dependency_overrides[get_settings] = lambda: chosen_settings
         app.dependency_overrides[get_github_sync] = lambda: github_sync
+        app.dependency_overrides[get_webhook_sync] = lambda: webhook_sync
         app.dependency_overrides[get_rate_limiter] = lambda: rate_limiter
         client = TestClient(app)
         # Stash the prefix so tests can read it back without threading the

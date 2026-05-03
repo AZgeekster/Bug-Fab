@@ -45,6 +45,17 @@ def _env_str(name: str, default: str) -> str:
     return raw
 
 
+def _env_float(name: str, default: float) -> float:
+    """Parse a float env var, falling back to the default on missing/invalid."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 def default_viewer_permissions() -> dict[str, bool]:
     """All-true viewer permissions (used both as default and as a fresh-copy source)."""
     return {"can_edit_status": True, "can_delete": True, "can_bulk": True}
@@ -72,6 +83,16 @@ class Settings:
     github_pat: str = ""
     github_repo: str = ""
     github_api_base: str = "https://api.github.com"
+    #: Generic webhook delivery — when ``webhook_enabled`` is true and
+    #: ``webhook_url`` is non-empty, every successfully persisted bug
+    #: report is best-effort POSTed to ``webhook_url`` as JSON. Failures
+    #: log at WARN and never block the intake response. See
+    #: ``bug_fab.integrations.webhook`` and
+    #: ``docs/DEPLOYMENT_OPTIONS.md`` § Webhook delivery for the recipe.
+    webhook_enabled: bool = False
+    webhook_url: str = ""
+    webhook_headers: dict[str, str] = field(default_factory=dict)
+    webhook_timeout_seconds: float = 5.0
     viewer_permissions: dict[str, bool] = field(default_factory=default_viewer_permissions)
     #: Optional per-request CSP nonce provider for the viewer's inline
     #: ``<script>`` blocks. When set, the viewer router calls this with
@@ -94,6 +115,11 @@ class Settings:
         larger config system need a deterministic override path that does
         not require unsetting global env vars.
         """
+        # Imported locally so a syntax/parse error in the webhook env
+        # var never breaks ``Settings.from_env`` for unrelated callers —
+        # the helper itself swallows malformed input and returns ``{}``.
+        from bug_fab.integrations.webhook import parse_headers_env
+
         values: dict[str, Any] = {
             "storage_dir": Path(_env_str("BUG_FAB_STORAGE_DIR", "./bug_reports")),
             "id_prefix": _env_str("BUG_FAB_ID_PREFIX", ""),
@@ -107,6 +133,10 @@ class Settings:
             "github_pat": _env_str("BUG_FAB_GITHUB_PAT", ""),
             "github_repo": _env_str("BUG_FAB_GITHUB_REPO", ""),
             "github_api_base": _env_str("BUG_FAB_GITHUB_API_BASE", "https://api.github.com"),
+            "webhook_enabled": _env_bool("BUG_FAB_WEBHOOK_ENABLED", False),
+            "webhook_url": _env_str("BUG_FAB_WEBHOOK_URL", ""),
+            "webhook_headers": parse_headers_env(os.environ.get("BUG_FAB_WEBHOOK_HEADERS")),
+            "webhook_timeout_seconds": _env_float("BUG_FAB_WEBHOOK_TIMEOUT_SECONDS", 5.0),
             "viewer_permissions": default_viewer_permissions(),
         }
         values.update(overrides)

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ page_title|default(app_name) }} — {{ app_name }}</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 720px; margin: 3rem auto; padding: 0 1.25rem; color: #212529; line-height: 1.55; }
+      header { border-bottom: 1px solid #dee2e6; padding-bottom: 1rem; margin-bottom: 2rem; display: flex; align-items: baseline; gap: 1rem; }
+      header h1 { margin: 0; font-size: 1.4rem; }
+      header nav a { color: #1971c2; text-decoration: none; margin-right: 1rem; }
+      header nav a:hover { text-decoration: underline; }
+      code { background: #f1f3f5; padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.9em; }
+      footer { margin-top: 3rem; color: #868e96; font-size: 0.85rem; border-top: 1px solid #dee2e6; padding-top: 1rem; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>{{ app_name }}</h1>
+      <nav>
+        <a href="/">Home</a>
+        <a href="/admin/bug-reports">Bug reports</a>
+      </nav>
+    </header>
+
+    <main>{% block content %}{% endblock %}</main>
+
+    <footer>{{ app_name }} — Bug-Fab Jinja + Docker example.</footer>
+
+    {# Bug-Fab bundle: one script tag for the bundle, one for init.
+       Rendering once in base.html means every page that extends this
+       template gets the FAB automatically. #}
+    <script src="/bug-fab/static/bug-fab.js" defer></script>
+    <script>
+      window.addEventListener("DOMContentLoaded", () => {
+        window.BugFab.init({
+          submitUrl: "/api/bug-reports",
+          appVersion: "0.0.1",
+          environment: "{{ environment|default('dev') }}",
+        });
+      });
+    </script>
+  </body>
+</html>

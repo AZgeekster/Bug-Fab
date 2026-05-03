@@ -261,6 +261,21 @@ def intake_view(request: HttpRequest) -> HttpResponse:
     except Exception:  # pragma: no cover - defensive
         logger.exception("bug_fab_django_github_sync_failed", extra={"report_id": report_id})
 
+    # Best-effort generic webhook delivery — fires AFTER GitHub sync so
+    # ``github_issue_url`` (when present) rides along in the payload.
+    # The webhook module is imported lazily so consumers who never
+    # configure ``BUG_FAB_WEBHOOK_URL`` don't pay an import cost.
+    if detail is not None:
+        try:
+            from .webhook_sync import send as _send_webhook
+
+            payload = detail.model_dump(mode="json")
+            if github_issue_url is not None:
+                payload["github_issue_url"] = github_issue_url
+            _send_webhook(payload)
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("bug_fab_django_webhook_sync_failed", extra={"report_id": report_id})
+
     return JsonResponse(
         {
             "id": report_id,

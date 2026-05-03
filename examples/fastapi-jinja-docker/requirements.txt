@@ -1,0 +1,6 @@
+# Replace <sha> with a 7+ character commit SHA from the main branch:
+#   https://github.com/AZgeekster/Bug-Fab/commits/main
+# See docs/INSTALLATION.md § "Pre-release vs final" for why pinning matters.
+bug-fab[sqlite] @ git+https://github.com/AZgeekster/Bug-Fab.git@<sha>
+uvicorn[standard]
+jinja2

@@ -1,0 +1,33 @@
+# Bug-Fab Jinja + Docker example.
+# Run with:  docker compose up --build
+# Stop with: docker compose down
+#
+# The single ``app`` service mounts ./data as a volume so the SQLite
+# database and screenshot directory survive container rebuilds.
+
+services:
+  app:
+    build: .
+    image: bug-fab-jinja-example:latest
+    container_name: bug-fab-jinja-example
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist reports + screenshots on the host so ``docker compose
+      # down && up`` does not wipe state. Path is relative to this
+      # compose file.
+      - ./data:/data
+    environment:
+      BUG_FAB_DATA_DIR: /data
+      # Uncomment to enable per-IP rate limiting (recommended for any
+      # public-facing deployment — see DEPLOYMENT_OPTIONS.md).
+      # BUG_FAB_RATE_LIMIT_ENABLED: "true"
+      # BUG_FAB_RATE_LIMIT_MAX: "50"
+      # BUG_FAB_RATE_LIMIT_WINDOW_SECONDS: "3600"
+      #
+      # Uncomment to enable GitHub Issues sync (best-effort; failures
+      # never block submission).
+      # BUG_FAB_GITHUB_ENABLED: "true"
+      # BUG_FAB_GITHUB_PAT: "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      # BUG_FAB_GITHUB_REPO: "your-org/your-repo"

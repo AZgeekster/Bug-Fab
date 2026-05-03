@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2>{{ page_title }}</h2>
+  <p>This is a stand-in home page for a real templated FastAPI app. The
+  Bug-Fab floating action button (the small bug icon in the
+  bottom-right corner) is rendered by a single
+  <code>&lt;script&gt;</code> tag in <code>base.html</code> and shows
+  up on every page that extends the base template.</p>
+
+  <p>To file a report:</p>
+  <ol>
+    <li>Click the bug icon.</li>
+    <li>Optionally draw on the captured screenshot.</li>
+    <li>Type a title (and an optional description / severity).</li>
+    <li>Submit.</li>
+  </ol>
+
+  <p>The report is stored in SQLite at <code>./data/bug-fab.db</code>
+  with the screenshot PNG written to
+  <code>./data/screenshots/</code>. Browse submitted reports at
+  <a href="/admin/bug-reports">/admin/bug-reports</a>.</p>
+
+  <p>This example is deliberately minimal — for production, see
+  <code>DEPLOYMENT_OPTIONS.md</code> in the Bug-Fab repo for the
+  auth, rate-limit, and CSP checklists.</p>
+{% endblock %}

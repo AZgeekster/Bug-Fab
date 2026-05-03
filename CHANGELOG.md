@@ -13,6 +13,54 @@ out explicitly in each release entry.
 
 ### Added
 
+- Generic webhook delivery — `bug_fab.integrations.webhook.WebhookSync`
+  (FastAPI / Flask) plus `bug_fab.adapters.django.webhook_sync.send`
+  (Django sync flavor) best-effort `POST`s every successfully persisted
+  bug report as JSON to a consumer-configured URL. Targets Slack
+  incoming-webhooks, Linear project webhooks, Pushover, n8n / Zapier
+  triggers, custom collectors — anything that accepts a JSON body.
+  Configurable via four `BUG_FAB_WEBHOOK_*` settings (enabled, URL,
+  headers, timeout); `BUG_FAB_WEBHOOK_HEADERS` accepts both JSON-object
+  and `key=value;key2=value2` formats. Wired into all three adapters
+  after the GitHub Issues sync so any populated `github_issue_url`
+  rides along in the outbound payload. Same failure-tolerance
+  contract as the GitHub sync — non-2xx responses, timeouts, and
+  transport errors all log at `WARNING` and never block the intake
+  201 response. 30 new tests covering happy path, headers, all three
+  failure modes, off-by-default behavior, and adapter wiring across
+  FastAPI / Flask / Django. See `docs/DEPLOYMENT_OPTIONS.md` §
+  "Webhook delivery" for the full recipe.
+- Configurable FAB position. `BugFab.init({ position })` accepts one of
+  `"bottom-right"` (default, back-compat), `"bottom-left"`, `"top-right"`,
+  `"top-left"`, or a free-form `{ top, bottom, left, right }` object.
+  Resolves into inline styles at FAB-element creation time so callers can
+  drop the FAB anywhere on the viewport without overriding the bundle's
+  CSS. (FAB UX TH-5.)
+- Anchor-to-element mode for the FAB. New init options `stackAbove`,
+  `stackBelow`, `stackLeft`, `stackRight` accept a CSS selector or an
+  `HTMLElement` and position the FAB adjacent to that anchor with a
+  configurable `gap` (default 12px). The position is recomputed on
+  `window.resize`, when an `IntersectionObserver` fires for the anchor,
+  and when a `MutationObserver` sees `class`/`style` changes on the
+  anchor — so theme switches and layout reflows do not strand the FAB.
+  Falls back to the configured `position` (and logs a console warning)
+  when the anchor selector does not resolve. (FAB UX TH-6.)
+- Public `BugFab.disable()` and `BugFab.enable()` runtime API. `disable()`
+  hides the FAB (toggles a `bug-fab--hidden` class) and closes the
+  overlay if it was mid-edit; `enable()` re-shows the FAB and lazily
+  creates it when init() ran while disabled. The bundle's own `<script>`
+  tag also honors `data-bug-fab-disabled="true"` so non-JS templates can
+  flip the kill-switch without rebuilding the init config. The
+  `enabled` init option is now documented to accept boolean OR
+  `() => boolean`. (FAB UX TH-7.)
+- Per-report category dropdown. When `BugFab.init({ categories: [...] })`
+  is set, the report form renders a `<select>` between the title and
+  description fields with the supplied options, labeled per
+  `categoryLabel` (default `"Category"`). The chosen value is prepended
+  to the existing `tags` array on submit, riding the wire protocol's
+  existing `tags: string[]` field — no protocol change. When
+  `categories` is unset (default), the form looks identical to today.
+  (FAB UX TH-15.)
 - First-party Flask adapter at `bug_fab.adapters.flask.make_blueprint(settings)`.
   Returns a Flask Blueprint exposing the full v0.1 wire protocol (all 8
   endpoints + HTML viewer + static bundle). Install with
@@ -41,6 +89,29 @@ out explicitly in each release entry.
   `script-src`) without forking the package. See
   [`docs/CSP.md`](docs/CSP.md) for the FastAPI middleware recipe.
   Default is `None`, preserving existing rendering behavior.
+- `docs/DEPLOYMENT_OPTIONS.md` § "Upgrading between Bug-Fab versions"
+  — recipe for running the bundled `bug_fab/storage/_alembic/`
+  migrations from a consumer project, plus the design for per-version
+  `_migrate.py` scripts under `FileStorage` (committed for v0.2). A
+  consumer-input audit on 2026-05-03 surfaced the absence of this as
+  a v1.0 must-have. (TH-10.)
+- `docs/DEPLOYMENT_OPTIONS.md` § "Auth recipes" — copy-paste-able
+  snippets for HTTP Basic, cookie-session, and OAuth2 / JWT bearer
+  (all FastAPI), plus pointers to `flask-login` and Django
+  `LoginRequiredMixin` for the other framework adapters. Recipes,
+  not new code — they wire into the existing mount-point auth
+  pattern. (TH-17.)
+- `examples/fastapi-jinja-docker/` — richer reference example with
+  Jinja2 templates, `SQLiteStorage`, multi-stage `Dockerfile`, and a
+  `docker-compose.yml` mounting `./data` for persistence. The
+  `<script>` tag lives in `base.html` so every page extending the
+  base template gets the FAB. (TH-18.)
+- `INTEGRATION_AGENTS.md` (sibling of `AGENTS.md`) tailored to AI
+  coding sessions adding Bug-Fab to a host FastAPI / Flask / Django
+  app. TL;DR + required-reading list + the four 2026-05-03 audit
+  findings as a "things you'd hit if you skipped the docs" reference
+  + standard wiring snippet + scope-check prompt for the user.
+  (TH-19.)
 
 ### Changed
 

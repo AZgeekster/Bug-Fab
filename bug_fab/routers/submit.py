@@ -33,6 +33,7 @@ from pydantic import ValidationError
 from bug_fab._rate_limit import RateLimiter
 from bug_fab.config import Settings
 from bug_fab.integrations.github import GitHubSync
+from bug_fab.integrations.webhook import WebhookSync
 from bug_fab.schemas import BugReportCreate, BugReportIntakeResponse
 from bug_fab.storage.base import Storage
 
@@ -53,6 +54,7 @@ _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _STORAGE: Storage | None = None
 _SETTINGS: Settings | None = None
 _GITHUB_SYNC: GitHubSync | None = None
+_WEBHOOK_SYNC: WebhookSync | None = None
 _RATE_LIMITER: RateLimiter | None = None
 
 
@@ -61,15 +63,18 @@ def configure(
     storage: Storage,
     settings: Settings | None = None,
     github_sync: GitHubSync | None = None,
+    webhook_sync: WebhookSync | None = None,
 ) -> None:
     """Wire the router with a storage backend and (optionally) overrides.
 
     Consumers call this once during application startup. The ``settings``
     argument defaults to ``Settings.from_env()``; ``github_sync`` defaults
     to ``None`` (sync disabled) and is built automatically from settings
-    when ``settings.github_enabled`` is true.
+    when ``settings.github_enabled`` is true. ``webhook_sync`` follows the
+    same shape — explicit instance wins, otherwise built from
+    ``settings.webhook_enabled`` + ``settings.webhook_url``.
     """
-    global _STORAGE, _SETTINGS, _GITHUB_SYNC, _RATE_LIMITER
+    global _STORAGE, _SETTINGS, _GITHUB_SYNC, _WEBHOOK_SYNC, _RATE_LIMITER
     _STORAGE = storage
     _SETTINGS = settings or Settings.from_env()
     if (
@@ -84,6 +89,13 @@ def configure(
             api_base=_SETTINGS.github_api_base,
         )
     _GITHUB_SYNC = github_sync
+    if webhook_sync is None and _SETTINGS.webhook_enabled and _SETTINGS.webhook_url:
+        webhook_sync = WebhookSync(
+            _SETTINGS.webhook_url,
+            headers=_SETTINGS.webhook_headers,
+            timeout_seconds=_SETTINGS.webhook_timeout_seconds,
+        )
+    _WEBHOOK_SYNC = webhook_sync
     _RATE_LIMITER = RateLimiter(
         max_per_window=_SETTINGS.rate_limit_max,
         window_seconds=_SETTINGS.rate_limit_window_seconds,
@@ -117,6 +129,11 @@ def get_settings() -> Settings:
 def get_github_sync() -> GitHubSync | None:
     """Dependency: return the GitHub sync client (or None when disabled)."""
     return _GITHUB_SYNC
+
+
+def get_webhook_sync() -> WebhookSync | None:
+    """Dependency: return the generic webhook client (or None when disabled)."""
+    return _WEBHOOK_SYNC
 
 
 def get_rate_limiter() -> RateLimiter | None:
@@ -161,6 +178,7 @@ async def submit_bug_report(
     storage: Storage = Depends(get_storage),
     settings: Settings = Depends(get_settings),
     github_sync: GitHubSync | None = Depends(get_github_sync),
+    webhook_sync: WebhookSync | None = Depends(get_webhook_sync),
     limiter: RateLimiter | None = Depends(get_rate_limiter),
 ) -> BugReportIntakeResponse:
     """Persist a new bug report and return its full detail payload."""
@@ -228,7 +246,10 @@ async def submit_bug_report(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("bug_fab_storage_save_failed")
+        logger.exception(
+            "bug_fab_storage_save_failed",
+            extra={"event": "storage_save_failed"},
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to persist bug report",
@@ -253,6 +274,20 @@ async def submit_bug_report(
                 await storage.set_github_link(report_id, issue_number, issue_url)
         except Exception:  # pragma: no cover - defensive
             logger.exception("bug_fab_github_sync_failed", extra={"report_id": report_id})
+
+    # Generic webhook delivery — fires AFTER GitHub sync so the payload
+    # includes ``github_issue_url`` when both integrations are enabled.
+    # Same best-effort contract: a failed POST is logged at WARN and
+    # never blocks the intake response. Designed for Slack incoming-
+    # webhooks, Linear project webhooks, n8n triggers, etc.
+    if webhook_sync is not None:
+        try:
+            payload = detail.model_dump(mode="json")
+            if github_issue_url is not None:
+                payload["github_issue_url"] = github_issue_url
+            await webhook_sync.send(payload)
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("bug_fab_webhook_sync_failed", extra={"report_id": report_id})
 
     # Per PROTOCOL.md § Response — minimal envelope, NOT the full BugReportDetail.
     # `stored_at` is an opaque diagnostic string; consumers wanting the full
