@@ -212,35 +212,35 @@ Real but smaller user bases or growing-mainstream stacks. Sketches welcome; main
 
 | Field | Value |
 |---|---|
-| Stack | ASP.NET Core ≥ 8 |
-| Status | 🟡 sketch |
+| Stack | ASP.NET Core ≥ 8, EF Core 8 |
+| Status | 🟡 draft (build-clean, not yet promoted) |
 | Tier | 2 |
-| Package | (sketch) |
-| Repository | — |
+| Package | (private draft) |
+| Repository | private `notes/adapter_drafts/aspnet/` (not yet promoted to a public repo) |
 | Language | C# |
 | Tracks Bug-Fab | v0.1 |
-| Conformance | untested |
+| Conformance | ⚠️ build-clean as of 2026-05-04 (`dotnet build` returns 0 errors); EF migration regenerated via `dotnet ef migrations add Initial`; conformance suite not yet run against a live `dotnet run` server |
 | Reference doc | [`docs/ADAPTERS.md#aspnet-core--razor-pages-net-8`](./ADAPTERS.md#aspnet-core--razor-pages-net-8) |
-| Last updated | 2026-04-29 |
-| Maintainer | (none) |
-| Notes | EF Core entities included in sketch; SQL Server / Postgres compatible. |
+| Last updated | 2026-05-04 |
+| Maintainer | (none — private draft) |
+| Notes | Minimal API endpoints (not `[ApiController]`), provider-portable identity ID generation (`ValueGeneratedOnAdd`), `Microsoft.AspNetCore.RateLimiting` wired for intake, prefix-aware Razor views via named routes, `EnableAntiforgeryOnViewer` flag declared (v0.2 wiring). 1500+ LOC C# across the engine + tests. Promotion path: move to `repo/adapters/aspnet/` or sibling repo, run `pytest --bug-fab-conformance` against a live server, publish to NuGet. |
 
 ### Ruby on Rails
 
 | Field | Value |
 |---|---|
-| Stack | Rails ≥ 7 |
-| Status | ⚪ wanted |
+| Stack | Rails ≥ 7.1, Ruby ≥ 3.2 |
+| Status | 🟡 draft (test-suite-green, not yet promoted) |
 | Tier | 2 |
-| Package | (none) |
-| Repository | — |
+| Package | (private draft) |
+| Repository | private `notes/adapter_drafts/rails/` (not yet promoted to a public repo / RubyGems) |
 | Language | Ruby |
 | Tracks Bug-Fab | v0.1 |
-| Conformance | n/a |
-| Reference doc | (TBD) |
-| Last updated | 2026-04-30 |
-| Maintainer | (none) |
-| Notes | Large Ruby ecosystem; a `bug_fab-rails` gem would ship as a mountable engine. |
+| Conformance | ✅ 22/22 in-repo tests pass on Ruby 3.3 + Rails 7.1.6 (verified 2026-05-04 via `docker run --rm ruby:3.3 bundle exec rake test`); `pytest --bug-fab-conformance` against a live `bin/rails server` not yet run |
+| Reference doc | [`docs/ADAPTERS.md` § Rails](./ADAPTERS.md) — and the in-draft `README.md` |
+| Last updated | 2026-05-04 |
+| Maintainer | (none — private draft) |
+| Notes | Mountable Rails Engine. ActiveRecord models mirror the Python `BugReportORM` schema (with `module → module_name` rename to avoid Ruby's `Module` constant clash). Test harness uses the canonical `rails plugin new --mountable --dummy-path=test/dummy` scaffold (an earlier inline `TestApplication` pattern double-evaluated engine routes; replaced 2026-05-04). Promotion path: move to `repo/adapters/rails/` or sibling `bug_fab-rails` repo, run upstream conformance, publish to RubyGems. |
 
 ---
 
