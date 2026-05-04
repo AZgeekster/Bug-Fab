@@ -312,6 +312,116 @@ In production, prefer serving the bundle from your own CDN /
 collected-static directory instead of through `bundle_view`. See
 `examples/django-minimal/` for a complete reference consumer.
 
+## ASP.NET Core consumer
+
+Bug-Fab ships a first-party ASP.NET Core adapter under
+`repo/adapters/aspnet/`. It targets `net8.0` and EF Core 8, exposes
+all eight wire-protocol endpoints as Minimal API routes, and ships
+prefix-aware Razor views for the HTML viewer pages. Tested against
+the InMemory provider in CI; runs against SQL Server / PostgreSQL /
+SQLite in production via the standard EF Core providers.
+
+### 1. Install
+
+The adapter is not yet on NuGet — first publish is gated on a real
+consumer integration ask. While you wait, pin the source one of two
+ways:
+
+```xml
+<!-- In your consumer's .csproj — adjust the relative path to match your layout. -->
+<ItemGroup>
+  <ProjectReference Include="..\..\Bug-Fab\repo\adapters\aspnet\src\BugFab.AspNetCore\BugFab.AspNetCore.csproj" />
+</ItemGroup>
+```
+
+Or vendor via git submodule:
+
+```bash
+git submodule add https://github.com/AZgeekster/Bug-Fab.git vendor/bug-fab
+dotnet add reference vendor/bug-fab/repo/adapters/aspnet/src/BugFab.AspNetCore/BugFab.AspNetCore.csproj
+```
+
+When NuGet publish lands, the install will collapse to a single
+`dotnet add package BugFab.AspNetCore`.
+
+### 2. Configure options
+
+Drop a `BugFab` section into your `appsettings.json`. Every value has
+a sensible default — only `RoutePrefix` is strictly required (it must
+be non-empty; the HTML list mounts at the prefix root).
+
+```json
+{
+  "BugFab": {
+    "RoutePrefix": "/bug-fab",
+    "StorageDirectory": "./var/bug-fab",
+    "MaxScreenshotBytes": 10485760,
+    "UseEfCoreStorage": true,
+    "GitHub": { "Enabled": false },
+    "RateLimit": { "Enabled": true, "MaxPerWindow": 60, "WindowSeconds": 60 }
+  }
+}
+```
+
+### 3. Wire DI + the EF Core context + endpoints
+
+Two extension methods do all the work — `AddBugFab(...)` for DI and
+`UseBugFab()` for endpoint mounting. Register a `BugFabDbContext`
+against your provider of choice (SQL Server, PostgreSQL, SQLite, or
+the InMemory provider for tests):
+
+```csharp
+using BugFab.AspNetCore;
+using BugFab.AspNetCore.Data;
+using Microsoft.EntityFrameworkCore;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddBugFab(builder.Configuration);
+
+builder.Services.AddDbContext<BugFabDbContext>(opts =>
+    opts.UseSqlite("Data Source=bug-fab.db"));
+
+var app = builder.Build();
+
+// Apply migrations on startup. In production prefer `dotnet ef database update`.
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<BugFabDbContext>();
+    db.Database.EnsureCreated();
+}
+
+app.UseBugFab();
+
+app.Run();
+```
+
+For headless deployments (no HTML viewer, JSON API only), call
+`app.MapBugFabApi()` instead of `app.UseBugFab()`. The route group
+returned by `UseBugFab()` exposes separate intake and viewer route
+groups so you can apply different authorization policies — e.g.
+open intake, `RequireAuthorization()` on the viewer.
+
+### 4. Add the FAB to your views
+
+The adapter's static assets ship under
+`src/BugFab.AspNetCore/wwwroot/bug_fab/`. Reference the bundle from
+your Razor layout:
+
+```html
+@* _Layout.cshtml *@
+<script src="~/bug_fab/bug-fab.js" defer></script>
+<script>
+  window.BugFab.init({
+    endpoint: "/bug-fab/bug-reports",
+    appName: "@(builder.Environment.ApplicationName)",
+  });
+</script>
+```
+
+See `repo/adapters/aspnet/examples/MinimalApi/` for a runnable
+reference consumer (~15 lines of glue plus the SQLite wiring).
+
 ## React / SPA consumer
 
 If your frontend is a build-pipeline SPA (React, SvelteKit, Vue, etc.)

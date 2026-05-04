@@ -13,6 +13,34 @@ out explicitly in each release entry.
 
 ### Added
 
+- ASP.NET Core / Razor Pages first-party adapter under
+  `repo/adapters/aspnet/`. Promotes the previously private
+  `notes/adapter_drafts/aspnet/` draft to a maintained reference adapter
+  in the public repo. Targets `net8.0` / EF Core 8. Surface area:
+  Minimal API endpoints for all eight wire-protocol routes
+  (`POST /bug-reports`, `GET /reports`, `GET /reports/{id}`,
+  `GET /reports/{id}/screenshot`, `PUT /reports/{id}/status`,
+  `DELETE /reports/{id}`, `POST /bulk-close-fixed`,
+  `POST /bulk-archive-closed`); EF Core-backed storage with
+  provider-portable identity ID generation that works across SQL
+  Server, PostgreSQL, SQLite, and the InMemory test provider; a
+  filesystem fallback storage; `Microsoft.AspNetCore.RateLimiting`
+  wired on intake with the protocol's
+  `{error, detail, retry_after_seconds}` envelope on rejection;
+  prefix-aware Razor views (HTML list + detail); GitHub Issues sync
+  on intake. Initial EF migration committed under
+  `Data/Migrations/`. Two extension methods: `AddBugFab(configuration,
+  configure)` for DI registration and `UseBugFab()` for endpoint
+  mounting; `MapBugFabApi()` skips the HTML viewer for headless
+  deployments. xUnit suite covers intake (validation, magic bytes,
+  size limit, rate limit, protocol version), viewer (list /
+  detail / status update / delete), and bulk operations —
+  `dotnet test` reports 18/18 passing on `dotnet 8.0.420`. Install
+  path while NuGet publish is gated on a real consumer integration
+  ask: pin the source via a `csproj` `<ProjectReference>` or
+  `git submodule` against `repo/adapters/aspnet/src/BugFab.AspNetCore/`.
+  See `repo/docs/INSTALLATION.md` § "ASP.NET Core consumer" for the
+  wiring snippet and the FAB script tag.
 - Annotation tools: rectangle, arrow, blur, text label. The screenshot
   canvas in the report overlay now ships a small tool palette above the
   image with the existing free-draw + eraser plus four new tools:

@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore BugFab.AspNetCore.sln
+
+      - name: Build
+        run: dotnet build BugFab.AspNetCore.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test BugFab.AspNetCore.sln --configuration Release --no-build --verbosity normal
+
+      - name: Pack
+        run: dotnet pack src/BugFab.AspNetCore/BugFab.AspNetCore.csproj --configuration Release --no-build --output ./artifacts
+
+      - name: Upload NuGet artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bugfab-aspnetcore-nupkg
+          path: ./artifacts/*.nupkg
+
+  conformance:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install bug-fab conformance plugin
+        run: pip install --pre bug-fab
+
+      - name: Launch example app in background
+        run: |
+          dotnet run --project examples/MinimalApi --configuration Release &
+          for i in {1..30}; do
+            curl -sf http://localhost:5000/bug-fab/reports && break
+            sleep 1
+          done
+
+      - name: Run upstream conformance suite
+        run: pytest --bug-fab-conformance --base-url=http://localhost:5000/bug-fab
+        continue-on-error: true   # draft is sketch-status; promote once green

@@ -103,3 +103,9 @@ bug_reports/
 
 # Django example's MEDIA_ROOT — populated at runtime; never tracked.
 examples/django-minimal/media/
+
+# --- .NET build artifacts (ASP.NET adapter) ---
+adapters/aspnet/**/bin/
+adapters/aspnet/**/obj/
+adapters/aspnet/.vs/
+*.user

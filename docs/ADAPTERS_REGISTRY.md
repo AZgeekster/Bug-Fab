@@ -213,17 +213,17 @@ Real but smaller user bases or growing-mainstream stacks. Sketches welcome; main
 | Field | Value |
 |---|---|
 | Stack | ASP.NET Core ≥ 8, EF Core 8 |
-| Status | 🟡 draft (build-clean, not yet promoted) |
+| Status | 🟢 reference (first-party adapter) |
 | Tier | 2 |
-| Package | (private draft) |
-| Repository | private `notes/adapter_drafts/aspnet/` (not yet promoted to a public repo) |
+| Package | (unpublished — in-repo source under `repo/adapters/aspnet/`; NuGet publish gated on first real consumer integration ask) |
+| Repository | `repo/adapters/aspnet/` (this repo) |
 | Language | C# |
 | Tracks Bug-Fab | v0.1 |
-| Conformance | ⚠️ build-clean as of 2026-05-04 (`dotnet build` returns 0 errors); EF migration regenerated via `dotnet ef migrations add Initial`; conformance suite not yet run against a live `dotnet run` server |
-| Reference doc | [`docs/ADAPTERS.md#aspnet-core--razor-pages-net-8`](./ADAPTERS.md#aspnet-core--razor-pages-net-8) |
+| Conformance | ✅ in-repo xUnit suite green — `dotnet test` returns 18/18 passing (verified 2026-05-04); cross-stack `pytest --bug-fab-conformance --base-url=http://127.0.0.1:5000/bug-fab` against a live `dotnet run` server still pending (requires booting both processes; tracked as next milestone) |
+| Reference doc | [`docs/ADAPTERS.md#aspnet-core--razor-pages-net-8`](./ADAPTERS.md#aspnet-core--razor-pages-net-8) + `repo/adapters/aspnet/README.md` |
 | Last updated | 2026-05-04 |
-| Maintainer | (none — private draft) |
-| Notes | Minimal API endpoints (not `[ApiController]`), provider-portable identity ID generation (`ValueGeneratedOnAdd`), `Microsoft.AspNetCore.RateLimiting` wired for intake, prefix-aware Razor views via named routes, `EnableAntiforgeryOnViewer` flag declared (v0.2 wiring). 1500+ LOC C# across the engine + tests. Promotion path: move to `repo/adapters/aspnet/` or sibling repo, run `pytest --bug-fab-conformance` against a live server, publish to NuGet. |
+| Maintainer | Bug-Fab core (AZgeekster) |
+| Notes | Minimal API endpoints (not `[ApiController]`), provider-portable identity ID generation (`ValueGeneratedOnAdd` + `MAX(IdSequence)+1` fallback for InMemory), `Microsoft.AspNetCore.RateLimiting` wired for intake with the protocol's `{error, detail, retry_after_seconds}` envelope on rejection, prefix-aware Razor views via named routes, `EnableAntiforgeryOnViewer` flag declared (v0.2 wiring). 1500+ LOC C# across the engine + tests. Initial EF migration committed under `Data/Migrations/`. Next milestone: live cross-stack `pytest --bug-fab-conformance` run + NuGet package publish. |
 
 ### Ruby on Rails
 

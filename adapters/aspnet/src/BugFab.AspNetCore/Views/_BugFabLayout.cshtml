@@ -1,0 +1,54 @@
+@*
+    Optional Razor layout for consumers wiring the Bug-Fab viewer through MVC
+    instead of the inline-HTML endpoints in `ViewerHtmlEndpoints.cs`.
+
+    Default deployment: `BugFab.AspNetCore` ships its own self-contained HTML
+    via Minimal API endpoints, so MVC view-rendering services are NOT required.
+    These cshtml files exist for two cases:
+
+    1. Consumers already running MVC who want to apply their own _Layout.cshtml
+       (corporate header, custom navigation, theming).
+    2. Consumers who want pixel-parity with the upstream Python reference's
+       Jinja2 templates (`bug_fab/templates/_base.html`, `list.html`,
+       `detail.html`) — port the markup verbatim into these files.
+
+    Wire-up (consumer's Program.cs):
+
+        builder.Services.AddRazorPages();
+        // ... AddBugFab(...) ...
+
+    Then call `app.MapBugFabApi()` to skip the inline HTML endpoints, and
+    register your own `app.MapGet("/bug-fab/", ...)` returning a Razor view
+    that uses these layouts.
+
+    See the full upstream templates at:
+    https://github.com/AZgeekster/Bug-Fab/tree/main/bug_fab/templates
+
+    Path conventions in this layout:
+    - `~/bug_fab/bug-fab.css` and `~/bug_fab/bug-fab.js` resolve against
+      `wwwroot/bug_fab/`, the static-file directory the package vendors —
+      this path is fixed and is NOT the same as `BugFabOptions.RoutePrefix`.
+    - The home `<a href="...">` links to the host application's root, not
+      the Bug-Fab mount. Use `@Url.RouteUrl("BugFab_HtmlList")` from a
+      child view if you want to link to the list root under any prefix.
+    - Child views use `@Url.RouteUrl("BugFab_*", ...)` instead of hard-coded
+      `~/bug-fab/` paths so the layout works under any mount prefix.
+*@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@ViewBag.Title — Bug-Fab</title>
+    <link rel="stylesheet" href="~/bug_fab/bug-fab.css" />
+</head>
+<body>
+    <header class="bug-fab-header">
+        <h1><a href="@Url.Content("~/")">Bug-Fab</a></h1>
+    </header>
+    <main class="bug-fab-viewer">
+        @RenderBody()
+    </main>
+    <script src="~/bug_fab/bug-fab.js" defer></script>
+</body>
+</html>

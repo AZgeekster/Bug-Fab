@@ -1,0 +1,61 @@
+@*
+    Optional Razor detail view. See _BugFabLayout.cshtml for the wire-up notes.
+
+    The full upstream Jinja2 detail page is at:
+    https://github.com/AZgeekster/Bug-Fab/blob/main/bug_fab/templates/detail.html
+*@
+@model BugFab.AspNetCore.Storage.StoredReport
+@{
+    ViewBag.Title = $"{Model.Id} — {Model.Title}";
+    Layout = "_BugFabLayout";
+}
+
+<p><a href="@(Url.RouteUrl("BugFab_HtmlList") ?? "./")">&larr; Back to list</a></p>
+
+<h2>@Model.Id: @Model.Title</h2>
+
+<dl class="meta">
+    <dt>Status</dt><dd><span class="status status-@Model.Status">@Model.Status</span></dd>
+    <dt>Severity</dt><dd><span class="severity severity-@Model.Severity">@Model.Severity</span></dd>
+    <dt>Report type</dt><dd>@Model.ReportType</dd>
+    <dt>Module</dt><dd>@Model.Module</dd>
+    <dt>Environment</dt><dd>@Model.Environment</dd>
+    <dt>Created</dt><dd>@Model.CreatedAt</dd>
+    <dt>Updated</dt><dd>@Model.UpdatedAt</dd>
+    <dt>Protocol version</dt><dd>@Model.ProtocolVersion</dd>
+    @if (!string.IsNullOrEmpty(Model.GitHubIssueUrl))
+    {
+        <dt>GitHub issue</dt>
+        <dd><a href="@Model.GitHubIssueUrl">@Model.GitHubIssueUrl</a></dd>
+    }
+</dl>
+
+@if (!string.IsNullOrEmpty(Model.Description))
+{
+    <h3>Description</h3>
+    <p>@Model.Description</p>
+}
+
+@if (!string.IsNullOrEmpty(Model.ExpectedBehavior))
+{
+    <h3>Expected behavior</h3>
+    <p>@Model.ExpectedBehavior</p>
+}
+
+@if (Model.HasScreenshot)
+{
+    <h3>Screenshot</h3>
+    <img src="@(Url.RouteUrl("BugFab_Screenshot", new { id = Model.Id }) ?? $"./reports/{Model.Id}/screenshot")" alt="Screenshot" style="max-width:100%" />
+}
+
+<h3>Lifecycle</h3>
+<ol class="lifecycle">
+    @foreach (var entry in Model.Lifecycle)
+    {
+        <li>
+            <strong>@entry["action"]?.GetValue<string>()</strong>
+            by @entry["by"]?.GetValue<string>()
+            at @entry["at"]?.GetValue<string>()
+        </li>
+    }
+</ol>

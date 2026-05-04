@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <!-- NuGet metadata -->
+    <PackageId>BugFab.AspNetCore</PackageId>
+    <Version>0.1.0-alpha.1</Version>
+    <Authors>Bug-Fab contributors</Authors>
+    <Description>ASP.NET Core 8 adapter for the Bug-Fab v0.1 wire protocol. Drop-in bug-reporting tool for ASP.NET Core apps.</Description>
+    <PackageTags>bug-report;bug-fab;aspnetcore;efcore;diagnostics</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/AZgeekster/Bug-Fab</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/AZgeekster/Bug-Fab</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.10" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="8.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="wwwroot\**\*" Pack="true" PackagePath="contentFiles\any\any\wwwroot\" />
+    <None Include="Views\**\*" Pack="true" PackagePath="contentFiles\any\any\Views\" />
+  </ItemGroup>
+
+</Project>
