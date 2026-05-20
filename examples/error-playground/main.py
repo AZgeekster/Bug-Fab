@@ -15,6 +15,8 @@ Fly.io with a mounted volume, or on a Hugging Face Space.
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import os
 from pathlib import Path
 
@@ -25,6 +27,8 @@ from fastapi.staticfiles import StaticFiles
 import bug_fab
 from bug_fab.routers import submit, viewer
 
+logger = logging.getLogger("bug_fab.playground")
+
 STORAGE_DIR = Path(
     os.environ.get(
         "BUG_FAB_STORAGE_DIR",
@@ -33,12 +37,149 @@ STORAGE_DIR = Path(
 )
 
 
+def _env_int(name: str, default: int) -> int:
+    """Parse an int env var; fall back to ``default`` on missing/invalid input."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+# Playground-only abuse caps. All disabled (set to 0) by default so unit
+# tests + local dev see no extra restrictions; the public POC enables
+# them via fly.toml. These are PLAYGROUND-scoped and intentionally NOT
+# part of the bug_fab package's public Settings surface — a private
+# consumer running self-hosted Bug-Fab wouldn't want them on.
+#
+# - MAX_REPORTS / MAX_DISK_MB: global ceilings. When exceeded after a
+#   save, the oldest reports are auto-evicted (FIFO) until back under
+#   cap. 0 disables. Defends the Fly volume from being filled by either
+#   per-IP rate-limit-skirting or distributed traffic.
+# - MAX_BODY_KB: total multipart Content-Length cap on the intake POST.
+#   Rejects with 413 *before* the body is read, so a 50 MB metadata blob
+#   never costs us memory. 0 disables.
+PLAYGROUND_MAX_REPORTS = _env_int("BUG_FAB_PLAYGROUND_MAX_REPORTS", 0)
+PLAYGROUND_MAX_DISK_BYTES = _env_int("BUG_FAB_PLAYGROUND_MAX_DISK_MB", 0) * 1024 * 1024
+PLAYGROUND_MAX_BODY_BYTES = _env_int("BUG_FAB_PLAYGROUND_MAX_BODY_KB", 0) * 1024
+
+
 def _resolve_static_dir() -> Path:
     package_root = Path(bug_fab.__file__).resolve().parent
     for candidate in (package_root / "static", package_root.parent / "static"):
         if (candidate / "bug-fab.js").is_file():
             return candidate
     raise FileNotFoundError(f"bug-fab.js bundle not found near {package_root}")
+
+
+class _CappedFileStorage(bug_fab.FileStorage):
+    """FileStorage with playground-only post-save eviction.
+
+    After each successful ``save_report``, sweeps the storage dir and
+    deletes the oldest reports (by ``created_at``) until both the report
+    count and the on-disk byte total are back under their caps. A cap of
+    0 disables that dimension, so callers can opt into report-count-only
+    or byte-only enforcement.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_reports: int,
+        max_disk_bytes: int,
+        **kwargs: object,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.max_reports = max_reports
+        self.max_disk_bytes = max_disk_bytes
+
+    async def save_report(self, metadata: dict, screenshot_bytes: bytes) -> str:
+        report_id = await super().save_report(metadata, screenshot_bytes)
+        if self.max_reports > 0 or self.max_disk_bytes > 0:
+            await self._evict_if_over_cap()
+        return report_id
+
+    def _current_disk_bytes(self) -> int:
+        total = 0
+        for pattern in ("bug-*.json", "bug-*.png"):
+            for path in self.storage_dir.glob(pattern):
+                with contextlib.suppress(OSError):
+                    total += path.stat().st_size
+        return total
+
+    async def _evict_if_over_cap(self) -> None:
+        items, _ = await self.list_reports({}, page=1, page_size=100_000)
+        # list_reports returns newest-first; reverse for FIFO eviction.
+        oldest_first = list(reversed(items))
+        while oldest_first:
+            over_count = self.max_reports > 0 and len(oldest_first) > self.max_reports
+            over_disk = self.max_disk_bytes > 0 and self._current_disk_bytes() > self.max_disk_bytes
+            if not (over_count or over_disk):
+                return
+            victim = oldest_first.pop(0)
+            removed = await self.delete_report(victim.id)
+            if removed:
+                logger.info(
+                    "playground_evicted_report",
+                    extra={"report_id": victim.id, "reason": "over_cap"},
+                )
+
+
+class _BodySizeLimitMiddleware:
+    """ASGI middleware that 413s POSTs to ``path_prefix`` over a byte cap.
+
+    Decision is made off the ``Content-Length`` header so the body is
+    rejected *before* uvicorn buffers it. Requests without
+    ``Content-Length`` (chunked transfer) pass through — the bug-fab
+    bundle always sends a length, so the realistic abuse vector is
+    covered; non-conforming clients fall back to the per-IP rate limiter
+    + ``BUG_FAB_MAX_UPLOAD_MB`` for protection.
+    """
+
+    def __init__(self, app, *, max_body_bytes: int, path_prefix: str) -> None:
+        self.app = app
+        self.max_body_bytes = max_body_bytes
+        self.path_prefix = path_prefix
+
+    async def __call__(self, scope, receive, send) -> None:
+        if (
+            self.max_body_bytes > 0
+            and scope.get("type") == "http"
+            and scope.get("method") == "POST"
+            and scope.get("path", "").startswith(self.path_prefix)
+        ):
+            for name, value in scope.get("headers", []):
+                if name != b"content-length":
+                    continue
+                try:
+                    length = int(value)
+                except ValueError:
+                    break
+                if length > self.max_body_bytes:
+                    await self._send_too_large(send)
+                    return
+                break
+        await self.app(scope, receive, send)
+
+    async def _send_too_large(self, send) -> None:
+        body = (
+            b'{"detail":"Request body exceeds the playground demo cap of '
+            + str(self.max_body_bytes).encode()
+            + b' bytes"}'
+        )
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 413,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
 
 
 def _resolve_marketing_dir() -> Path | None:
@@ -65,7 +206,17 @@ def create_app() -> FastAPI:
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
     app = FastAPI(title="Bug-Fab POC")
-    storage = bug_fab.FileStorage(storage_dir=STORAGE_DIR)
+    if PLAYGROUND_MAX_BODY_BYTES > 0:
+        app.add_middleware(
+            _BodySizeLimitMiddleware,
+            max_body_bytes=PLAYGROUND_MAX_BODY_BYTES,
+            path_prefix="/api/bug-reports",
+        )
+    storage = _CappedFileStorage(
+        storage_dir=STORAGE_DIR,
+        max_reports=PLAYGROUND_MAX_REPORTS,
+        max_disk_bytes=PLAYGROUND_MAX_DISK_BYTES,
+    )
     submit.configure(storage=storage)
     app.include_router(submit.submit_router, prefix="/api")
     app.include_router(viewer.viewer_router, prefix="/admin/bug-reports")
@@ -236,6 +387,22 @@ DEMO_PAGE = r"""<!doctype html>
     <script>
       window.addEventListener("DOMContentLoaded", () => {
         window.BugFab.init({ submitUrl: "/api/bug-reports" });
+
+        // Playground-only nicety: when the Bug-Fab overlay renders, expand
+        // its "Auto-Captured Context" <details> by default so visitors can
+        // see what got captured without an extra click. Watches the DOM
+        // because the overlay mounts async (after the html2canvas screenshot).
+        new MutationObserver((records) => {
+          for (const r of records) {
+            for (const node of r.addedNodes) {
+              if (!(node instanceof Element)) continue;
+              const detailsEls = node.matches?.(".bug-fab-context")
+                ? [node]
+                : node.querySelectorAll?.(".bug-fab-context") ?? [];
+              for (const el of detailsEls) el.open = true;
+            }
+          }
+        }).observe(document.body, { childList: true, subtree: true });
 
         const log = document.getElementById("demo-log");
         const note = (msg) => {

@@ -16,15 +16,35 @@ primary_region = "sjc"
 
 [env]
   BUG_FAB_STORAGE_DIR = "/data/bug_reports"
+  # Per-IP rate limit. Tight on purpose: this is an anonymous public
+  # demo, nobody legitimately files 5+ reports in 15 minutes. Also
+  # bounds worst-case bandwidth + machine-wake-up cost per source.
   BUG_FAB_RATE_LIMIT_ENABLED = "true"
-  BUG_FAB_RATE_LIMIT_MAX = "50"
-  BUG_FAB_RATE_LIMIT_WINDOW_SECONDS = "3600"
+  BUG_FAB_RATE_LIMIT_MAX = "5"
+  BUG_FAB_RATE_LIMIT_WINDOW_SECONDS = "900"
+  # Screenshot cap. html2canvas at typical page sizes produces well
+  # under 1 MiB; 2 MiB leaves room for a 4K display without giving an
+  # attacker headroom to chew memory.
+  BUG_FAB_MAX_UPLOAD_MB = "2"
   BUG_FAB_VIEWER_ENABLED = "true"
   BUG_FAB_VIEWER_PAGE_SIZE = "20"
   # Public demo — leave GitHub sync OFF so submissions don't spam any
   # tracker. Self-hosters who want sync can set BUG_FAB_GITHUB_PAT and
   # BUG_FAB_GITHUB_REPO via `flyctl secrets set`.
   BUG_FAB_GITHUB_ENABLED = "false"
+  # --- Playground-only abuse caps (enforced by examples/error-playground/main.py,
+  # NOT by the bug_fab package itself; these env vars are ignored by
+  # other consumers). The 1 GB Fly volume is the hard ceiling; these
+  # caps keep us well below it and turn the demo into a FIFO ring so a
+  # flood at most evicts old demo submissions, never fills disk. ---
+  # Hard ceiling on stored reports; oldest get auto-evicted past this.
+  BUG_FAB_PLAYGROUND_MAX_REPORTS = "500"
+  # Hard ceiling on total bytes used by *.json + *.png on the volume.
+  BUG_FAB_PLAYGROUND_MAX_DISK_MB = "200"
+  # Pre-route cap on POST /api/bug-reports Content-Length. Sized for the
+  # 2 MiB screenshot + ~100 KB metadata + multipart overhead. Rejects
+  # with 413 before the body is buffered, so giant payloads cost ~0.
+  BUG_FAB_PLAYGROUND_MAX_BODY_KB = "2200"
 
 [mounts]
   source = "bug_fab_data"
