@@ -41,6 +41,26 @@ def _resolve_static_dir() -> Path:
     raise FileNotFoundError(f"bug-fab.js bundle not found near {package_root}")
 
 
+def _resolve_marketing_dir() -> Path | None:
+    """Locate the prebuilt SITE-BUG-FAB Astro `dist/` if it was synced into
+    this image. Returns None when missing so create_app() can fall back to
+    serving the playground at /.
+
+    Production path: ``/app/marketing-dist`` (populated by the Dockerfile's
+    COPY step from the local ``marketing-dist/`` directory at the repo
+    root). Override with ``BUG_FAB_MARKETING_DIR`` env var if needed.
+    """
+    candidate = Path(
+        os.environ.get(
+            "BUG_FAB_MARKETING_DIR",
+            "/app/marketing-dist",
+        )
+    )
+    if candidate.is_dir() and (candidate / "index.html").is_file():
+        return candidate
+    return None
+
+
 def create_app() -> FastAPI:
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -55,8 +75,10 @@ def create_app() -> FastAPI:
         name="bug-fab-static",
     )
 
-    @app.get("/", response_class=HTMLResponse)
-    async def home() -> str:
+    # Playground (formerly served at /). Kept as an explicit route so the
+    # marketing-site mount below doesn't shadow it.
+    @app.get("/playground", response_class=HTMLResponse)
+    async def playground() -> str:
         return DEMO_PAGE
 
     @app.get("/demo/missing")
@@ -71,6 +93,23 @@ def create_app() -> FastAPI:
         # Raising bare RuntimeError bypasses the HTTPException envelope so
         # uvicorn returns a real Internal Server Error.
         raise RuntimeError("intentional demo crash")
+
+    # Marketing site (SITE-BUG-FAB Astro build) at /. Mount last so the
+    # explicit routes above match first. If the marketing dist isn't
+    # present (local dev, or a build that skipped the sync), fall back to
+    # serving the playground at / so the demo never 404s.
+    marketing_dir = _resolve_marketing_dir()
+    if marketing_dir is not None:
+        app.mount(
+            "/",
+            StaticFiles(directory=str(marketing_dir), html=True),
+            name="marketing-site",
+        )
+    else:
+
+        @app.get("/", response_class=HTMLResponse)
+        async def home_fallback() -> str:
+            return DEMO_PAGE
 
     return app
 
@@ -122,12 +161,12 @@ DEMO_PAGE = r"""<!doctype html>
     </style>
   </head>
   <body>
-    <h1>Bug-Fab <span class="badge">POC</span></h1>
-    <p>This page is the public demo for
-    <a href="https://github.com/AZgeekster/Bug-Fab">Bug-Fab</a>, a tiny
-    framework-agnostic bug-reporting tool for web apps. Click any red
-    button below to break something on purpose, then click the bug icon
-    bottom-right to file a report. The captured console errors and
+    <h1>Bug-Fab <span class="badge">playground</span></h1>
+    <p><a href="/">← back to the home page</a> · this page is the live
+    sandbox for <a href="https://github.com/AZgeekster/Bug-Fab">Bug-Fab</a>,
+    a tiny framework-agnostic bug-reporting tool for web apps. Click any
+    red button below to break something on purpose, then click the bug
+    icon bottom-right to file a report. The captured console errors and
     failing network requests get attached to the submission automatically.</p>
 
     <div class="note">

@@ -109,3 +109,8 @@ adapters/aspnet/**/bin/
 adapters/aspnet/**/obj/
 adapters/aspnet/.vs/
 *.user
+
+# --- Co-hosted marketing site ---
+# Populated by `cp -r ../SITE-BUG-FAB/dist marketing-dist` before
+# `flyctl deploy`. Never committed — built fresh per deploy.
+marketing-dist/

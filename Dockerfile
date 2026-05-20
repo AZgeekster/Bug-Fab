@@ -23,6 +23,11 @@ RUN pip install --no-cache-dir . && \
 # Example app + its little demo-error endpoints.
 COPY examples /app/examples
 
+# Pre-built SITE-BUG-FAB marketing site (Astro `dist/`). Co-hosted at /,
+# playground at /playground/. Built outside the Docker context — see the
+# sibling SITE-BUG-FAB project's README for the workflow.
+COPY marketing-dist /app/marketing-dist
+
 # fly.toml mounts a 1 GB volume at /data; this env var tells the example
 # app to put bug_reports/ there so submissions survive redeploys.
 ENV BUG_FAB_STORAGE_DIR=/data/bug_reports
