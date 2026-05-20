@@ -309,6 +309,12 @@ DEMO_PAGE = r"""<!doctype html>
       }
       #demo-log:empty::before { content: "(no events yet \u2014 click a red button)"; color: #868e96; font-style: italic; }
       .note { background: #e7f5ff; border-left: 3px solid #74c0fc; padding: 0.6rem 0.85rem; border-radius: 4px; margin: 1rem 0; color: #1c7ed6; }
+      /* Cap the auto-expanded "Auto-Captured Context" body so it never
+         pushes the Submit button below the viewport. The form panel
+         already has overflow-y: auto, but capping the context body
+         keeps the metadata + a few errors visible while overflow
+         scrolls inside this box rather than the whole form. */
+      .bug-fab-context__body { max-height: 200px; overflow-y: auto; }
     </style>
   </head>
   <body>
