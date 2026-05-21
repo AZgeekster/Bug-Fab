@@ -13,6 +13,28 @@ out explicitly in each release entry.
 
 ### Added
 
+- Bounded retry + filesystem dead-letter queue for the generic webhook
+  integration at `bug_fab/integrations/webhook.py`. `WebhookSync` gains
+  three new constructor kwargs: `max_attempts` (default `1` —
+  historical fire-and-forget shape preserved), `retry_backoff_seconds`
+  (default `0.5`; exponential doubling per attempt), and `dlq_dir`
+  (default `None`; when set, terminal failures persist as JSON
+  envelopes for later replay). Retry logic classifies responses: 4xx
+  is a permanent receiver-side rejection and fails fast without retry;
+  5xx, timeouts, and transport errors are transient and retried with
+  bounded backoff. A new module-level `replay_dead_letters(sync,
+  dlq_dir)` walks the DLQ and re-drives each envelope through the
+  sync, deleting on success and counting `{attempted, succeeded,
+  failed, malformed}`. Four matching env vars added to `Settings`:
+  `BUG_FAB_WEBHOOK_MAX_ATTEMPTS`,
+  `BUG_FAB_WEBHOOK_RETRY_BACKOFF_SECONDS`, `BUG_FAB_WEBHOOK_DLQ_DIR`,
+  wired through `submit.configure()` so a self-hoster who already uses
+  the env-var path gets retry + DLQ by adding env vars alone. 12 new
+  integration tests cover the retry classification (5xx retries, 4xx
+  doesn't, timeouts retry), the negative-max-attempts clamp, the DLQ
+  write/no-write paths on success/failure, and the replay loop
+  (success unlinks, failure keeps the envelope, malformed JSON is
+  skipped without crashing).
 - Optional Slack incoming-webhook adapter at
   `bug_fab/integrations/slack.py` (new module). `SlackSync` transforms
   a `BugReportDetail`-shaped payload into a Slack Block Kit message —

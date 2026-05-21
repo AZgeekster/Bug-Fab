@@ -94,6 +94,9 @@ def configure(
             _SETTINGS.webhook_url,
             headers=_SETTINGS.webhook_headers,
             timeout_seconds=_SETTINGS.webhook_timeout_seconds,
+            max_attempts=_SETTINGS.webhook_max_attempts,
+            retry_backoff_seconds=_SETTINGS.webhook_retry_backoff_seconds,
+            dlq_dir=_SETTINGS.webhook_dlq_dir or None,
         )
     _WEBHOOK_SYNC = webhook_sync
     _RATE_LIMITER = RateLimiter(

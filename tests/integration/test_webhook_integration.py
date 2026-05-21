@@ -412,3 +412,240 @@ def test_send_logs_warning_on_non_2xx(caplog: pytest.LogCaptureFixture) -> None:
     sync, _ = _make_sync_with_transport(handler)
     _run(sync.send(_sample_report()))
     assert any("bug_fab_webhook_send_failed" in rec.message for rec in caplog.records)
+
+
+# -----------------------------------------------------------------------------
+# Retry-with-backoff + dead-letter queue (added 2026-05-20)
+# -----------------------------------------------------------------------------
+
+
+def _install_transport(handler) -> None:  # type: ignore[no-untyped-def]
+    """Patch httpx.AsyncClient to use the given handler. Restored by fixture."""
+    transport = httpx.MockTransport(handler)
+    import bug_fab.integrations.webhook as webhook_module
+
+    real_client = webhook_module.httpx.AsyncClient
+
+    class _MockClient(real_client):  # type: ignore[misc, valid-type]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
+
+    webhook_module.httpx.AsyncClient = _MockClient  # type: ignore[attr-defined]
+
+
+def test_max_attempts_default_is_one_no_retry() -> None:
+    """Historical fire-and-forget shape preserved: max_attempts=1 = no retry."""
+    calls: list[int] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(503)
+
+    _install_transport(handler)
+    sync = WebhookSync("https://hooks.example.test/post")
+    assert _run(sync.send(_sample_report())) is False
+    assert len(calls) == 1
+
+
+def test_5xx_triggers_retry_until_success() -> None:
+    """A 5xx becomes 2xx on the third attempt; final result is True."""
+    attempts: list[int] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        if len(attempts) < 3:
+            return httpx.Response(503)
+        return httpx.Response(200, json={"ok": True})
+
+    _install_transport(handler)
+    sync = WebhookSync(
+        "https://hooks.example.test/post",
+        max_attempts=5,
+        retry_backoff_seconds=0.0,  # zero backoff in tests for speed
+    )
+    assert _run(sync.send(_sample_report())) is True
+    assert len(attempts) == 3
+
+
+def test_4xx_does_not_retry_even_with_high_max_attempts() -> None:
+    """403/422/etc. mean the receiver rejected the body; retrying never helps."""
+    attempts: list[int] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return httpx.Response(403, text="forbidden")
+
+    _install_transport(handler)
+    sync = WebhookSync("https://hooks.example.test/post", max_attempts=5, retry_backoff_seconds=0.0)
+    assert _run(sync.send(_sample_report())) is False
+    assert len(attempts) == 1
+
+
+def test_timeout_classified_as_transient_and_retried() -> None:
+    """A timeout on attempt 1 + a 200 on attempt 2 still succeeds overall."""
+    attempts: list[int] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise httpx.TimeoutException("slow")
+        return httpx.Response(200, json={"ok": True})
+
+    _install_transport(handler)
+    sync = WebhookSync("https://hooks.example.test/post", max_attempts=3, retry_backoff_seconds=0.0)
+    assert _run(sync.send(_sample_report())) is True
+    assert len(attempts) == 2
+
+
+def test_negative_max_attempts_clamps_to_one() -> None:
+    """A bad config value must not silently skip the request entirely."""
+    attempts: list[int] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return httpx.Response(200, json={"ok": True})
+
+    _install_transport(handler)
+    sync = WebhookSync("https://hooks.example.test/post", max_attempts=-5)
+    assert sync.max_attempts == 1
+    assert _run(sync.send(_sample_report())) is True
+    assert len(attempts) == 1
+
+
+def test_dlq_writes_envelope_on_terminal_failure(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """All retries exhausted → one JSON envelope appears in dlq_dir."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    _install_transport(handler)
+    dlq = tmp_path / "dlq"
+    sync = WebhookSync(
+        "https://hooks.example.test/post",
+        max_attempts=2,
+        retry_backoff_seconds=0.0,
+        dlq_dir=dlq,
+    )
+    assert _run(sync.send(_sample_report())) is False
+    files = sorted(dlq.glob("*.json"))
+    assert len(files) == 1
+    envelope = json.loads(files[0].read_text(encoding="utf-8"))
+    assert envelope["source_url"] == "https://hooks.example.test/post"
+    assert envelope["report"]["id"] == "bug-001"
+    assert "HTTP 503" in envelope["last_error"]
+
+
+def test_dlq_not_written_on_success(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """A 2xx response leaves the DLQ dir empty (no false positives)."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True})
+
+    _install_transport(handler)
+    dlq = tmp_path / "dlq"
+    sync = WebhookSync("https://hooks.example.test/post", max_attempts=3, dlq_dir=dlq)
+    assert _run(sync.send(_sample_report())) is True
+    if dlq.exists():
+        # dir may exist if any caller created it; what matters is no .json files
+        assert list(dlq.glob("*.json")) == []
+
+
+def test_dlq_disabled_when_dir_unset(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """No dlq_dir means failures are logged only — and don't crash."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    _install_transport(handler)
+    sync = WebhookSync("https://hooks.example.test/post", max_attempts=2, retry_backoff_seconds=0.0)
+    assert _run(sync.send(_sample_report())) is False
+    # tmp_path itself is unrelated and remains empty.
+    assert list(tmp_path.glob("*.json")) == []
+
+
+def test_replay_dead_letters_succeeds_and_unlinks(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """A previously-failed envelope replays successfully and is removed."""
+    from bug_fab.integrations.webhook import replay_dead_letters
+
+    dlq = tmp_path / "dlq"
+    dlq.mkdir()
+
+    # Seed a malformed-but-readable envelope.
+    envelope = {
+        "persisted_at": "2026-05-20T00:00:00Z",
+        "source_url": "https://hooks.example.test/post",
+        "last_error": "HTTP 503",
+        "report": _sample_report(),
+    }
+    (dlq / "20260520T000000Z_bug-001.json").write_text(json.dumps(envelope), encoding="utf-8")
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True})
+
+    _install_transport(handler)
+    sync = WebhookSync("https://hooks.example.test/post", max_attempts=1, dlq_dir=dlq)
+    stats = _run(replay_dead_letters(sync, dlq))
+    assert stats == {"attempted": 1, "succeeded": 1, "failed": 0, "malformed": 0}
+    # File deleted on success.
+    assert list(dlq.glob("*.json")) == []
+
+
+def test_replay_dead_letters_skips_malformed(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Broken JSON in the DLQ is counted as malformed and skipped (not crashed)."""
+    from bug_fab.integrations.webhook import replay_dead_letters
+
+    dlq = tmp_path / "dlq"
+    dlq.mkdir()
+    (dlq / "garbage.json").write_text("{not-json", encoding="utf-8")
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True})
+
+    _install_transport(handler)
+    sync = WebhookSync("https://hooks.example.test/post", dlq_dir=dlq)
+    stats = _run(replay_dead_letters(sync))
+    assert stats["malformed"] == 1
+    assert stats["succeeded"] == 0
+    # Malformed file is NOT auto-deleted (operator decides what to do).
+    assert (dlq / "garbage.json").exists()
+
+
+def test_replay_dead_letters_keeps_failed_envelopes(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Replay where the receiver is still broken keeps the envelope on disk."""
+    from bug_fab.integrations.webhook import replay_dead_letters
+
+    dlq = tmp_path / "dlq"
+    dlq.mkdir()
+    envelope = {
+        "persisted_at": "2026-05-20T00:00:00Z",
+        "source_url": "https://hooks.example.test/post",
+        "last_error": "HTTP 503",
+        "report": _sample_report(),
+    }
+    fname = "20260520T000000Z_bug-001.json"
+    (dlq / fname).write_text(json.dumps(envelope), encoding="utf-8")
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    _install_transport(handler)
+    sync = WebhookSync(
+        "https://hooks.example.test/post",
+        max_attempts=1,
+        retry_backoff_seconds=0.0,
+        dlq_dir=dlq,
+    )
+    stats = _run(replay_dead_letters(sync))
+    assert stats == {"attempted": 1, "succeeded": 0, "failed": 1, "malformed": 0}
+    # Envelope stays — operator must decide whether to retry later or purge.
+    assert (dlq / fname).exists()
+
+
+def test_replay_dead_letters_returns_zero_stats_when_dir_missing() -> None:
+    """A missing/absent DLQ dir is a no-op, not a crash."""
+    from bug_fab.integrations.webhook import replay_dead_letters
+
+    sync = WebhookSync("https://hooks.example.test/post")
+    stats = _run(replay_dead_letters(sync))
+    assert stats == {"attempted": 0, "succeeded": 0, "failed": 0, "malformed": 0}

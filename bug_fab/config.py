@@ -93,6 +93,17 @@ class Settings:
     webhook_url: str = ""
     webhook_headers: dict[str, str] = field(default_factory=dict)
     webhook_timeout_seconds: float = 5.0
+    #: Bounded-exponential-backoff retry on transient (5xx, timeout,
+    #: transport) webhook failures. ``1`` (default) preserves the
+    #: historical fire-and-forget shape — no retry.
+    webhook_max_attempts: int = 1
+    #: Base delay between retry attempts; doubles per retry.
+    webhook_retry_backoff_seconds: float = 0.5
+    #: Optional directory where terminal webhook failures get persisted
+    #: as JSON envelopes for later replay via
+    #: ``bug_fab.integrations.webhook.replay_dead_letters``. Empty
+    #: disables the DLQ; failures are then logged only.
+    webhook_dlq_dir: str = ""
     viewer_permissions: dict[str, bool] = field(default_factory=default_viewer_permissions)
     #: Optional per-request CSP nonce provider for the viewer's inline
     #: ``<script>`` blocks. When set, the viewer router calls this with
@@ -137,6 +148,11 @@ class Settings:
             "webhook_url": _env_str("BUG_FAB_WEBHOOK_URL", ""),
             "webhook_headers": parse_headers_env(os.environ.get("BUG_FAB_WEBHOOK_HEADERS")),
             "webhook_timeout_seconds": _env_float("BUG_FAB_WEBHOOK_TIMEOUT_SECONDS", 5.0),
+            "webhook_max_attempts": _env_int("BUG_FAB_WEBHOOK_MAX_ATTEMPTS", 1),
+            "webhook_retry_backoff_seconds": _env_float(
+                "BUG_FAB_WEBHOOK_RETRY_BACKOFF_SECONDS", 0.5
+            ),
+            "webhook_dlq_dir": _env_str("BUG_FAB_WEBHOOK_DLQ_DIR", ""),
             "viewer_permissions": default_viewer_permissions(),
         }
         values.update(overrides)
