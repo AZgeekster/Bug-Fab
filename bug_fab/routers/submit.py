@@ -30,6 +30,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import ValidationError
 
+from bug_fab._observability import EVENT_REPORT_RECEIVED
+from bug_fab._observability import emit as emit_event
 from bug_fab._rate_limit import RateLimiter
 from bug_fab.config import Settings
 from bug_fab.integrations.github import GitHubSync
@@ -264,6 +266,22 @@ async def submit_bug_report(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Stored report could not be read back",
         )
+
+    # Structured lifecycle event — consumers wiring a JSON log handler
+    # (Loki / Datadog / Sentry / etc.) on the `bug_fab.events` logger
+    # tree pick this up automatically. Stable field vocabulary —
+    # adding fields is non-breaking; renaming or removing them is.
+    emit_event(
+        EVENT_REPORT_RECEIVED,
+        report_id=report_id,
+        severity=detail.severity,
+        status=detail.status,
+        report_type=detail.report_type,
+        module=detail.module,
+        environment=environment,
+        has_screenshot=detail.has_screenshot,
+        client_ip=_client_ip(request),
+    )
 
     # GitHub sync is best-effort. A failed POST does not roll back the
     # local save; the report simply lacks a github_issue_url until a

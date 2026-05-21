@@ -33,6 +33,13 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
+from bug_fab._observability import (
+    EVENT_BULK_ARCHIVE_CLOSED,
+    EVENT_BULK_CLOSE_FIXED,
+    EVENT_REPORT_DELETED,
+    EVENT_STATUS_CHANGED,
+)
+from bug_fab._observability import emit as emit_event
 from bug_fab.config import Settings
 from bug_fab.integrations.github import GitHubSync
 from bug_fab.routers.submit import (
@@ -309,6 +316,13 @@ async def update_report_status(
         except Exception:  # pragma: no cover - defensive
             logger.exception("bug_fab_github_state_sync_failed", extra={"report_id": report_id})
 
+    emit_event(
+        EVENT_STATUS_CHANGED,
+        report_id=report_id,
+        status=payload.status.value,
+        by=actor,
+        fix_commit=payload.fix_commit or "",
+    )
     return updated
 
 
@@ -327,6 +341,7 @@ async def delete_report(
     deleted = await storage.delete_report(report_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bug report not found")
+    emit_event(EVENT_REPORT_DELETED, report_id=report_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -342,6 +357,7 @@ async def bulk_close_fixed(
     """Transition every ``fixed`` report to ``closed``."""
     actor = _viewer_actor(request)
     closed = await storage.bulk_close_fixed(by=actor)
+    emit_event(EVENT_BULK_CLOSE_FIXED, count=closed, by=actor)
     return JSONResponse({"closed": closed})
 
 
@@ -355,6 +371,7 @@ async def bulk_archive_closed(
 ) -> JSONResponse:
     """Move every ``closed`` report into the storage backend's archive area."""
     archived = await storage.bulk_archive_closed()
+    emit_event(EVENT_BULK_ARCHIVE_CLOSED, count=archived)
     return JSONResponse({"archived": archived})
 
 

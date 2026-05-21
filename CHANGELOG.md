@@ -13,6 +13,23 @@ out explicitly in each release entry.
 
 ### Added
 
+- Structured-logging hooks on the lifecycle events. A new private
+  module `bug_fab/_observability.py` defines a stable event vocabulary
+  (`bug_fab_report_received`, `bug_fab_status_changed`,
+  `bug_fab_report_deleted`, `bug_fab_bulk_close_fixed`,
+  `bug_fab_bulk_archive_closed`) and a single `emit()` helper that
+  writes an `INFO`-level record on the `bug_fab.events` logger with a
+  consistent `extra={"event": ..., "report_id": ..., ...}` payload.
+  Wired at call sites in `bug_fab/routers/submit.py` (after a
+  successful intake) and `bug_fab/routers/viewer.py` (after status
+  change, delete, bulk-close-fixed, bulk-archive-closed). Consumers
+  who want JSON line output for Loki / Datadog / Sentry plug in a
+  standard formatter (e.g. `python-json-logger`) on the
+  `bug_fab.events` logger tree — the package takes no shipper
+  dependency. Suppressing the vocabulary entirely is a one-line
+  `logging.getLogger('bug_fab.events').setLevel(logging.WARNING)`. 6
+  unit tests pin the event-name constants, the dedicated-logger
+  contract, and the `extra`-dict shape.
 - Bounded retry + filesystem dead-letter queue for the generic webhook
   integration at `bug_fab/integrations/webhook.py`. `WebhookSync` gains
   three new constructor kwargs: `max_attempts` (default `1` —
