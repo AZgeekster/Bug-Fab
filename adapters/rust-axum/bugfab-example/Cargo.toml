@@ -1,0 +1,18 @@
+[package]
+name = "bugfab-example"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Minimal Axum binary that wires the bugfab adapter against on-disk storage."
+
+[[bin]]
+name = "bugfab-example"
+path = "src/main.rs"
+
+[dependencies]
+bugfab = { path = "../bugfab" }
+axum = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

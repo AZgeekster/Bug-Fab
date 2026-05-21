@@ -13,6 +13,35 @@ out explicitly in each release entry.
 
 ### Added
 
+- **Three new first-party adapters** promoted from private drafts on
+  2026-05-21:
+  - **Go + Gin** at `repo/adapters/go-gin/`. Module path
+    `github.com/AZgeekster/Bug-Fab/adapters/go-gin`. Implements all
+    eight wire-protocol endpoints with the same file-storage on-disk
+    layout as the Python reference (cross-readable). 37/37
+    `go test ./...` passing at 75.7% statement coverage under
+    `golang:1.22`. Custom `MarshalJSON`/`UnmarshalJSON` on the
+    `BugReportContext` type preserves the Pydantic `extra="allow"`
+    round-trip contract. Cross-stack conformance pending a Go runner
+    for the `pytest --bug-fab-conformance` harness (v0.2 candidate).
+  - **Rust + Axum** at `repo/adapters/rust-axum/`. Cargo workspace
+    with a `bugfab` library crate + `bugfab-example` binary. 21/21
+    `cargo test --workspace` passing under `rust:1.75`. Split MSRV
+    documented: 1.75 for the file-only default; the optional `sqlx`
+    feature (SQLite backend) jumps the floor to 1.86 because sqlx's
+    transitive `idna_adapter` / `icu_*` deps require edition 2024.
+  - **Laravel + PHP** at `repo/adapters/laravel/`. Composer package
+    `bugfab/laravel-adapter`, Service Provider auto-discovered.
+    33/33 PHPUnit tests (89 assertions) passing under `composer:2`
+    with Laravel 11.x on PHP 8.3+. Two storage backends (FileStorage
+    + EloquentStorage); Octane-aware with a documented caveat about
+    the default `array` cache driver multiplying per-worker
+    rate-limit counters (Redis recommended for accurate per-IP
+    limiting).
+
+  Each adapter's `repo/docs/ADAPTERS_REGISTRY.md` entry was flipped to
+  `🟢 reference (first-party adapter)` with conformance evidence
+  captured in the registry entry.
 - Opt-in PII redaction for the auto-captured buffers + free-text
   fields. New private module `bug_fab/_redact.py` defines a
   conservative three-pattern redactor: JWTs (three base64url-ish

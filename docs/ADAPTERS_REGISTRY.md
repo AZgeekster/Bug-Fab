@@ -242,6 +242,57 @@ Real but smaller user bases or growing-mainstream stacks. Sketches welcome; main
 | Maintainer | (none — private draft) |
 | Notes | Mountable Rails Engine. ActiveRecord models mirror the Python `BugReportORM` schema (with `module → module_name` rename to avoid Ruby's `Module` constant clash). Test harness uses the canonical `rails plugin new --mountable --dummy-path=test/dummy` scaffold (an earlier inline `TestApplication` pattern double-evaluated engine routes; replaced 2026-05-04). Promotion path: move to `repo/adapters/rails/` or sibling `bug_fab-rails` repo, run upstream conformance, publish to RubyGems. |
 
+### Go + Gin
+
+| Field | Value |
+|---|---|
+| Stack | Gin v1.10+, Go 1.22+ |
+| Status | 🟢 reference (first-party adapter) |
+| Tier | 2 |
+| Package | (unpublished — `go get github.com/AZgeekster/Bug-Fab/adapters/go-gin/bugfab` direct from the in-repo module) |
+| Repository | `repo/adapters/go-gin/` (this repo) |
+| Language | Go |
+| Tracks Bug-Fab | v0.1 |
+| Conformance | ✅ in-repo `go test ./...` returns 37/37 passing at 75.7% statement coverage (verified 2026-05-21 via `docker run --rm golang:1.22`); cross-stack `pytest --bug-fab-conformance` against a live `go run` server pending a Go runner (v0.2 candidate) |
+| Reference doc | [`docs/ADAPTERS.md`](./ADAPTERS.md) — and `repo/adapters/go-gin/README.md` |
+| Last updated | 2026-05-21 |
+| Maintainer | Bug-Fab core (AZgeekster) |
+| Notes | File storage layout is byte-for-byte cross-readable with the Python reference (a `bug-NNN.json` written by either side parses on the other). In-process token-bucket rate limiter; mount-point auth delegation (no built-in auth). Custom `MarshalJSON`/`UnmarshalJSON` on `BugReportContext` preserves the Pydantic `extra="allow"` round-trip contract. |
+
+### Rust + Axum
+
+| Field | Value |
+|---|---|
+| Stack | Axum 0.7+, Rust 1.75+ for default file storage / Rust 1.86+ when the optional `sqlx` SQLite backend is enabled |
+| Status | 🟢 reference (first-party adapter) |
+| Tier | 2 |
+| Package | (unpublished — path/git dep on the in-repo workspace until the first crates.io tag) |
+| Repository | `repo/adapters/rust-axum/` (this repo) |
+| Language | Rust |
+| Tracks Bug-Fab | v0.1 |
+| Conformance | ✅ `cargo test --workspace` returns 21/21 passing (7 unit + 8 integration + 5 storage roundtrip + 1 doctest) under `docker run --rm rust:1.75` (verified 2026-05-21); cross-stack `pytest --bug-fab-conformance` against a live `cargo run -p bugfab-example` server pending |
+| Reference doc | `repo/adapters/rust-axum/README.md` + `MIGRATION_NOTES.md` |
+| Last updated | 2026-05-21 |
+| Maintainer | Bug-Fab core (AZgeekster) |
+| Notes | Split MSRV: 1.75 for the file-only default; enabling `--features sqlx` jumps the floor to 1.86 because sqlx's transitive `idna_adapter` / `icu_*` deps require edition 2024. `Arc<dyn Storage + Send + Sync>` injection pattern documented in MIGRATION_NOTES — keeps the route handlers generic-free at the cost of one `async_trait` macro until native async-fn-in-trait dropdrops the MSRV. |
+
+### Laravel (PHP)
+
+| Field | Value |
+|---|---|
+| Stack | Laravel 11.x, PHP 8.3+ |
+| Status | 🟢 reference (first-party adapter) |
+| Tier | 2 |
+| Package | `bugfab/laravel-adapter` (in-repo source; not yet on Packagist — install via Composer path / VCS until the first tag) |
+| Repository | `repo/adapters/laravel/` (this repo) |
+| Language | PHP |
+| Tracks Bug-Fab | v0.1 |
+| Conformance | ✅ PHPUnit 11.5.55 runs 33/33 tests (89 assertions) under `docker run --rm composer:2` (verified 2026-05-21); cross-stack `pytest --bug-fab-conformance` against a live `php artisan serve` instance pending |
+| Reference doc | `repo/adapters/laravel/README.md` + `MIGRATION_NOTES.md` |
+| Last updated | 2026-05-21 |
+| Maintainer | Bug-Fab core (AZgeekster) |
+| Notes | Two storage backends (FileStorage + EloquentStorage), Service Provider auto-discovers via `extra.laravel.providers`. Octane-aware but **watch the default `array` cache driver** — per-worker rate-limit counters multiply the effective limit; switch to Redis for accurate per-IP limiting (documented in MIGRATION_NOTES). Native PHP `enum` + `Rule::enum()` for severity validation; intake route is CSRF-exempt because the bundle posts cross-page. |
+
 ---
 
 ## Tier 3 — lower priority

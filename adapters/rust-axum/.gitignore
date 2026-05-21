@@ -1,0 +1,8 @@
+# Cargo build artifacts. Cargo.lock IS committed because this workspace
+# includes the bugfab-example binary crate; locking the example's deps
+# keeps the reference build reproducible.
+/target/
+**/*.rs.bk
+
+# Backup files from editors.
+*~

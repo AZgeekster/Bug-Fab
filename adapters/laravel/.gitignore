@@ -1,0 +1,12 @@
+# Composer artifacts — this adapter is distributed as a library; consumers
+# install via `composer require bugfab/laravel-adapter` and resolve their own
+# deps. Never commit our build copy.
+/vendor/
+composer.phar
+
+# Lock files live in consuming applications, not libraries.
+composer.lock
+
+# Test runner cache.
+.phpunit.cache/
+.phpunit.result.cache
