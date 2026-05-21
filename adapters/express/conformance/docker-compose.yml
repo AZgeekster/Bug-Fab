@@ -1,0 +1,106 @@
+# Cross-stack conformance harness for the Express Bug-Fab adapter.
+#
+# Boots `examples/server.ts` inside a `node:20` container and runs the
+# upstream Python pytest conformance suite against it from a sibling
+# `python:3.12` container. Both services share a Compose network so the
+# Python container reaches the Node server at `http://express-adapter:8080`.
+#
+# Usage:
+#   ./run-conformance.sh        # one-shot, exits with pytest's status
+#
+# Or manually:
+#   docker compose -f conformance/docker-compose.yml up --build --abort-on-container-exit conformance
+#
+# Layout: this file lives at `repo/adapters/express/conformance/`. Paths are
+# expressed relative to `repo/` (`context: ../../..`) so the Python container
+# can `pip install -e .` against the parent `bug_fab` package without copying.
+
+services:
+  express-adapter:
+    # The example imports `../src/index.js`; tsx handles the TS-on-the-fly.
+    # `npm ci` brings in express + multer (peer deps installed for dev);
+    # `npx -y tsx@4` fetches tsx without polluting package.json.
+    image: node:20-bookworm-slim
+    working_dir: /adapter
+    # Bind-mount the adapter source so changes don't require an image rebuild,
+    # but shadow node_modules with an anonymous volume — Linux can't reuse the
+    # host's (Windows) install. PORT=8080 so the URL matches what the README
+    # documents for the conformance run.
+    volumes:
+      - ../:/adapter
+      - adapter_node_modules:/adapter/node_modules
+    environment:
+      PORT: "8080"
+      BUG_FAB_STORAGE_DIR: "/tmp/bug_fab_conformance"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        echo "[express-adapter] npm ci ..."
+        npm ci --no-audit --no-fund
+        echo "[express-adapter] booting examples/server.ts on :8080 ..."
+        exec npx -y tsx@4 examples/server.ts
+    expose:
+      - "8080"
+    # No host port mapping — the conformance sibling reaches the server on
+    # the internal Compose network at `express-adapter:8080`. To poke from
+    # the host, set `KEEP_RUNNING=1` and add `-p 18080:8080` via override,
+    # or attach to the container with `docker compose exec express-adapter sh`.
+    healthcheck:
+      # `node:20-bookworm-slim` ships without curl/wget; use node's built-in
+      # http module instead. Any non-5xx status (viewer root returns 200) is
+      # "up enough" for the conformance suite to proceed.
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "require('http').get('http://localhost:8080/admin/bug-reports/', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  conformance:
+    # Mounts the repo root, installs `bug-fab` in editable mode, then runs
+    # the bundled pytest plugin against the Node server. Exits with pytest's
+    # exit code so `docker compose up --abort-on-container-exit conformance`
+    # propagates pass/fail.
+    #
+    # WHY pytest runs from /workdir (not the repo root): the repo's own
+    # `tests/conftest.py` imports `bug_fab.storage.sqlite` (and other deps
+    # from `[sqlite]`) — running pytest with `/bugfab` as cwd would try to
+    # auto-load that conftest and fail before the conformance plugin even
+    # starts. The plugin discovers its own bundled tests via the pytest11
+    # entry-point, so an empty working directory is enough.
+    image: python:3.12-slim
+    working_dir: /workdir
+    depends_on:
+      express-adapter:
+        condition: service_healthy
+    volumes:
+      - ../../..:/bugfab
+    environment:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PIP_NO_CACHE_DIR: "1"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        mkdir -p /workdir
+        echo "[conformance] installing bug_fab from local source ..."
+        pip install -q -e /bugfab
+        pip install -q 'pytest>=7' httpx
+        echo "[conformance] running pytest --bug-fab-conformance ..."
+        cd /workdir
+        pytest \
+          --bug-fab-conformance \
+          --base-url=http://express-adapter:8080/admin/bug-reports \
+          -v \
+          --tb=short \
+          --no-header \
+          -p no:cacheprovider
+
+volumes:
+  adapter_node_modules:

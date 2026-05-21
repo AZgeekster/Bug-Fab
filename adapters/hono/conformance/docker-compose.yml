@@ -1,0 +1,64 @@
+# Bug-Fab Hono adapter — conformance harness.
+#
+# Two services:
+#   - hono-server: boots the adapter on port 8080 via `bun run boot.ts`.
+#     Bun resolves TypeScript natively, so no build step is required.
+#   - conformance: python:3.12 container that pip-installs `bug-fab`
+#     and runs `pytest --bug-fab-conformance` against the hono-server.
+#
+# Usage: `./run-conformance.sh` (orchestrates wait-for-health + pytest).
+
+services:
+  hono-server:
+    image: oven/bun:1
+    working_dir: /adapter
+    volumes:
+      - ../:/adapter:ro
+    command: ["bun", "run", "conformance/boot.ts"]
+    environment:
+      PORT: "8080"
+    # Use a non-default host port so this compose stack does not collide
+    # with other parallel conformance runs (e.g., Spring on 8080). Pytest
+    # runs inside the compose network and addresses the service by name
+    # (hono-server:8080), so the host port is only useful for manual
+    # debugging via `curl http://localhost:28080/...`.
+    ports:
+      - "28080:8080"
+    healthcheck:
+      # The viewer's HTML index is the cheapest reliably-200 endpoint.
+      test: ["CMD", "sh", "-c", "bun --eval \"fetch('http://localhost:8080/admin/bug-reports/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  conformance:
+    image: python:3.12-slim
+    depends_on:
+      hono-server:
+        condition: service_healthy
+    working_dir: /work
+    volumes:
+      - ../../../:/work:ro
+      - bug_fab_pip_cache:/root/.cache/pip
+    command:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        # `[dev]` brings in pytest; the conformance plugin is registered
+        # via the entry-point inside the editable bug-fab install.
+        pip install --quiet --no-input -e /work[dev]
+        # Run pytest from a neutral directory so it does not pick up
+        # /work/tests/conftest.py (which imports adapters with their own
+        # heavy deps like sqlalchemy). The conformance plugin appends its
+        # bundled tests path to the collection set itself.
+        mkdir -p /tmp/conformance-run
+        cd /tmp/conformance-run
+        pytest --bug-fab-conformance \
+          --base-url=http://hono-server:8080/api \
+          --viewer-base-url=http://hono-server:8080/admin/bug-reports \
+          -v --tb=short --color=no -p no:cacheprovider
+
+volumes:
+  bug_fab_pip_cache:

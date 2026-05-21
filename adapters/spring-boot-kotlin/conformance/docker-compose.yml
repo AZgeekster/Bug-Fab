@@ -1,0 +1,90 @@
+# Bug-Fab cross-stack conformance harness for the Spring Boot / Kotlin adapter.
+#
+# Boots the adapter's `examples:minimal` consumer in a `gradle:8-jdk17`
+# container, mounting the adapter source from the parent directory. The
+# JVM is slow to start (~30-60s on a cold Gradle cache, ~10-20s warm),
+# so the tester service waits on a TCP health probe before invoking
+# pytest with the `bug-fab-conformance` plugin.
+#
+# Run with `./run-conformance.sh` from this directory (recommended) or
+# `docker compose up --abort-on-container-exit --exit-code-from tester`.
+
+services:
+  app:
+    image: gradle:8-jdk17
+    working_dir: /adapter
+    volumes:
+      # Mount the entire adapter directory so Gradle can resolve the
+      # `:examples:minimal` subproject against the in-repo library.
+      - ../:/adapter
+      # Cache the Gradle user home so repeated runs don't re-download
+      # Spring Boot / Kotlin dependencies. Named volume — disposable.
+      - bugfab_spring_gradle_cache:/home/gradle/.gradle
+    environment:
+      # File-backed storage to a writeable tmpfs path inside the
+      # container. The conformance suite doesn't assert anything about
+      # the on-disk layout, so a clean `/tmp/bugfab-data` per run is fine.
+      # `bugfab.storage=file` selects the file-backed storage backend,
+      # but Spring Data JPA is on the library's `implementation`
+      # classpath and its auto-configuration still tries to wire a
+      # DataSource at startup (with no driver / no URL → Hikari fails
+      # fast). Exclude the four JPA-stack auto-configs explicitly so the
+      # file backend can boot standalone in this minimal example.
+      SPRING_APPLICATION_JSON: >-
+        {"bugfab":{"storage":"file","storage-dir":"/tmp/bugfab-data","route-prefix":"/bug-fab"},
+         "server":{"port":8080,"address":"0.0.0.0"},
+         "spring":{"autoconfigure":{"exclude":[
+           "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration",
+           "org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration",
+           "org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration",
+           "org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration"
+         ]}}}
+      # Headless JVM flags — no need for AWT toolkit warmup, keeps boot
+      # time and memory footprint down.
+      JAVA_TOOL_OPTIONS: "-Djava.awt.headless=true -XX:+UseSerialGC -Xmx512m"
+    command: >-
+      gradle --no-daemon :examples:minimal:bootRun
+    ports:
+      - "8080:8080"
+    # Cross-platform TCP probe: `bash` ships in the Gradle image, so we
+    # use the /dev/tcp/<host>/<port> trick rather than depending on curl
+    # being on the PATH. A successful TCP connect to 8080 means the
+    # embedded Tomcat is bound and accepting requests.
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/8080' >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      # First-run cold cache: Gradle downloads Spring Boot / Kotlin /
+      # Bucket4j from Maven Central before bootRun starts, which can
+      # take 2-3 min on a slow link. `start_period` is the grace window
+      # before a failing probe counts as a failure — set generously so
+      # cold runs don't trip up while Gradle is still resolving deps.
+      retries: 60
+      start_period: 240s
+
+  tester:
+    image: python:3.12-slim
+    depends_on:
+      app:
+        condition: service_healthy
+    working_dir: /work
+    volumes:
+      # Mount the Bug-Fab Python package source so we can `pip install`
+      # it locally — the package is not yet on PyPI as of 2026-05-21.
+      # `../../..` resolves to the `repo/` root from this conformance dir.
+      - ../../../:/bug-fab-src:ro
+      - bugfab_spring_tester_cache:/work
+    environment:
+      # Point pytest at the adapter's mount prefix. Intake = viewer for
+      # this adapter (single SecurityFilterChain in the README example).
+      BUGFAB_BASE_URL: "http://app:8080/bug-fab"
+    command: >-
+      bash -lc "
+        set -euo pipefail &&
+        pip install --quiet --disable-pip-version-check /bug-fab-src pytest httpx &&
+        pytest --bug-fab-conformance --base-url=$$BUGFAB_BASE_URL -v
+      "
+
+volumes:
+  bugfab_spring_gradle_cache:
+  bugfab_spring_tester_cache:

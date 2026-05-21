@@ -1,0 +1,98 @@
+# Cross-stack conformance harness for the Bug-Fab Go (Gin) adapter.
+#
+# Two services on a shared bridge network:
+#   - adapter:   golang:1.22, boots `go run ./examples/minimal` from the repo root,
+#                exposes the eight Bug-Fab endpoints under /api/bug-fab on :8080.
+#   - runner:    python:3.12, pip-installs the bug-fab wheel from the repo root,
+#                runs `pytest --bug-fab-conformance` against the adapter container.
+#
+# WHY a separate Python runner container instead of host-pytest:
+#   - Keeps the harness "one command from cold clone" — no Python install on host.
+#   - Pins the pytest/httpx versions to whatever the repo ships, removing host drift.
+#
+# WHY golang:1.22 (not -alpine):
+#   - The adapter has no cgo, but `go run` from the repo's module path needs the
+#     full toolchain. Alpine works but slows the first boot considerably; Debian
+#     slim is the standard go test runner image.
+#
+# Both services mount the Bug-Fab repo root (../../..) so the adapter sees its
+# own `bugfab/` source and the runner sees `pyproject.toml` + `bug_fab/`.
+
+services:
+  adapter:
+    image: golang:1.22
+    container_name: bug-fab-go-conformance-adapter
+    working_dir: /src/adapters/go-gin
+    volumes:
+      - ../../..:/src:ro
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+    environment:
+      GOFLAGS: "-mod=mod"
+      BUG_FAB_STORAGE_DIR: "/tmp/bug-fab-conformance"
+      GIN_MODE: "release"
+    # `go run` resolves the module path relative to the adapter's go.mod.
+    command: ["go", "run", "./examples/minimal"]
+    ports:
+      - "18080:8080"
+    healthcheck:
+      # Server is "up" when the intake path responds at all (any non-5xx is fine —
+      # GET on POST-only routes returns 404/405 in Gin, both acceptable).
+      test: ["CMD-SHELL", "wget -q -O- --server-response http://localhost:8080/api/bug-fab/reports 2>&1 | grep -qE 'HTTP/1.1 (2..|4..)' && exit 0 || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
+    networks:
+      - bugfab-conformance
+
+  runner:
+    image: python:3.12
+    container_name: bug-fab-go-conformance-runner
+    depends_on:
+      adapter:
+        condition: service_healthy
+    # Working dir is /work (NOT /src) so pytest does NOT pick up the
+    # repo's own `tests/conftest.py`, which imports adapter-internal
+    # bug-fab modules (sqlalchemy, etc.) that we have no reason to install
+    # in a cross-stack conformance run. The plugin injects the bundled
+    # conformance-tests directory regardless of cwd.
+    working_dir: /work
+    volumes:
+      - ../../..:/src:ro
+      - ./out:/out
+      - pip-cache:/root/.cache/pip
+    environment:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    # Install the Bug-Fab package from the local repo (gives us the conformance
+    # plugin entry-point) then run the bundled suite against the adapter.
+    command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        mkdir -p /work
+        cd /work
+        # pytest is not a runtime dep of bug-fab — install it alongside the
+        # package. httpx ships as a bug-fab runtime dep so the conformance
+        # plugin already has it.
+        pip install --quiet /src pytest
+        pytest --bug-fab-conformance \
+               --base-url=http://adapter:8080/api/bug-fab \
+               --viewer-base-url=http://adapter:8080/api/bug-fab \
+               -v --tb=short \
+               --color=no \
+               -o cache_dir=/tmp/.pytest_cache \
+               --rootdir=/work \
+               2>&1 | tee /out/conformance-results.txt
+    networks:
+      - bugfab-conformance
+
+volumes:
+  go-mod-cache:
+  go-build-cache:
+  pip-cache:
+
+networks:
+  bugfab-conformance:
+    driver: bridge

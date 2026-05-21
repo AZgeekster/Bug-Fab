@@ -13,6 +13,48 @@ out explicitly in each release entry.
 
 ### Added
 
+- **Cross-stack conformance harnesses** for four first-party adapters,
+  closing the long-standing "pytest `--bug-fab-conformance` pending" gap
+  for the most popular non-Python adapters. Each is a self-contained
+  `repo/adapters/<lang>/conformance/` dir with `docker-compose.yml` +
+  `run-conformance.sh` + `README.md` that boots the adapter's example
+  server in its native toolchain container, runs the Python conformance
+  plugin from a sibling `python:3.12` container, and tears down:
+  - **`go-gin/conformance/`** — boots `examples/minimal/main.go` in
+    `golang:1.22`. **Conformant: 30/30 passing** (~0.46s).
+  - **`express/conformance/`** — boots `examples/server.ts` via
+    `npx tsx` in `node:20-bookworm-slim`. **Conformant: 30/30 passing**
+    (~1.13s).
+  - **`hono/conformance/`** — boots a thin `boot.ts` wrapper in
+    `oven/bun:1` (Bun resolves TypeScript natively, skipping a
+    `tsc --build` round-trip). **29/30 passing**; one real protocol
+    gap surfaced — `test_missing_screenshot_is_rejected` expects
+    400/422, adapter returns 415 (envelope-vs-part classification
+    in `src/intake.ts`). Tracked for v0.2.
+  - **`spring-boot-kotlin/conformance/`** — boots `:examples:minimal:bootRun`
+    in `gradle:8-jdk17` with `spring.autoconfigure.exclude` for
+    `DataSource*` + `*JpaAutoConfiguration` (Spring Data JPA is on
+    the implementation classpath and auto-configures Hikari even
+    when `bugfab.storage=file`). Cold-cache run ~2m45s (Gradle
+    download + JVM warmup), warm ~25-30s. **7/30 passing** —
+    multipart binding mismatch: controller uses `@RequestPart`
+    requiring `Content-Type: application/json` on the metadata
+    part, conformance suite posts metadata as an untyped form
+    field. Three other surface-level controller issues identified
+    (422 status on bean-validation failure; 404 on unknown
+    screenshot id; missing-part check ahead of magic-byte check).
+    Tracked for v0.2; all four fixes are surface-level
+    `BugReportsController.kt` changes — the storage / lifecycle /
+    rate-limit subsystems are unaffected. After the controller fix,
+    28-30/30 is expected.
+
+  Two reusable wiring patterns captured across the four harnesses:
+  (a) install the conformance plugin into the tester container via
+  `pip install -e /bugfab` rather than from PyPI, so a local code
+  change is exercised end-to-end; (b) run pytest with explicit
+  `--rootdir=/work` and a clean working dir so the Bug-Fab repo's
+  own `tests/conftest.py` (which imports `bug_fab.storage.sqlite`)
+  doesn't get auto-collected and shadow the plugin tests.
 - **Four new outbound-integration adapters** under `bug_fab/integrations/`,
   mirroring the shape `SlackSync` established earlier today
   (`.send(report) -> bool` + `.from_env()` + same best-effort failure-

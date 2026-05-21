@@ -119,10 +119,25 @@ The viewer permissions config (`can-edit-status`, `can-delete`, `can-bulk`) is a
 
 ## Conformance status
 
+Cross-stack `bug-fab-conformance` (pytest plugin) run against `examples:minimal`
+on 2026-05-21: **7 / 30 passing, 8 failing, 15 skipped (cascade from the 8
+failures)**. Driver and gap summary live in [`conformance/`](./conformance/);
+re-run with `./conformance/run-conformance.sh` (Docker required).
+
+The skips are cascading — most viewer / status-workflow / response-shape
+tests need a successful submission to set up their fixtures, and intake
+submissions currently fail with `400` because Spring's multipart binding
+expects `metadata` as a typed JSON part (`Content-Type: application/json`)
+while the conformance suite posts it as an untyped form field (the
+`httpx`/`requests`/`curl --form` shape that the wire protocol leaves
+implicit). Tracked separately — once that one binding is loosened, the
+cascade clears.
+
 | Conformance area               | Status                                                                 |
 |-------------------------------- |------------------------------------------------------------------------|
 | Wire protocol v0.1 endpoints    | All 8 implemented                                                      |
-| Severity enum (strict on write) | Conformant — `urgent` rejected with 422                                |
+| Cross-stack conformance suite   | **7 / 30** — see `conformance/` (intake multipart-binding gap)         |
+| Severity enum (strict on write) | Conformant — `urgent` rejected (currently returns 400; suite wants 422)|
 | Status enum (lenient on read)   | Conformant — string-typed on detail / summary models                   |
 | `protocol_version` rejection    | Conformant — `400 unsupported_protocol_version`                        |
 | Screenshot magic-byte check     | Conformant — `415 unsupported_media_type` for non-PNG                  |

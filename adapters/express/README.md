@@ -5,8 +5,11 @@ endpoints as a single mountable `express.Router`, with a zero-dependency
 filesystem storage backend out of the box.
 
 > **Status:** first-party adapter (promoted 2026-05-21, v0.1.0). Tracks the
-> [Bug-Fab v0.1 wire protocol][protocol]. Verified 41/41 tests passing
-> (9 conformance + 18 viewer + 14 intake) on Node 20.
+> [Bug-Fab v0.1 wire protocol][protocol]. Verified 41/41 in-process vitest
+> tests passing (9 conformance + 18 viewer + 14 intake) on Node 20, plus
+> cross-stack conformance: 30/30 of the upstream Python `pytest
+> --bug-fab-conformance` suite passing as of 2026-05-21 (see
+> [`conformance/`](./conformance/README.md)).
 
 [bf]: https://github.com/AZgeekster/Bug-Fab
 [exp]: https://expressjs.com/
@@ -270,9 +273,21 @@ npm run test:coverage
 Tests use `supertest` against an in-memory Express app; no real network
 calls are made except in the GitHub-sync paths, which are isolated.
 
-For full conformance against the upstream Python pytest plugin, boot the
-included [`examples/server.ts`](./examples/server.ts) and point the
-plugin at it:
+### Cross-stack conformance
+
+A Docker-based harness in [`conformance/`](./conformance/) boots
+[`examples/server.ts`](./examples/server.ts) and runs the upstream
+Python `pytest --bug-fab-conformance` suite against it. One command:
+
+```bash
+./conformance/run-conformance.sh
+```
+
+Status: **passing 30/30 as of 2026-05-21** (Node 20, Python 3.12). See
+[`conformance/README.md`](./conformance/README.md) for the wiring details
+and troubleshooting.
+
+If you prefer to run it by hand with a host Python install:
 
 ```bash
 pip install --pre bug-fab

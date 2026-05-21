@@ -219,14 +219,27 @@ If `cspNonce` is unset, the script tags ship without a nonce attribute, which is
 
 ## Conformance
 
-The adapter is designed to pass the official Python conformance suite:
+Official Python conformance suite: **29/30 passing as of 2026-05-21** under `oven/bun:1` via the bundled harness at [`conformance/`](./conformance). The one outstanding failure is a status-code gap on intake when the request is multipart but the `screenshot` part is missing (returns `415` instead of `400`/`422`) — tracked for v0.2.
+
+To reproduce locally:
+
+```bash
+cd conformance
+./run-conformance.sh
+```
+
+The harness boots the adapter on port 8080 inside a Bun container and runs the bundled `bug-fab` pytest plugin from a sibling `python:3.12` container — no host Python or Node required, just Docker.
+
+For ad-hoc runs against a server you've started yourself:
 
 ```bash
 pip install --pre bug-fab
-pytest --bug-fab-conformance --base-url=http://localhost:3000
+pytest --bug-fab-conformance \
+  --base-url=http://localhost:3000/api \
+  --viewer-base-url=http://localhost:3000/admin/bug-reports
 ```
 
-Local conformance smoke tests live in `tests/conformance.test.ts` and run on `npm test`.
+Local TypeScript smoke tests live in `tests/conformance.test.ts` and run on `npm test`.
 
 ## Architecture notes
 

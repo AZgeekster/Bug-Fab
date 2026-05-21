@@ -2,7 +2,7 @@
 
 Go + [Gin](https://github.com/gin-gonic/gin) adapter for the [Bug-Fab](https://github.com/AZgeekster/Bug-Fab) wire protocol v0.1.
 
-> **Status:** first-party reference adapter for the Go ecosystem. Promoted from draft on 2026-05-21 after `go test ./...` was verified at 37/37 passing (75.7% statement coverage). Upstream `pytest --bug-fab-conformance` runner for Go is a v0.2 candidate. Tracks Bug-Fab protocol v0.1.
+> **Status:** first-party reference adapter for the Go ecosystem. Promoted from draft on 2026-05-21 after `go test ./...` was verified at 37/37 passing (75.7% statement coverage) and the upstream `pytest --bug-fab-conformance` suite passed 30/30 against the example server (see [`conformance/`](./conformance/)). Tracks Bug-Fab protocol v0.1.
 
 This package wires the eight Bug-Fab endpoints onto any Gin engine, with a default file-based storage backend that mirrors the Python reference's on-disk layout byte-for-byte. A report written by this adapter can be read by the Python reference (and vice versa) without conversion.
 
@@ -168,7 +168,7 @@ For 413, `limit_bytes` is added. For 429, `retry_after_seconds` is added. For 42
 | Bulk-archive-closed moves only `closed` | passing (unit) |
 | Round-trip file layout vs. Python reference | passing (unit) |
 | Rate-limit gates intake at threshold | passing (unit) |
-| Conformance pytest suite (upstream) | **not yet run** — needs a Go test runner that hosts the bugfab server for the pytest harness. Flagged for v0.2. |
+| Conformance pytest suite (upstream) | **passing 30/30** as of 2026-05-21 — `./conformance/run-conformance.sh` boots `examples/minimal/main.go` in a `golang:1.22` container and runs `pytest --bug-fab-conformance` from a sibling `python:3.12` container. |
 
 ---
 
@@ -178,4 +178,12 @@ For 413, `limit_bytes` is added. For 429, `retry_after_seconds` is added. For 42
 go test ./...
 ```
 
-All tests are pure-Go and use `t.TempDir()` for storage isolation; no Docker, no fixtures, no live network.
+All Go tests are pure-Go and use `t.TempDir()` for storage isolation; no Docker, no fixtures, no live network.
+
+To also verify against the upstream Python conformance suite (boots the example server in Docker and runs `pytest --bug-fab-conformance` against it):
+
+```sh
+./conformance/run-conformance.sh
+```
+
+See [`conformance/README.md`](./conformance/README.md) for details.
