@@ -87,6 +87,37 @@ That's the whole thing. The blueprint:
 - **MAX_CONTENT_LENGTH:** set to 11 MiB to match the protocol's
   recommended total-request cap. Flask returns `413` itself for
   over-cap requests before any handler runs.
+- **Static-folder isolation.** `make_blueprint(...)` internally builds
+  its inner `Blueprint` with `static_folder=None` and serves the
+  vendored bundle from an explicit `/static/<path>` route under the
+  blueprint's mount prefix. This means Bug-Fab will **not** register a
+  competing `/static/<path>` route at your Flask app's root, and it
+  will not shadow (or be shadowed by) your app's own `app.static_folder`
+  default. You can safely leave Flask's default static handling in
+  place &mdash; Bug-Fab's bundle lives at `<prefix>/static/bug-fab.js`,
+  not at `/static/bug-fab.js`.
+- **Setting the lifecycle actor (`request.bug_fab_actor`).** The
+  Bug-Fab lifecycle log records *who* performed each status change,
+  delete, or bulk action. In FastAPI the adapter reads
+  `request.state.bug_fab_actor`; Flask has no `Request.state` analog,
+  so the Flask adapter reads `request.bug_fab_actor` directly. Wire
+  this from a `before_request` hook that resolves your authenticated
+  user:
+  ```python
+  from flask import g, request
+  from flask_login import current_user
+
+  @app.before_request
+  def _set_bug_fab_actor() -> None:
+      if current_user.is_authenticated:
+          # The Flask adapter reads `request.bug_fab_actor` directly
+          # (no `.state` indirection — Flask has no such attribute).
+          request.bug_fab_actor = current_user.get_id()
+  ```
+  Without a hook the lifecycle log records `"viewer"` as the actor,
+  which is correct but unhelpful for audit trails. The attribute can
+  be any string (username, email, user-id) &mdash; the storage layer
+  treats it as opaque.
 
 ## Custom storage backends
 

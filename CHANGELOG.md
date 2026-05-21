@@ -13,6 +13,41 @@ out explicitly in each release entry.
 
 ### Added
 
+- **Flask + Django adapter audit follow-ups** closed (the OPEN items
+  surfaced by the 2026-05-01 audits that hadn't been addressed yet).
+  All four Flask findings (F-5/F-6/F-7/F-8) and all three Django
+  findings (Drift B/F/G) marked FIXED in their audit files.
+  - Flask: 5 new tests covering empty-screenshot 400, malformed-JSON
+    400 (empty-detail branch), `can_delete=False` 403, `can_bulk=False`
+    403 (both bulk endpoints). Tightened the existing 404-envelope
+    assertions and split out `test_path_traversal_attempt_returns_404`
+    to document the Werkzeug app-dispatch boundary
+    (`..%2Fetc%2Fpasswd` is rejected at app-dispatch before the
+    blueprint sees it — returns HTML 404, not the JSON envelope; this
+    is by design, not a bug). New `request.bug_fab_actor` middleware
+    pattern documented in `examples/flask-minimal/README.md`,
+    contrasting Flask's flat attribute with FastAPI's `request.state`.
+    Flask test count: 30 → 35.
+  - Django: new `Verify Django migrations match models` step in
+    `.github/workflows/ci.yml` runs `python manage.py makemigrations
+    --check --dry-run bug_fab` from the example app. First CI run
+    surfaced real drift — the model declarations relied on Django's
+    auto-naming for the severity / archived_at / etc. indexes, but
+    the hand-authored `0001_initial.py` migration uses the
+    `bug_fab_bug_*_idx` short names. Pinned the index names on both
+    sides. Also added `django` to the CI install extras so the check
+    can run.
+  - Django: `BugFabConfig.ready()` now emits a one-time
+    `logging.warning` at app startup when `DATA_UPLOAD_MAX_MEMORY_SIZE`
+    is below the screenshot cap — names the misconfigured value,
+    recommends `cap + 2 MiB`, and links the Django docs page.
+  - Django: rewrote the `models.py` module docstring to drop the
+    misleading "column-for-column" claim. Enumerated the five
+    intentional Django-idiom divergences (`FileField` vs string,
+    `blank=True` default vs nullable, severity default,
+    `protocol_version` default, id length cap).
+
+  Full non-e2e test suite: 570 passed, 4 Postgres-only skipped.
 - **Cross-stack conformance harnesses** for five more first-party
   adapters (round two — closes the conformance loop across the
   remaining non-Python first-party adapters). Each is the same

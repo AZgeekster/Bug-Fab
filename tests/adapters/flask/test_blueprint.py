@@ -252,14 +252,52 @@ def test_get_screenshot_returns_png_bytes(
 
 
 def test_get_unknown_report_returns_404(tmp_path: Path) -> None:
-    """A non-existent (but well-formed) id returns 404."""
+    """A non-existent (but well-formed) id returns 404 with protocol envelope."""
     _, client = _make_app(tmp_path=tmp_path)
     resp = client.get("/bug-fab/reports/bug-999")
     assert resp.status_code == 404
+    # F-7: the errorhandler (blueprint.py) must convert Flask's default
+    # HTML 404 page into the protocol's ``{error, detail}`` JSON envelope.
+    assert resp.mimetype == "application/json"
+    body = resp.get_json()
+    assert body["error"] == "not_found"
+    assert "detail" in body
 
 
 def test_malformed_id_returns_404(tmp_path: Path) -> None:
-    """An id that fails the path-traversal guard returns 404, not 500."""
+    """An id that fails the blueprint's id-shape guard returns 404 with envelope.
+
+    Uses an id that DOES route into the blueprint (single path segment, no
+    encoded slashes) so the blueprint's ``_validate_report_id`` regex
+    rejects it and the blueprint's 404 errorhandler converts that to the
+    protocol envelope. Werkzeug-normalized URL-traversal attempts (e.g.
+    ``..%2Fetc%2Fpasswd``) are rejected at the app dispatch layer before
+    any blueprint handler can run; those still return Flask's default
+    HTML 404 page because Bug-Fab does not install an app-wide
+    errorhandler (doing so would override the host app's own 404 page).
+    """
+    _, client = _make_app(tmp_path=tmp_path)
+    # ``not-a-bug-id`` matches the route pattern (single segment) but
+    # fails ``_REPORT_ID_RE`` inside the handler -> blueprint abort(404).
+    resp = client.get("/bug-fab/reports/not-a-bug-id")
+    assert resp.status_code == 404
+    # F-7: the blueprint's errorhandler must convert abort(404) into the
+    # protocol envelope.
+    assert resp.mimetype == "application/json"
+    body = resp.get_json()
+    assert body["error"] == "not_found"
+
+
+def test_path_traversal_attempt_returns_404(tmp_path: Path) -> None:
+    """A URL-encoded path-traversal attempt is rejected before the handler.
+
+    Documents the boundary: Werkzeug normalizes ``%2F`` to ``/`` and
+    rejects the path during routing, so the blueprint never sees the
+    request and the response uses Flask's app-level 404 page (HTML).
+    This is acceptable because Bug-Fab does not own the host app's
+    error pages — installing an app-wide errorhandler would change the
+    consumer's behavior outside the Bug-Fab mount prefix.
+    """
     _, client = _make_app(tmp_path=tmp_path)
     resp = client.get("/bug-fab/reports/..%2Fetc%2Fpasswd")
     assert resp.status_code == 404
@@ -316,6 +354,103 @@ def test_status_update_blocked_when_permission_disabled(
     rid = _seed_one(client, valid_metadata_dict, tiny_png)
     resp = client.put(f"/bug-fab/reports/{rid}/status", json={"status": "fixed"})
     assert resp.status_code == 403
+
+
+# -----------------------------------------------------------------------------
+# Edge-case intake envelopes (audit F-5)
+# -----------------------------------------------------------------------------
+
+
+def test_submit_rejects_empty_screenshot_with_400(
+    tmp_path: Path,
+    valid_metadata_dict: dict[str, Any],
+) -> None:
+    """An empty screenshot file yields ``validation_error`` per protocol."""
+    _, client = _make_app(tmp_path=tmp_path)
+    resp = client.post(
+        "/bug-fab/bug-reports",
+        data={
+            "metadata": json.dumps(valid_metadata_dict),
+            "screenshot": (BytesIO(b""), "shot.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert body["error"] == "validation_error"
+    assert "empty" in body["detail"].lower()
+
+
+def test_submit_rejects_malformed_json_metadata_with_400(
+    tmp_path: Path,
+    tiny_png: bytes,
+) -> None:
+    """Non-JSON ``metadata`` text yields ``validation_error`` (empty-detail branch)."""
+    _, client = _make_app(tmp_path=tmp_path)
+    resp = client.post(
+        "/bug-fab/bug-reports",
+        data={
+            "metadata": "this is not json {",
+            "screenshot": (BytesIO(tiny_png), "shot.png", "image/png"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 400
+    body = resp.get_json()
+    # validate_payload's IntakeValidationError carries an empty ``detail``
+    # list on JSON-decode failure; the adapter must route to
+    # ``validation_error`` 400, not ``schema_error`` 422.
+    assert body["error"] == "validation_error"
+
+
+# -----------------------------------------------------------------------------
+# Permission gates on delete + bulk (audit F-5)
+# -----------------------------------------------------------------------------
+
+
+def test_delete_blocked_when_can_delete_disabled(
+    tmp_path: Path,
+    tiny_png: bytes,
+    valid_metadata_dict: dict[str, Any],
+) -> None:
+    """``can_delete=False`` returns 403 with the protocol envelope."""
+    settings = Settings(
+        storage_dir=tmp_path / "bug_reports",
+        viewer_permissions={"can_edit_status": True, "can_delete": False, "can_bulk": True},
+    )
+    _, client = _make_app(tmp_path=tmp_path, settings=settings)
+    rid = _seed_one(client, valid_metadata_dict, tiny_png)
+    resp = client.delete(f"/bug-fab/reports/{rid}")
+    assert resp.status_code == 403
+    assert resp.mimetype == "application/json"
+    body = resp.get_json()
+    assert body["error"] == "forbidden"
+
+
+def test_bulk_close_blocked_when_can_bulk_disabled(
+    tmp_path: Path,
+    tiny_png: bytes,
+    valid_metadata_dict: dict[str, Any],
+) -> None:
+    """``can_bulk=False`` blocks both bulk endpoints with the protocol envelope."""
+    settings = Settings(
+        storage_dir=tmp_path / "bug_reports",
+        viewer_permissions={"can_edit_status": True, "can_delete": True, "can_bulk": False},
+    )
+    _, client = _make_app(tmp_path=tmp_path, settings=settings)
+    # Seed one ``fixed`` report so the bulk endpoint has work to refuse.
+    rid = _seed_one(client, valid_metadata_dict, tiny_png)
+    client.put(f"/bug-fab/reports/{rid}/status", json={"status": "fixed"})
+
+    close = client.post("/bug-fab/bulk-close-fixed")
+    assert close.status_code == 403
+    assert close.mimetype == "application/json"
+    assert close.get_json()["error"] == "forbidden"
+
+    archive = client.post("/bug-fab/bulk-archive-closed")
+    assert archive.status_code == 403
+    assert archive.mimetype == "application/json"
+    assert archive.get_json()["error"] == "forbidden"
 
 
 # -----------------------------------------------------------------------------
