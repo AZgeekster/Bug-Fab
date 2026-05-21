@@ -171,6 +171,148 @@ flyctl deploy  # redeploy
 The volume's contents persist across deploys, so demo data sticks
 around.
 
+## Co-hosting a marketing site at `/`
+
+The POC image has an optional second role: it can serve a static site at
+`/` while keeping the demo at `/playground`. Same machine, same volume,
+no second app.
+
+Mechanics:
+
+- `_resolve_marketing_dir()` (in `examples/error-playground/main.py`)
+  looks for `/app/marketing-dist/index.html`. Override the path via
+  `BUG_FAB_MARKETING_DIR` if you want to point somewhere else.
+- When that file is present, FastAPI mounts the directory at `/` via
+  `StaticFiles(html=True)`. The explicit routes — `/api/bug-reports`,
+  `/admin/bug-reports/*`, `/bug-fab/static/*`, `/playground`,
+  `/demo/missing`, `/demo/explode` — are registered first, so the static
+  mount only catches what's left.
+- When the directory is absent (e.g., local dev, or a build that skipped
+  the sync), `/` falls back to serving the playground HTML directly so
+  the demo never 404s.
+- The `Dockerfile` ships a `COPY marketing-dist /app/marketing-dist`
+  step. The expectation is that you build the static site *outside* the
+  Docker context (in whatever project owns the site), then copy or sync
+  the build output into `marketing-dist/` at the repo root before
+  `flyctl deploy` runs.
+- `marketing-dist/` is gitignored. It's a synced artifact, never
+  committed.
+
+Bring your own static site (Astro, Eleventy, Hugo, plain HTML — anything
+that produces a `dist/`-style folder):
+
+```bash
+# In your static-site project, build it however you normally do.
+cd ../your-static-site
+npm run build           # or: eleventy, hugo, etc.
+
+# Sync the build output into Bug-Fab's repo root before deploying.
+cd ../Bug-Fab
+rm -rf marketing-dist
+cp -r ../your-static-site/dist marketing-dist
+
+flyctl deploy
+```
+
+After deploy, `https://your-app.fly.dev/` serves the static site and
+`https://your-app.fly.dev/playground` serves the demo. Your site is
+responsible for linking to `/playground` if you want visitors to find
+it.
+
+If you don't want a marketing site, do nothing. Skip the `cp` step,
+leave `marketing-dist/` absent, and `/` keeps serving the playground
+the way it always did.
+
+## Hardening for a public, anonymous demo
+
+The default `fly.toml` shipped in this repo is tuned for the canonical
+public POC at `https://bug-fab.fly.dev/` — i.e., a wide-open,
+anonymous, internet-addressable instance with no auth. If that
+describes your deployment too, the existing config is a reasonable
+starting point. If you're standing up an internal collector behind
+auth or VPN, you can leave most of these knobs at their package
+defaults.
+
+### Tightened package knobs
+
+These are existing `bug_fab` package settings (the package defaults are
+unchanged); the public POC just dials them down:
+
+```toml
+[env]
+  BUG_FAB_RATE_LIMIT_ENABLED = "true"
+  BUG_FAB_RATE_LIMIT_MAX = "5"
+  BUG_FAB_RATE_LIMIT_WINDOW_SECONDS = "900"
+  BUG_FAB_MAX_UPLOAD_MB = "2"
+```
+
+- **`BUG_FAB_RATE_LIMIT_MAX=5` per `WINDOW_SECONDS=900`** — five reports
+  per IP per fifteen minutes. Nobody legitimately files five reports
+  in fifteen minutes; the package default of 50/hour is sized for an
+  authenticated internal deployment where the cost of a wrong rejection
+  is higher than the cost of a flood.
+- **`BUG_FAB_MAX_UPLOAD_MB=2`** — html2canvas at typical page sizes
+  produces well under 1 MiB. 2 MiB leaves headroom for a 4K display
+  without giving an attacker room to chew memory. The package default
+  is 10 MiB, again sized for a forgiving internal deployment.
+
+These knobs work for any consumer of the `bug_fab` package — there's
+nothing POC-specific about them. The above values are the recommended
+shape for an *anonymous public* instance.
+
+### Playground-only abuse caps
+
+`examples/error-playground/main.py` adds three env vars that the
+`bug_fab` package itself does not ship. They're enforced inside the
+example app via a `FileStorage` subclass plus an ASGI middleware:
+
+```toml
+[env]
+  BUG_FAB_PLAYGROUND_MAX_REPORTS = "500"
+  BUG_FAB_PLAYGROUND_MAX_DISK_MB = "200"
+  BUG_FAB_PLAYGROUND_MAX_BODY_KB = "2200"
+```
+
+- **`BUG_FAB_PLAYGROUND_MAX_REPORTS`** — hard ceiling on the number of
+  stored reports. After each successful save, the oldest reports
+  (by `created_at`) are deleted FIFO until the count is back under
+  cap. `0` (the default) disables the check.
+- **`BUG_FAB_PLAYGROUND_MAX_DISK_MB`** — hard ceiling on the total bytes
+  used by `bug-*.json` + `bug-*.png` on the volume. Same FIFO eviction
+  as above; `0` disables.
+- **`BUG_FAB_PLAYGROUND_MAX_BODY_KB`** — pre-route cap on the
+  `Content-Length` of `POST /api/bug-reports`. Oversize requests are
+  rejected with `413` *before* uvicorn buffers the body, so a 50 MiB
+  metadata blob costs roughly nothing. `0` disables.
+
+All three default to `0` so unit tests and local dev see no extra
+restrictions. The public POC opts in via `fly.toml`.
+
+These caps live in the example file, **not** the `bug_fab` package.
+Self-hosters who want them must either keep running
+`examples/error-playground/main.py` as their entry point, or copy the
+`_CappedFileStorage` and `_BodySizeLimitMiddleware` classes into their
+own app. Other consumers of the package don't get these caps
+automatically — which is intentional, since a private internal
+collector wouldn't want FIFO eviction surprising users.
+
+### Worst-case math
+
+A rough envelope for the values above:
+
+- Per-IP rate limit: 5 reports / 15 min × 2 MiB/screenshot ≈ 40 MiB/hr
+  of disk consumption from a single source.
+- Global ceiling: 500 reports / 200 MiB. A sustained flood across many
+  IPs hits the global cap, then FIFO eviction kicks in — old demo
+  submissions are evicted, but the volume never fills.
+- The pre-route 413 means request bodies above `MAX_BODY_KB` never get
+  read into memory; the cost of a malformed flood is bounded by the
+  rate limiter, not by request size.
+
+Pick your own numbers based on your volume size and how much demo
+history you want to keep. The shape above leaves comfortable headroom
+on the 1 GB Fly volume from the recipe earlier in this doc.
+
 ## Locking down the viewer
 
 The example app ships with the viewer wide open so the public can poke

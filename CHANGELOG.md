@@ -13,6 +13,31 @@ out explicitly in each release entry.
 
 ### Added
 
+- Optional marketing-site co-hosting in the `examples/error-playground/`
+  POC image. A new `_resolve_marketing_dir()` helper looks for
+  `/app/marketing-dist` (override via the `BUG_FAB_MARKETING_DIR` env
+  var); when present, the FastAPI app mounts that directory at `/` via
+  `StaticFiles(html=True)` and moves the playground to `/playground`.
+  When absent, `/` falls back to serving the playground so the live demo
+  never 404s. `Dockerfile` gains `COPY marketing-dist /app/marketing-dist`
+  and `.gitignore` ignores the synced `marketing-dist/` directory (built
+  outside the Docker context). Lets self-hosters of the POC image
+  co-host a static site at root without standing up a second app.
+- Playground-only abuse caps in `examples/error-playground/main.py` for
+  the public POC. Two new constructs ship in the example file (not in
+  the `bug_fab` package): `_CappedFileStorage` subclasses
+  `bug_fab.FileStorage` and, after each successful save, deletes the
+  oldest reports FIFO by `created_at` until both the report count and
+  the on-disk byte total are back under cap (a cap of 0 disables that
+  dimension; each drop logs `playground_evicted_report`). And
+  `_BodySizeLimitMiddleware`, an ASGI middleware that rejects `POST`s
+  to `/api/bug-reports` with `413` when `Content-Length` exceeds a
+  budget — before uvicorn buffers the body. Three new env vars wire
+  them up: `BUG_FAB_PLAYGROUND_MAX_REPORTS`,
+  `BUG_FAB_PLAYGROUND_MAX_DISK_MB`, `BUG_FAB_PLAYGROUND_MAX_BODY_KB`.
+  All default to `0` (off) so unit tests and local dev are unaffected;
+  the public POC opts in via `fly.toml` at 500 reports / 200 MiB /
+  2200 KB.
 - ASP.NET Core / Razor Pages first-party adapter under
   `repo/adapters/aspnet/`. Promotes the previously private
   `notes/adapter_drafts/aspnet/` draft to a maintained reference adapter
@@ -158,6 +183,14 @@ out explicitly in each release entry.
 
 ### Changed
 
+- Tightened the public POC deployment's package-knob defaults in
+  `fly.toml` without changing any defaults inside the `bug_fab`
+  package itself: `BUG_FAB_RATE_LIMIT_MAX=5` (was 50),
+  `BUG_FAB_RATE_LIMIT_WINDOW_SECONDS=900` (was 3600), and
+  `BUG_FAB_MAX_UPLOAD_MB=2` (was the 10-MiB default). Package defaults
+  are unchanged; this only affects the live demo at the POC URL. Pairs
+  with the new playground-only caps above to harden a wide-open
+  internet-facing instance.
 - Replaced the inline `onclick="window.location.reload()"` on the
   list-view Refresh button with a `data-bug-fab-action="reload"`
   attribute and a single `addEventListener` registration in the
@@ -181,6 +214,14 @@ out explicitly in each release entry.
 
 ### Fixed
 
+- Capped the auto-expanded "Auto-Captured Context" `<details>` body in
+  the report overlay at `max-height: 200px` with `overflow-y: auto` (via
+  the `.bug-fab-context__body` rule in `examples/error-playground/main.py`).
+  When many console and network events were captured, the expanded block
+  was inflating the FAB form past typical viewports and pushing the
+  Submit button below the fold. The metadata plus a few events now stay
+  visible while overflow scrolls inside the context box instead of the
+  whole form.
 - Resolved the drift between the intake router (which accepted both PNG
   and JPEG) and the viewer screenshot endpoint (which always served
   `image/png`). Stored screenshots are now guaranteed to match the
