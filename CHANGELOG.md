@@ -13,6 +13,67 @@ out explicitly in each release entry.
 
 ### Added
 
+- **Cross-stack conformance harnesses** for five more first-party
+  adapters (round two — closes the conformance loop across the
+  remaining non-Python first-party adapters). Each is the same
+  shape as the round-one harnesses: `repo/adapters/<lang>/conformance/`
+  with `docker-compose.yml` + `run-conformance.sh` + `README.md`,
+  boots the adapter's example in its native toolchain container,
+  runs the Python conformance plugin from a sibling
+  `python:3.12-slim` container.
+  - **`rust-axum/conformance/`** — boots `bugfab-example` (`cargo run
+    --release`) in `rust:1.75`. **30/30 on first contact** (the only
+    adapter so far to land clean without any fix). Uses
+    `network_mode: "service:rust-adapter"` so the tester sees
+    localhost (the example hardcodes `127.0.0.1:8080`).
+  - **`phoenix/conformance/`** — boots a thin `boot.exs` wrapper
+    around `Plug.Cowboy` in `elixir:1.16` (`examples/minimal/minimal.exs`
+    doesn't honor `PORT` so the wrapper does — example file untouched).
+    **30/30 on first contact.**
+  - **`rails/conformance/`** — boots `test/dummy` via `rails server`
+    in `ruby:3.3`. **30/30 on first contact.** Three runtime tweaks
+    documented in the harness README (storage_root + DATABASE_URL +
+    `RAILS_ENV=test` to dodge sprockets), none baked into the dummy
+    app.
+  - **`laravel/conformance/`** — synthesizes a minimal Laravel 11
+    host on first boot via `composer create-project`, pulls the
+    adapter in via a `path` repository. **30 passed / 3 skipped /
+    0 failed.** Three Laravel-host gaps worked around in the
+    harness, none required adapter changes: `composer create-project`'s
+    blank `APP_KEY` refusal (fixed via `key:generate --show | sed`),
+    Laravel 11's `web` group CSRF firing 419 on stateless PUTs (patched
+    `bootstrap/app.php` to exclude the viewer prefix), and `php
+    artisan serve`'s default `post_max_size=8M` capping at the PHP
+    layer before the adapter's 4 MiB cap could fire (raised to 20M
+    in a `conf.d` `.ini`). Two real follow-ups surfaced: consider
+    exposing a `viewer.exclude_from_csrf` config knob; document the
+    `php.ini`/`BUG_FAB_MAX_SCREENSHOT_MB` interaction.
+  - **`sveltekit/conformance/`** — boots `examples/route-tree` via
+    `adapter-node` (`node build`) in `node:20-bookworm-slim`.
+    **27/30 passing.** Three real failures: the same intake.ts
+    415-vs-400 classification bug Hono had (fix is a clean port
+    of the Hono patch); two bulk-endpoint mount issues — the
+    example route tree puts bulk endpoints under
+    `/admin/reports/bulk-*` but the protocol mandates `/admin/bulk-*`
+    as a sibling of `/reports`. The bulk-route fix is a directory-
+    reorganization in `examples/route-tree/src/routes/admin/` —
+    tracked for follow-up.
+
+- **Hono intake status-code fix** at `repo/adapters/hono/src/intake.ts`.
+  Adapter was returning **415 Unsupported Media Type** when the
+  multipart envelope was present but the required `screenshot` part
+  was missing; the protocol mandates **400 validation_error**. Root
+  cause was a strict `Content-Type === multipart/form-data` check
+  that rejected the `application/x-www-form-urlencoded` envelope
+  httpx downgrades to when sending `_post_multipart(..., files=None)`
+  before the per-part validation could fire. Fix accepts both
+  `multipart/form-data` AND `application/x-www-form-urlencoded` as
+  valid form envelopes, letting the existing `instanceof File` check
+  on the `screenshot` part correctly emit 400 when the part is
+  absent. vitest unit suite stays at 44/44 (existing tests pinned the
+  right behavior; no test edits needed). Hono conformance now at
+  **30/30** (was 29/30).
+
 - **Cross-stack conformance harnesses** for four first-party adapters,
   closing the long-standing "pytest `--bug-fab-conformance` pending" gap
   for the most popular non-Python adapters. Each is a self-contained

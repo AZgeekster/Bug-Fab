@@ -71,9 +71,21 @@ export function buildIntakeApp(opts: BugFabAppOptions): Hono {
     }
 
     // Content-Type sanity check. Hono's parseBody handles the heavy
-    // lifting but a non-multipart body would throw a less helpful error.
-    const ct = c.req.header('content-type') ?? ''
-    if (!ct.toLowerCase().includes('multipart/form-data')) {
+    // lifting but a non-form body would throw a less helpful error.
+    //
+    // Per docs/PROTOCOL.md §Error mapping:
+    //   - "multipart Content-Type wrong" (e.g., application/json) → 415
+    //   - "multipart missing required parts" → 400 validation_error
+    // We accept any form-style envelope here (multipart OR urlencoded);
+    // the missing-parts check below distinguishes the two error modes.
+    // An urlencoded body can never carry a file, so it will always fall
+    // through to the missing-screenshot 400 path — which is what the
+    // protocol mandates for that case.
+    const ct = (c.req.header('content-type') ?? '').toLowerCase()
+    const isFormEnvelope =
+      ct.includes('multipart/form-data') ||
+      ct.includes('application/x-www-form-urlencoded')
+    if (!isFormEnvelope) {
       return c.json(
         Errors.unsupportedMediaType(
           'Content-Type must be multipart/form-data with metadata + screenshot parts.',

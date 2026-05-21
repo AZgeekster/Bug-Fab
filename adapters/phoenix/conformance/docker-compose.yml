@@ -1,0 +1,117 @@
+# Cross-stack conformance harness for the Bug-Fab Phoenix/Plug adapter.
+#
+# Two services on a shared bridge network:
+#   - phoenix-adapter: elixir:1.16, fetches/compiles deps and boots the
+#                     conformance wrapper (`conformance/boot.exs`) which
+#                     mirrors `examples/minimal/minimal.exs` on :8080
+#                     instead of :4000. Mounts intake at /api and viewer at
+#                     /admin/bug-reports.
+#   - runner:         python:3.12-slim, pip-installs the bug-fab wheel from
+#                     the repo root, runs the bundled
+#                     `pytest --bug-fab-conformance` plugin against the
+#                     adapter container.
+#
+# Why a wrapper boot.exs (not the example directly):
+#   - examples/minimal/minimal.exs hardcodes port 4000 with no env override.
+#   - Per Andrew's CLAUDE rules, the example is read-only for harness work;
+#     we add a sibling boot.exs that uses the same routers on port 8080.
+
+services:
+  phoenix-adapter:
+    image: elixir:1.16
+    container_name: bug-fab-phoenix-conformance-adapter
+    working_dir: /src/adapters/phoenix
+    volumes:
+      - ../../..:/src
+      - hex-cache:/root/.hex
+      - mix-cache:/root/.mix
+      - phoenix-build:/src/adapters/phoenix/_build
+      - phoenix-deps:/src/adapters/phoenix/deps
+    environment:
+      MIX_ENV: "dev"
+      BUG_FAB_STORAGE_DIR: "/tmp/bug-fab-conformance"
+      PORT: "8080"
+    # local.hex / local.rebar bring the build chain online inside the
+    # container without prompting; deps.get pulls plug, plug_cowboy, jason;
+    # compile builds the adapter; boot.exs starts Plug.Cowboy on :8080.
+    command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        mix local.hex --force
+        mix local.rebar --force
+        mix deps.get
+        mix compile
+        exec elixir -S mix run --no-halt conformance/boot.exs
+    ports:
+      - "18081:8080"
+    healthcheck:
+      # Server is "up" when the intake route responds at all. GET on a
+      # POST-only route returns 404/405 in Plug.Router — both are non-5xx
+      # and prove the listener is bound. We use curl (present in
+      # elixir:1.16) and accept any HTTP status code 100-499.
+      test: ["CMD-SHELL", "code=$$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/bug-reports || echo 000); case \"$$code\" in 1*|2*|3*|4*) exit 0 ;; *) exit 1 ;; esac"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+      # First boot has to pull ~25 Hex packages and compile them all — give
+      # the container a generous start_period so the healthcheck does not
+      # flap "unhealthy" during compilation. Subsequent runs hit cached
+      # _build/ + deps/ volumes and finish in seconds.
+      start_period: 180s
+    networks:
+      - bugfab-conformance
+
+  runner:
+    image: python:3.12-slim
+    container_name: bug-fab-phoenix-conformance-runner
+    depends_on:
+      phoenix-adapter:
+        condition: service_healthy
+    # Working dir is /work (NOT /src) so pytest does not pick up the
+    # repo's own `tests/conftest.py`, which imports adapter-internal
+    # bug-fab modules. The conformance plugin injects the bundled
+    # conformance-tests directory regardless of cwd.
+    working_dir: /work
+    volumes:
+      - ../../..:/src:ro
+      - ./out:/out
+      - pip-cache:/root/.cache/pip
+    environment:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        mkdir -p /work
+        cd /work
+        # pytest is not a runtime dep of bug-fab — install alongside the
+        # package. httpx ships as a bug-fab runtime dep so the conformance
+        # plugin already has it.
+        pip install --quiet /src pytest
+        # Phoenix mounts intake at /api and viewer at /admin/bug-reports;
+        # the conformance suite appends /bug-reports to --base-url and
+        # /reports etc. to --viewer-base-url.
+        pytest --bug-fab-conformance \
+               --base-url=http://phoenix-adapter:8080/api \
+               --viewer-base-url=http://phoenix-adapter:8080/admin/bug-reports \
+               -v --tb=short \
+               --color=no \
+               -o cache_dir=/tmp/.pytest_cache \
+               --rootdir=/work \
+               2>&1 | tee /out/conformance-results.txt
+    networks:
+      - bugfab-conformance
+
+volumes:
+  hex-cache:
+  mix-cache:
+  phoenix-build:
+  phoenix-deps:
+  pip-cache:
+
+networks:
+  bugfab-conformance:
+    driver: bridge

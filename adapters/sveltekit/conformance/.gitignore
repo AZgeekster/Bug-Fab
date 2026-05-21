@@ -1,0 +1,11 @@
+# SvelteKit build artifacts produced by the conformance app boot inside Docker.
+# These land in the bind-mounted host directory because adapter-node refuses
+# to write into a volume mount (rmdirSync would fail on a mount point).
+node_modules/
+.svelte-kit/
+build/
+# Routes/lib are copied in at docker boot from
+# ../examples/route-tree/src/. They land on the host via the bind mount
+# but are not source-of-truth here.
+src/routes/
+src/lib/

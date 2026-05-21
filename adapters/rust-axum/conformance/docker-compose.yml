@@ -1,0 +1,118 @@
+# Cross-stack conformance harness for the Bug-Fab Rust (Axum) adapter.
+#
+# Two services:
+#   - rust-adapter:  rust:1.75, builds and runs `bugfab-example` (the workspace's
+#                    example consumer) on :8080 with file-backed storage.
+#   - tester:        python:3.12-slim, pip-installs the Bug-Fab Python package
+#                    from the repo root, then runs the upstream
+#                    `pytest --bug-fab-conformance` suite against the adapter.
+#
+# WHY `network_mode: "service:rust-adapter"` on the tester:
+#   `bugfab-example/src/main.rs` binds to 127.0.0.1:8080 (hardcoded). With a
+#   normal user-defined bridge network the tester container can't reach the
+#   adapter's loopback. Sharing the adapter's network namespace lets the
+#   tester hit `http://127.0.0.1:8080` directly. We cannot change the adapter
+#   source under this harness's scope.
+#
+# WHY a separate `CARGO_TARGET_DIR` named volume:
+#   Source mount is read-only (`:ro`) to mirror the go-gin pattern, but
+#   `cargo build --release` writes to `target/`. Redirecting `CARGO_TARGET_DIR`
+#   to a named volume keeps the source mount immutable AND caches the build
+#   between runs — important because the cold-cache release build is several
+#   minutes.
+#
+# Layout: this file lives at `repo/adapters/rust-axum/conformance/`.
+# `../../..` resolves to the Bug-Fab repo root so the tester can
+# `pip install /src` against `pyproject.toml`.
+
+services:
+  rust-adapter:
+    image: rust:1.75
+    container_name: bug-fab-rust-conformance-adapter
+    # WHY working_dir=/tmp/runtime (NOT /src/adapters/rust-axum):
+    # `bugfab-example/src/main.rs` calls `FileStorage::new("./bug-fab-data", "")`
+    # which resolves relative to CWD. The source mount is read-only, so a CWD
+    # inside it crashes at boot with `ReadOnlyFilesystem`. Run the binary from
+    # /tmp/runtime (writable tmpfs in the rust image) and point cargo at the
+    # workspace via `--manifest-path`.
+    working_dir: /tmp/runtime
+    volumes:
+      - ../../..:/src:ro
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/cargo-target
+    environment:
+      CARGO_TARGET_DIR: "/cargo-target"
+      BUGFAB_STORAGE_DIR: "/tmp/runtime/bugfab-data"
+      RUST_LOG: "info"
+    # `--release` for faster startup; conformance is latency-sensitive and a
+    # debug build noticeably slows per-test roundtrips on a cold cache.
+    # `-p bugfab-example` pins the workspace member so cargo doesn't try to
+    # default-run the library crate.
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        mkdir -p /tmp/runtime
+        cd /tmp/runtime
+        exec cargo run --release \
+          --manifest-path /src/adapters/rust-axum/Cargo.toml \
+          -p bugfab-example
+    expose:
+      - "8080"
+    healthcheck:
+      # `rust:1.75` ships curl. Any non-5xx is "up enough" — viewer GET on
+      # `/reports` returns 200 with an empty list once the server is bound.
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/reports | grep -qE '^(2..|4..)$$' && exit 0 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 90
+      # Cold `cargo build --release` of the workspace is several minutes on a
+      # fresh image. 7 minutes of grace before the healthcheck starts polling.
+      start_period: 420s
+
+  tester:
+    image: python:3.12-slim
+    container_name: bug-fab-rust-conformance-tester
+    depends_on:
+      rust-adapter:
+        condition: service_healthy
+    # Share the adapter's network namespace so 127.0.0.1:8080 resolves to
+    # the adapter (see WHY note at top of file).
+    network_mode: "service:rust-adapter"
+    # /work — NOT the repo root — to avoid auto-loading the repo's own
+    # `tests/conftest.py`, which imports adapter-internal deps the tester
+    # has no reason to install. The conformance plugin discovers its
+    # bundled tests via the pytest11 entry-point.
+    working_dir: /work
+    volumes:
+      - ../../..:/bugfab:ro
+      - ./out:/out
+      - pip-cache:/root/.cache/pip
+    environment:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        mkdir -p /work
+        cd /work
+        echo "[tester] installing bug-fab from /bugfab ..."
+        pip install --quiet -e /bugfab pytest
+        echo "[tester] running pytest --bug-fab-conformance ..."
+        pytest --bug-fab-conformance \
+               --base-url=http://127.0.0.1:8080 \
+               --viewer-base-url=http://127.0.0.1:8080 \
+               -v --tb=short \
+               --color=no \
+               -o cache_dir=/tmp/.pytest_cache \
+               --rootdir=/work \
+               2>&1 | tee /out/conformance-results.txt
+
+volumes:
+  cargo-registry:
+  cargo-git:
+  cargo-target:
+  pip-cache:

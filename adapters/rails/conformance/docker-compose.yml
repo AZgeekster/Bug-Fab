@@ -1,0 +1,124 @@
+# Cross-stack conformance harness for the Bug-Fab Rails (Engine) adapter.
+#
+# Two services on a shared bridge network:
+#   - rails-adapter: ruby:3.3, boots the in-repo test/dummy app via
+#                    conformance_boot.rb (applies a writable storage_root +
+#                    DATABASE_URL override at runtime — NO source edits), and
+#                    serves the eight Bug-Fab endpoints under the engine mount
+#                    prefix /bug-fab on :8080.
+#   - runner:        python:3.12-slim, pip-installs the bug-fab wheel from the
+#                    repo root, runs `pytest --bug-fab-conformance` against
+#                    the adapter container.
+#
+# WHY a separate Python runner container instead of host-pytest:
+#   - Keeps the harness "one command from cold clone" — no Python install on host.
+#   - Pins the pytest version Bug-Fab ships, removing host drift.
+#
+# WHY a separate conformance/Gemfile instead of reusing ../Gemfile:
+#   - The engine's Gemfile is library code; it does NOT pin Puma. The dummy
+#     app's `bin/rails server` needs one at runtime. Adding `puma` to ../Gemfile
+#     is out of scope (the conformance harness is supposed to be inert against
+#     the adapter source). The conformance/Gemfile re-uses the engine's gemspec
+#     so the dependency graph stays in sync, and adds Puma + sqlite3 for the
+#     dummy app's runtime.
+#
+# WHY two overlapping bind mounts (read-only repo + read-write conformance):
+#   - Ensures bundle can write its Gemfile.lock + gem cache without polluting
+#     the rest of the repo source tree. The /src mount is read-only as a tripwire.
+#
+# The dummy app mounts the engine at "/bug-fab" (see test/dummy/config/routes.rb).
+# Per the protocol, the intake path is "/bug-reports" under that prefix, so the
+# conformance plugin's --base-url ends at "/bug-fab".
+
+services:
+  rails-adapter:
+    image: ruby:3.3
+    container_name: bug-fab-rails-conformance-adapter
+    working_dir: /src/adapters/rails
+    volumes:
+      # Whole repo as a tripwire-style read-only mount — any attempted source
+      # change from inside the container will surface as a write error in logs.
+      - ../../..:/src:ro
+      # Overlay the conformance/ subtree as read-write so Bundler can write
+      # Gemfile.lock + run its own cache without touching app/, lib/, etc.
+      - ./:/src/adapters/rails/conformance:rw
+      - bundle-cache:/usr/local/bundle
+    environment:
+      BUNDLE_GEMFILE: "/src/adapters/rails/conformance/Gemfile"
+      # Force bundler off "deployment" / "frozen" mode so a missing Gemfile.lock
+      # on first boot doesn't fail. Lock is regenerated on each cold start.
+      BUNDLE_FROZEN: "false"
+      BUNDLE_DEPLOYMENT: "false"
+      # "test" env avoids dev-only sprockets dependency in dummy's
+      # environments/development.rb (config.assets.quiet).
+      RAILS_ENV: "test"
+      RAILS_LOG_TO_STDOUT: "true"
+      # Conformance-only env vars consumed by conformance_boot.rb:
+      BUG_FAB_STORAGE_DIR: "/tmp/bug-fab-conformance-storage"
+      BUG_FAB_CONFORMANCE_DB: "/tmp/bug-fab-conformance.sqlite3"
+      BUG_FAB_CONFORMANCE_RESET_DB: "true"
+    command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        echo "--- bundle install ---"
+        bundle install --quiet
+        echo "--- launching conformance_boot.rb ---"
+        exec bundle exec ruby /src/adapters/rails/conformance/conformance_boot.rb
+    ports:
+      - "18081:8080"
+    healthcheck:
+      # Server is "up" when the intake path responds at all (any non-5xx is
+      # fine — GET on a POST-only route returns 404/405 from Rails routing).
+      test: ["CMD-SHELL", "ruby -e 'require \"net/http\"; uri=URI(\"http://localhost:8080/bug-fab/bug-reports\"); res=Net::HTTP.get_response(uri); exit (res.code.to_i < 500 ? 0 : 1)' 2>/dev/null || exit 1"]
+      interval: 3s
+      timeout: 4s
+      retries: 30
+      start_period: 10s
+    networks:
+      - bugfab-conformance
+
+  runner:
+    image: python:3.12-slim
+    container_name: bug-fab-rails-conformance-runner
+    depends_on:
+      rails-adapter:
+        condition: service_healthy
+    # Working dir is /work (NOT /src) so pytest does NOT pick up the
+    # repo's own `tests/conftest.py`, which imports adapter-internal
+    # bug-fab modules. The plugin injects the bundled conformance-tests
+    # directory regardless of cwd.
+    working_dir: /work
+    volumes:
+      - ../../..:/src:ro
+      - ./out:/out
+      - pip-cache:/root/.cache/pip
+    environment:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        mkdir -p /work
+        cd /work
+        pip install --quiet /src pytest
+        pytest --bug-fab-conformance \
+               --base-url=http://rails-adapter:8080/bug-fab \
+               --viewer-base-url=http://rails-adapter:8080/bug-fab \
+               -v --tb=short \
+               --color=no \
+               -o cache_dir=/tmp/.pytest_cache \
+               --rootdir=/work \
+               2>&1 | tee /out/conformance-results.txt
+    networks:
+      - bugfab-conformance
+
+volumes:
+  bundle-cache:
+  pip-cache:
+
+networks:
+  bugfab-conformance:
+    driver: bridge

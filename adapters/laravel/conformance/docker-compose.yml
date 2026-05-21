@@ -1,0 +1,166 @@
+# Cross-stack conformance harness for the Laravel Bug-Fab adapter.
+#
+# Boots a minimal Laravel 11 application that consumes the adapter via a
+# Composer `path` repository pointing at `../..`, then runs the upstream
+# Python pytest conformance suite from a sibling `python:3.12` container.
+# Both services share a Compose network so the Python container reaches
+# the PHP server at `http://laravel-adapter:8080`.
+#
+# Usage:
+#   ./run-conformance.sh        # one-shot, exits with pytest's status
+#
+# Or manually:
+#   docker compose -f conformance/docker-compose.yml up --build --abort-on-container-exit conformance
+#
+# Layout: this file lives at `repo/adapters/laravel/conformance/`. Paths
+# are expressed relative to `repo/` (`../../..`) so the Python container
+# can `pip install -e .` against the parent `bug_fab` package without copying.
+
+services:
+  laravel-adapter:
+    # `php:8.3-cli` matches the adapter's `composer.json` PHP version
+    # constraint (^8.3). Composer is installed inline from getcomposer.org
+    # in the entrypoint to avoid pinning to a separate image.
+    image: php:8.3-cli
+    working_dir: /workspace
+    # Bind-mount the adapter source so changes don't require an image rebuild,
+    # plus a named volume for the synthesized Laravel skeleton + composer
+    # vendor tree (Linux can't reuse a Windows-built vendor/).
+    volumes:
+      - ../:/adapter:ro
+      # Persist the synthesized Laravel app + composer vendor tree across
+      # runs in a named volume. On first boot the volume is empty so
+      # `composer create-project` populates it; subsequent runs reuse it.
+      - laravel_app:/workspace/app
+    environment:
+      # Laravel app key — fixed string for reproducibility (testbench uses
+      # the same constant). The conformance suite never exercises crypto.
+      APP_KEY: "base64:dHpEM3JOcUx2Q1RkUk9zV1pBSXBPSnZ1bWZxNnB3aVA="
+      APP_ENV: "testing"
+      APP_DEBUG: "true"
+      APP_URL: "http://localhost:8080"
+      DB_CONNECTION: "sqlite"
+      DB_DATABASE: "/workspace/app/database/database.sqlite"
+      BUG_FAB_STORAGE: "eloquent"
+      # PROTOCOL.md mounts: intake under /api, viewer under /admin/bug-reports.
+      BUG_FAB_INTAKE_PREFIX: "api"
+      BUG_FAB_VIEWER_PREFIX: "admin/bug-reports"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        # --- Tooling ----------------------------------------------------
+        if ! command -v composer >/dev/null 2>&1; then
+          echo "[laravel-adapter] installing composer ..."
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+            git unzip libzip-dev libsqlite3-dev curl ca-certificates >/dev/null
+          docker-php-ext-install -j"$$(nproc)" zip pdo_sqlite >/dev/null
+          curl -sS https://getcomposer.org/installer | php -- \
+            --install-dir=/usr/local/bin --filename=composer >/dev/null
+        fi
+
+        # --- Synthesize a minimal Laravel app on first boot -------------
+        if [ ! -f /workspace/app/artisan ]; then
+          echo "[laravel-adapter] creating Laravel skeleton via composer create-project ..."
+          cd /workspace
+          composer create-project --no-interaction --prefer-dist \
+            laravel/laravel:^11.0 app
+          cd /workspace/app
+          # Generate an app key. `composer create-project` leaves it blank
+          # in `.env`, and `php artisan key:generate` refuses to overwrite a
+          # blank value (it checks for an existing non-empty key) — so we
+          # generate via --show and splice it in with sed. Without this the
+          # encrypter throws MissingAppKeyException on every request.
+          NEW_APP_KEY="$$(php artisan key:generate --show)"
+          sed -i "s|^APP_KEY=.*|APP_KEY=$${NEW_APP_KEY}|" .env
+          # Wire the local adapter via a path repository, then require it.
+          composer config repositories.bugfab-laravel-adapter \
+            '{"type":"path","url":"/adapter","options":{"symlink":false}}'
+          composer require --no-interaction --update-with-all-dependencies \
+            "bugfab/laravel-adapter:*@dev"
+          # The default Laravel 11 `web` middleware group includes
+          # VerifyCsrfToken, which 419's every state-changing request
+          # (PUT /status, POST /bulk-*) from a remote HTTP client that
+          # has no session/token. The adapter mounts its viewer routes
+          # under `web`, so excluding the viewer prefix from CSRF
+          # validation is the documented best-practice for API-like
+          # subtrees of a Laravel app. Patch bootstrap/app.php via sed:
+          # replace the empty `//` body of withMiddleware() with a
+          # validateCsrfTokens(except: [...]) call. The single-line sed
+          # avoids the YAML/shell quoting hell of a multi-line PHP snippet.
+          sed -i 's|->withMiddleware(function (Middleware $$middleware) {|&\n        $$middleware->validateCsrfTokens(except: ["admin/bug-reports", "admin/bug-reports/*"]);|' bootstrap/app.php
+          echo "[bootstrap] CSRF exclusion patched into bootstrap/app.php"
+          # Ensure the SQLite file exists, then run package migrations.
+          mkdir -p /workspace/app/database
+          touch /workspace/app/database/database.sqlite
+          php artisan migrate --force
+        else
+          cd /workspace/app
+          # Re-run migrations on a clean run (named volume persists between runs).
+          rm -f /workspace/app/database/database.sqlite
+          touch /workspace/app/database/database.sqlite
+          php artisan migrate --force
+        fi
+
+        echo "[laravel-adapter] booting artisan serve on :8080 ..."
+        # Bump PHP CLI server's POST cap above the protocol's 10 MiB
+        # screenshot envelope so the conformance test for oversize
+        # screenshots actually reaches the adapter's own size check.
+        # `artisan serve` honors PHP_CLI_SERVER_WORKERS + --env-flags but
+        # post_max_size has to be passed via PHP_INI_SCAN_DIR or -d on the
+        # `php` invocation. Easiest: write a one-line ini.
+        echo "post_max_size = 20M" > /usr/local/etc/php/conf.d/zz-conformance.ini
+        echo "upload_max_filesize = 20M" >> /usr/local/etc/php/conf.d/zz-conformance.ini
+        exec php artisan serve --host=0.0.0.0 --port=8080
+    expose:
+      - "8080"
+    # `php:8.3-cli` ships without curl by default, but we install it above,
+    # so use it. Any non-5xx counts as up — a bare GET on the intake URL
+    # returns 405 Method Not Allowed (server is up, POST is the verb).
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "curl -sf -o /dev/null -w '%{http_code}' http://localhost:8080/api/bug-reports | grep -E '^(2|3|4)' >/dev/null"
+      interval: 3s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  conformance:
+    # Mounts the repo root, installs `bug-fab` in editable mode, then runs
+    # the bundled pytest plugin against the Laravel server. Exits with
+    # pytest's exit code so `docker compose up --abort-on-container-exit
+    # conformance` propagates pass/fail.
+    image: python:3.12-slim
+    working_dir: /workdir
+    depends_on:
+      laravel-adapter:
+        condition: service_healthy
+    volumes:
+      - ../../..:/bugfab:ro
+    environment:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PIP_NO_CACHE_DIR: "1"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        mkdir -p /workdir
+        echo "[conformance] installing bug_fab from local source ..."
+        pip install -q -e /bugfab
+        pip install -q 'pytest>=7' httpx
+        echo "[conformance] running pytest --bug-fab-conformance ..."
+        cd /workdir
+        pytest \
+          --bug-fab-conformance \
+          --base-url=http://laravel-adapter:8080/api \
+          --viewer-base-url=http://laravel-adapter:8080/admin/bug-reports \
+          -v \
+          --tb=short \
+          --no-header \
+          -p no:cacheprovider
+
+volumes:
+  laravel_app:

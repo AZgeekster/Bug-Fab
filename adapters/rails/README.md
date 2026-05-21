@@ -109,13 +109,28 @@ All eight v0.1 endpoints, mounted relative to the engine mount point (`/bug-fab`
 
 ## Conformance
 
-Adapter conformance is verified by the Python pytest plugin shipped with the `bug-fab` package:
+Adapter conformance is verified by the Python pytest plugin shipped with the `bug-fab` package. Two paths:
+
+### One-command Docker harness (recommended)
+
+```bash
+cd conformance
+./run-conformance.sh
+```
+
+Boots `ruby:3.3` + the in-repo `test/dummy/` app, runs the pytest plugin from a sibling `python:3.12-slim` container, and writes the transcript to `conformance/out/conformance-results.txt`. No Ruby or Python install on the host. See [`conformance/README.md`](conformance/README.md) for the full breakdown of how the harness applies a runtime `storage_root` + `DATABASE_URL` override without touching the dummy app on disk.
+
+Latest green run: **30/30** passed under `mount BugFab::Engine => "/bug-fab"`.
+
+### Manual (host-installed Ruby + Python)
 
 ```bash
 pip install --pre bug-fab
 bin/rails server &
 pytest --bug-fab-conformance --base-url=http://localhost:3000/bug-fab
 ```
+
+### Inline minitest smoke
 
 Ships an inline minitest conformance smoke test at `test/integration/conformance_test.rb` that exercises all 8 endpoints in-process. Run via `bundle exec rake test`.
 

@@ -70,6 +70,17 @@ All env vars listed below default to safe values; the table is for tuning.
 
 ## Conformance status
 
+**Cross-stack conformance: 30 passed, 3 skipped, 0 failed** (against `pytest --bug-fab-conformance` from the upstream Python plugin, last run 2026-05-21).
+
+Reproduce locally:
+
+```bash
+cd conformance/
+./run-conformance.sh
+```
+
+The harness boots a minimal Laravel 11 application that consumes this adapter via a Composer `path` repository (no host PHP/Composer required — everything runs in `php:8.3-cli` + `python:3.12-slim` containers) and runs the upstream conformance suite against `http://laravel-adapter:8080/api` (intake) and `http://laravel-adapter:8080/admin/bug-reports` (viewer). See [`conformance/README.md`](conformance/README.md) for the full harness layout, two Laravel-host tweaks the harness applies (CSRF exclusion on the viewer prefix, raised `post_max_size` for the 10 MiB screenshot envelope), and troubleshooting tips.
+
 Implements the v0.1 wire protocol surface end-to-end. Tested against the protocol's documented behaviors:
 
 - All 8 endpoints with the correct HTTP methods and status codes.

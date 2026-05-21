@@ -139,6 +139,17 @@ Coverage:
 * `tests/integration.rs` — every endpoint end-to-end via `tower::oneshot`
 * `tests/storage_roundtrip.rs` — `FileStorage` save/list/update/delete
 
+## Conformance
+
+Cross-stack conformance is wired via `conformance/run-conformance.sh`, which
+boots `bugfab-example` in a `rust:1.75` container and runs the upstream
+`pytest --bug-fab-conformance` suite against it from a sibling
+`python:3.12-slim` container. See [`conformance/README.md`](conformance/README.md).
+
+| Date | Result | Runtime image |
+|------|--------|---------------|
+| 2026-05-21 | **30 / 30 passed** in 1.13 s (pytest) | `rust:1.75` + `python:3.12-slim` |
+
 ## MSRV
 
 | Feature set | Required rustc |

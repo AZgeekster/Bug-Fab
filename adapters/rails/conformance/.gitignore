@@ -1,0 +1,6 @@
+# Local conformance transcripts — captured by run-conformance.sh, never committed.
+out/
+
+# Bundler artifacts from `bundle install` inside the adapter container.
+Gemfile.lock
+.bundle/

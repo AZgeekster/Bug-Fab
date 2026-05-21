@@ -1,0 +1,28 @@
+# frozen_string_literal: true
+
+# Conformance-harness-only Gemfile. Lives next to docker-compose.yml so the
+# adapter container can install Puma (which the engine's own Gemfile does NOT
+# pin, since the engine is library code) without modifying the engine's
+# `../Gemfile` or anything under `../app/` / `../lib/`.
+#
+# Resolved at container boot via `BUNDLE_GEMFILE=/src/adapters/rails/conformance/Gemfile`.
+# The dummy app's `test/dummy/config/boot.rb` uses `ENV["BUNDLE_GEMFILE"] ||= …`
+# so this override wins.
+
+source "https://rubygems.org"
+
+# Use the engine's own gemspec as the source of `rails` + the engine itself.
+gemspec path: ".."
+
+# Dummy app's database adapter — mirrors `../Gemfile`.
+gem "sqlite3", "~> 1.7"
+
+# Rails 7.1 pin — mirrors the rationale in `../Gemfile`. Rails 7.2 doubles the
+# route-evaluation pass during the test-harness initializer and breaks the
+# inline dummy boot.
+gem "rails", "~> 7.1.0"
+
+# App server. The engine doesn't depend on Puma (it's library code); the
+# dummy app's `bin/rails server` needs one at runtime. Pinned loosely — any
+# Puma 6.x works.
+gem "puma", "~> 6.4"

@@ -179,16 +179,45 @@ admin app submitting bugs to `app.example.com`):
 
 ## Conformance
 
-Run the official Python conformance suite against any running adapter — your
-adapter does not need to be in Python:
+This adapter ships a Docker-based cross-stack conformance harness at
+[`conformance/`](./conformance/) that boots the canonical
+`examples/route-tree/` consumer with `adapter-node` + `node build` and
+runs the upstream Python conformance suite against it. One command:
+
+```sh
+cd conformance
+./run-conformance.sh
+```
+
+**Status: 27/30 passing as of 2026-05-21.** The three failing tests
+are tracked for v0.1.x:
+
+- `test_missing_screenshot_is_rejected` — intake returns 415 instead
+  of 400/422 when a multipart envelope is well-formed but the
+  `screenshot` part is missing. Fix lives in `src/server/intake.ts`.
+- `test_bulk_close_fixed_returns_count` and
+  `test_bulk_archive_closed_returns_count` — the example route tree
+  mounts bulk endpoints under `/admin/reports/bulk-*` (SvelteKit
+  nesting) while the wire protocol treats them as siblings of
+  `/reports` at `/admin/bulk-*`. Move the example's bulk routes up
+  one directory to fix.
+
+See [`conformance/README.md`](./conformance/README.md) for the full
+breakdown — URL layout, boot quirks, why we use `build + node` instead
+of `dev`.
+
+You can also run the suite directly against any running adapter:
 
 ```sh
 pip install --pre bug-fab
-pytest --bug-fab-conformance --base-url=http://localhost:5173
+pytest --bug-fab-conformance \
+  --base-url=http://localhost:5173/api \
+  --viewer-base-url=http://localhost:5173/admin
 ```
 
-This suite is the source of truth for adapter conformance; the local
-`tests/conformance.test.ts` in this package is a TS-only sanity probe.
+The local `tests/conformance.test.ts` in this package is a TS-only
+sanity probe; the Python suite at `conformance/` is the source of
+truth for adapter conformance.
 
 See [`CONFORMANCE.md`](https://github.com/AZgeekster/Bug-Fab/blob/main/docs/CONFORMANCE.md).
 

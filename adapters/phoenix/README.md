@@ -180,6 +180,31 @@ mix test
 
 Covers: schema validation (422 on bad severity), magic-byte rejection (415 on non-PNG), size cap (413), rate limiting (429), file-storage roundtrip, status updates with lifecycle, bulk operations.
 
+## Conformance
+
+Cross-stack conformance against the upstream `bug-fab-conformance` pytest
+suite — same harness pattern as the Go (Gin) adapter, runs entirely in
+Docker (no Elixir or Python on the host).
+
+```bash
+cd conformance
+./run-conformance.sh
+```
+
+What it does:
+
+1. Boots `conformance/boot.exs` (a wrapper that mirrors
+   `examples/minimal/minimal.exs` but binds `Plug.Cowboy` to `:8080`) inside
+   an `elixir:1.16` container, with the adapter mounted at `/api` (intake)
+   and `/admin/bug-reports` (viewer).
+2. Runs `pytest --bug-fab-conformance` from a sibling `python:3.12-slim`
+   container against the live adapter over HTTP.
+3. Writes the full transcript to `conformance/out/conformance-results.txt`.
+
+**Latest result (2026-05-21):** **30 / 30 passing.** Reference adapter for
+Elixir/Phoenix. See `conformance/README.md` for the wrapper rationale, mount
+URLs, and how to iterate.
+
 ## Limitations (v0.1)
 
 * HTML viewer is minimal — real consumers will typically replace it with a Phoenix LiveView page. The JSON API endpoints cover every interaction a LiveView needs. See `MIGRATION_NOTES.md` § "LiveView viewer".

@@ -219,7 +219,7 @@ If `cspNonce` is unset, the script tags ship without a nonce attribute, which is
 
 ## Conformance
 
-Official Python conformance suite: **29/30 passing as of 2026-05-21** under `oven/bun:1` via the bundled harness at [`conformance/`](./conformance). The one outstanding failure is a status-code gap on intake when the request is multipart but the `screenshot` part is missing (returns `415` instead of `400`/`422`) — tracked for v0.2.
+Official Python conformance suite: **30/30 passing as of 2026-05-21** under `oven/bun:1` via the bundled harness at [`conformance/`](./conformance).
 
 To reproduce locally:
 

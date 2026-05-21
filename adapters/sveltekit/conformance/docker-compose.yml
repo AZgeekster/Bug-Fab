@@ -1,0 +1,209 @@
+# Cross-stack conformance harness for the SvelteKit Bug-Fab adapter.
+#
+# Mirrors the pattern used by the Express and Hono adapters: a Node
+# container boots the adapter; a sibling python:3.12 container runs the
+# upstream `pytest --bug-fab-conformance` suite against it over the
+# Compose network. Both services share a Compose network so the Python
+# container reaches the SvelteKit server at `http://sveltekit-adapter:8080`.
+#
+# Why a full SvelteKit app (build + node) instead of `vite dev`:
+# `adapter-node` produces the canonical production server consumers ship.
+# Booting via `node build` exercises the same SSR path real users hit —
+# `vite dev` adds HMR + module-graph behaviors that can mask bugs the
+# conformance suite is meant to catch.
+#
+# URL layout (must match `examples/route-tree/src/routes/`):
+#   POST /api/bug-reports                    intake
+#   GET  /admin/reports                      list
+#   GET  /admin/reports/{id}                 detail
+#   DELETE /admin/reports/{id}               delete
+#   PUT  /admin/reports/{id}/status          status
+#   GET  /admin/reports/{id}/screenshot      screenshot
+#   POST /admin/reports/bulk-close-fixed     bulk close   (note: under /reports/)
+#   POST /admin/reports/bulk-archive-closed  bulk archive (note: under /reports/)
+#
+# So:
+#   --base-url=http://sveltekit-adapter:8080/api
+#   --viewer-base-url=http://sveltekit-adapter:8080/admin
+#
+# Bulk endpoints will fail conformance because the example route tree
+# mounts them under `/admin/reports/bulk-*` (the SvelteKit convention)
+# while the wire protocol expects them as siblings of `/reports` —
+# i.e. `/admin/bulk-*`. See README.md § Status for the v0.2 follow-up.
+#
+# Usage:
+#   ./run-conformance.sh
+#
+# Layout: this file lives at `repo/adapters/sveltekit/conformance/`.
+# Paths are expressed relative to `repo/` (`../../..` for the Python
+# container) so the conformance sidecar can `pip install -e .` against
+# the parent `bug_fab` package without copying.
+
+services:
+  sveltekit-adapter:
+    image: node:20-bookworm-slim
+    working_dir: /conformance
+    # Bind-mount the adapter and conformance dirs so changes don't
+    # require a rebuild, but shadow each node_modules with an anonymous
+    # volume — Linux can't reuse the host's (Windows) install. The
+    # adapter is one level up at /adapter so `file:..` in
+    # conformance/package.json resolves to it.
+    volumes:
+      - ../:/adapter
+      - ./:/conformance
+      - adapter_node_modules:/adapter/node_modules
+      # Shadow /adapter/dist with a named volume so the in-container
+      # `npm run build` doesn't write Linux-built artifacts back into
+      # the host (Windows) checkout.
+      - adapter_dist:/adapter/dist
+      - conformance_node_modules:/conformance/node_modules
+      # NOTE: NOT mounting /conformance/build or /conformance/.svelte-kit.
+      # `@sveltejs/adapter-node` calls `rmSync('build')` before writing
+      # the bundle; a mount point can't be removed, which yields
+      # `EBUSY: resource busy or locked, rmdir 'build'`. Letting them
+      # live on the bind-mounted /conformance overlay is fine — they
+      # land in the host directory (and are gitignored).
+    environment:
+      # adapter-node honors PORT and HOST. HOST=0.0.0.0 makes the server
+      # reachable from the sibling python container; bind on all
+      # interfaces inside the container's network namespace.
+      PORT: "8080"
+      HOST: "0.0.0.0"
+      # Single-process file storage works for the conformance run; the
+      # Compose volume persists it across container restarts but
+      # `run-conformance.sh` tears the stack down (and the volume) on
+      # exit so each invocation starts clean.
+      BUG_FAB_DIR: "/tmp/bug-fab-conformance"
+      # Stop apt from prompting; we don't install OS packages here, but
+      # set it anyway in case future debugging adds curl/jq.
+      DEBIAN_FRONTEND: "noninteractive"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        echo "[sveltekit-adapter] installing adapter deps + building dist/ ..."
+        # `--legacy-peer-deps` because @sveltejs/kit@2 + svelte@5 still
+        # surfaces peer-dep edge cases in npm@10 on a clean image (see
+        # MIGRATION_NOTES.md). Belt-and-suspenders — it's a no-op when
+        # the lockfile resolves cleanly.
+        #
+        # `vite` is a transitive peer of `@sveltejs/vite-plugin-svelte`
+        # (which `@sveltejs/kit` pulls in). Contributors building the
+        # adapter on their host typically already have vite from another
+        # dep, so the package.json doesn't list it. On a clean linux
+        # image we have to add it explicitly — `svelte-package` needs
+        # `vite` at build time.
+        cd /adapter
+        npm install --legacy-peer-deps --no-audit --no-fund
+        npm install --legacy-peer-deps --no-audit --no-fund --no-save vite@^5
+        # NOTE: we do NOT run the adapter's full `npm run build` because
+        # its svelte-package step imports `vitePreprocess` from
+        # `@sveltejs/kit/vite`, which moved to
+        # `@sveltejs/vite-plugin-svelte` in newer vite-plugin-svelte
+        # versions. Conformance only exercises the server-side handlers,
+        # so we build the server (and static assets) directly.
+        #
+        # WHY `--noCheck`: the adapter's tsconfig is strict, but several
+        # source files have type errors against TS 5.9 + @types/node 24
+        # (the versions installed in this clean image — they're peer
+        # deps, not pinned). Examples: `screenshot instanceof File` on a
+        # FormData value, `new Response(uint8array)` lib mismatch. These
+        # are real-but-already-known maintenance debt and not in scope
+        # for the conformance harness. `--noCheck` emits JS without type
+        # checking; the conformance suite verifies the runtime behavior,
+        # which is what matters here.
+        npx tsc -p tsconfig.json --noCheck
+        npm run build:static
+        echo "[sveltekit-adapter] installing conformance app deps ..."
+        cd /conformance
+        # `file:..` in package.json resolves to "two levels up from
+        # node_modules/bug-fab-sveltekit/", which on the host is the
+        # adapter root but inside the container is /conformance (because
+        # /conformance is the mount point, not nested inside /adapter).
+        # Force the install to point at the absolute /adapter path so
+        # the symlink target resolves correctly in this container.
+        npm install --legacy-peer-deps --no-audit --no-fund
+        npm install --legacy-peer-deps --no-audit --no-fund --no-save /adapter
+        # Copy the canonical consumer routes from
+        # `examples/route-tree/src/` into the conformance app's
+        # `src/routes/` and `src/lib/`. Doing this at boot time (rather
+        # than via `files.routes` pointing out-of-project) keeps Vite's
+        # module graph well inside the project root — the
+        # out-of-project route path produced empty route entries with
+        # SvelteKit 2.60.x. The compose mount is bind-mounted from the
+        # host, so these files live on the host inside conformance/src
+        # too — listed in conformance/.gitignore so they don't get
+        # checked in.
+        rm -rf src/routes src/lib
+        mkdir -p src/routes src/lib
+        cp -r /adapter/examples/route-tree/src/routes/. src/routes/
+        cp -r /adapter/examples/route-tree/src/lib/. src/lib/
+        echo "[sveltekit-adapter] building SvelteKit app (svelte-kit sync + vite build) ..."
+        npm run build
+        echo "[sveltekit-adapter] booting `node build` on :8080 ..."
+        mkdir -p /tmp/bug-fab-conformance
+        exec node build
+    expose:
+      - "8080"
+    healthcheck:
+      # `node:20-bookworm-slim` ships without curl. Use node's http
+      # module. The list endpoint at /admin/reports returns 200 JSON
+      # once SvelteKit finishes booting; any non-5xx counts as healthy.
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "require('http').get('http://127.0.0.1:8080/api/bug-reports', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"
+      interval: 3s
+      timeout: 5s
+      # Very generous retries: cold image has to npm install the
+      # adapter (~5s), tsc-build it, npm install the conformance app
+      # (~3min — SvelteKit + adapter-node tree is large), then
+      # `svelte-kit sync && vite build` (~30s). Empirically the boot
+      # finishes ~4-5min after `docker compose up` on a cold cache.
+      # `start_period` quiets noisy "unhealthy" reports during install;
+      # `retries` × `interval` is the actual budget after that.
+      retries: 120
+      start_period: 240s
+
+  conformance:
+    image: python:3.12-slim
+    working_dir: /work
+    depends_on:
+      sveltekit-adapter:
+        condition: service_healthy
+    volumes:
+      - ../../..:/bugfab
+    environment:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PIP_NO_CACHE_DIR: "1"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        echo "[conformance] installing bug_fab from local source ..."
+        pip install -q -e /bugfab
+        pip install -q 'pytest>=7' httpx
+        # Run pytest from a neutral working dir so the repo's own
+        # tests/conftest.py (which imports heavy adapters) doesn't get
+        # auto-loaded. The conformance plugin discovers its bundled
+        # tests via the pytest11 entry-point.
+        mkdir -p /work
+        cd /work
+        echo "[conformance] running pytest --bug-fab-conformance ..."
+        pytest \
+          --bug-fab-conformance \
+          --base-url=http://sveltekit-adapter:8080/api \
+          --viewer-base-url=http://sveltekit-adapter:8080/admin \
+          --rootdir=/work \
+          -v \
+          --tb=short \
+          --color=no \
+          -p no:cacheprovider
+
+volumes:
+  adapter_node_modules:
+  adapter_dist:
+  conformance_node_modules:

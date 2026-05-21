@@ -1,0 +1,24 @@
+{
+  "name": "bug-fab-sveltekit-conformance",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "//comment-build": "SvelteKit prerender + adapter-node bundle. `node build` (next line) launches the produced server.",
+    "build": "svelte-kit sync && vite build",
+    "//comment-start": "Production-mode launch; `adapter-node` honors PORT + HOST env vars.",
+    "start": "node build"
+  },
+  "//comment-deps": "bug-fab-sveltekit is referenced via file:.. so the conformance app pulls in the adapter's published shape (dist/) — see compose file: we `npm run build` the adapter first to populate dist/.",
+  "dependencies": {
+    "bug-fab-sveltekit": "file:.."
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-node": "^5.2.0",
+    "@sveltejs/kit": "^2.5.0",
+    "@sveltejs/vite-plugin-svelte": "^4.0.0",
+    "svelte": "^5.0.0",
+    "typescript": "^5.4.0",
+    "vite": "^5.4.0"
+  }
+}
