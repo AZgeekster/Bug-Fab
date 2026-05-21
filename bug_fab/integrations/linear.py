@@ -1,0 +1,401 @@
+"""Optional Linear (linear.app) issue-tracker sync for Bug-Fab.
+
+Linear's API is GraphQL at ``https://api.linear.app/graphql`` rather
+than REST, so this adapter is shaped after
+:class:`bug_fab.integrations.github.GitHubSync` (an issue-tracker
+integration) and *not* after the Slack / Discord / Teams webhook
+adapters (which are chat notifications). One call surface:
+
+* :meth:`LinearSync.create_issue` — POST a single GraphQL ``issueCreate``
+  mutation for a freshly persisted Bug-Fab report and return the
+  ``(identifier, url)`` pair Bug-Fab persists via
+  ``storage.set_github_link(...)``.
+
+The returned first tuple element is Linear's **identifier** (e.g.
+``"BUG-42"`` — team prefix + sequence), NOT the internal UUID ``id``.
+The identifier is what humans paste into chat and what Linear shows
+in its own URL bar, so it's the right thing to round-trip back into
+the Bug-Fab viewer.
+
+Linear-specific quirks worth flagging:
+
+* Authentication is ``Authorization: <personal_api_key>`` — there is
+  **no** ``Bearer`` prefix. GitHub uses ``Bearer ghp_…``; Linear does
+  not. Sending ``Bearer <key>`` to Linear yields a silent 401.
+* Linear returns HTTP 200 even for GraphQL validation errors, with the
+  errors carried in an ``errors[]`` array on the body. A successful
+  HTTP code is therefore not sufficient — the mutation envelope has to
+  be inspected separately.
+* Priority is an integer 0–4 (0 = none, 1 = urgent, 2 = high,
+  3 = medium, 4 = low). Bug-Fab's severity strings are mapped via
+  :data:`SEVERITY_PRIORITY_MAP`.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from collections.abc import Mapping
+from typing import Any
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+#: Default Linear GraphQL endpoint. Overridable for self-hosted /
+#: proxied installations via the constructor and the
+#: ``BUG_FAB_LINEAR_API_URL`` env var.
+DEFAULT_API_URL = "https://api.linear.app/graphql"
+
+#: Per-request timeout default in seconds. Linear's intake endpoint
+#: normally responds in well under a second; the cap keeps a slow
+#: Linear from stretching the Bug-Fab intake path.
+DEFAULT_TIMEOUT_SECONDS = 10.0
+
+#: Map a Bug-Fab severity string to a Linear priority integer.
+#:
+#: Linear's vocabulary is fixed at 0–4 (no plugin extension), so the
+#: mapping is one-to-one. Unknown / missing severities fall back to
+#: ``0`` ("No priority") so a malformed report still produces a valid
+#: issue.
+SEVERITY_PRIORITY_MAP: dict[str, int] = {
+    "critical": 1,
+    "high": 2,
+    "medium": 3,
+    "low": 4,
+}
+
+#: Priority value used when ``severity`` is missing, empty, or
+#: outside the locked vocabulary.
+DEFAULT_PRIORITY = 0
+
+#: GraphQL mutation document. Defined once at module scope (and
+#: re-used per request) so the wire shape is auditable from a single
+#: place and tests can import it for assertions.
+ISSUE_CREATE_MUTATION = """\
+mutation IssueCreate($input: IssueCreateInput!) {
+  issueCreate(input: $input) {
+    success
+    issue {
+      id
+      identifier
+      url
+      title
+    }
+  }
+}
+"""
+
+
+def _truncate(text: str, limit: int) -> str:
+    """Trim ``text`` to ``limit`` chars, appending an ellipsis when cut."""
+    if len(text) <= limit:
+        return text
+    return text[: max(limit - 3, 0)] + "..."
+
+
+def _priority_for_severity(severity: Any) -> int:
+    """Return the Linear priority int for a Bug-Fab severity value."""
+    if not isinstance(severity, str):
+        return DEFAULT_PRIORITY
+    return SEVERITY_PRIORITY_MAP.get(severity.strip().lower(), DEFAULT_PRIORITY)
+
+
+def _build_description(report: Mapping[str, Any], viewer_base_url: str = "") -> str:
+    """Render the markdown description body for a Linear issue.
+
+    Pure — no I/O. Public-ish (prefixed with ``_`` only to mark it as
+    not part of the documented API surface) so tests can assert on the
+    rendered shape without monkey-patching the network.
+    """
+    title = str(report.get("title") or "Untitled")
+    severity = str(report.get("severity") or "").strip() or "unknown"
+    environment = str(report.get("environment") or "").strip() or "unknown"
+    module = str(report.get("module") or "").strip() or "unknown"
+    description = str(report.get("description") or "").strip() or "_No description provided._"
+    expected = str(report.get("expected_behavior") or "").strip()
+    report_id = str(report.get("id") or "").strip()
+    created_at = str(report.get("created_at") or "").strip()
+
+    reporter_raw = report.get("reporter")
+    if isinstance(reporter_raw, Mapping):
+        reporter_name = str(reporter_raw.get("name") or "").strip() or "anonymous"
+    else:
+        reporter_name = "anonymous"
+
+    lines: list[str] = [
+        f"# {title}",
+        "",
+        f"**Severity:** {severity}",
+        f"**Reporter:** {reporter_name}",
+        f"**Environment:** {environment}",
+        f"**Module:** {module}",
+        "",
+        "## Description",
+        description,
+    ]
+    if expected:
+        lines += ["", "## Expected behavior", expected]
+
+    footer_id = report_id or "(unknown)"
+    footer_when = created_at or "(unknown)"
+    lines += [
+        "",
+        "---",
+        (
+            "*Auto-generated by [Bug-Fab](https://github.com/AZgeekster/Bug-Fab) "
+            f"— report id `{footer_id}` · {footer_when}*"
+        ),
+    ]
+    if viewer_base_url and report_id:
+        lines.append(f"*[View in viewer]({viewer_base_url.rstrip('/')}/{report_id})*")
+    return "\n".join(lines)
+
+
+class LinearSync:
+    """Async client for the Linear ``issueCreate`` mutation.
+
+    Parameters
+    ----------
+    api_key:
+        Linear personal API key. Sent verbatim in the ``Authorization``
+        header — **no** ``Bearer`` prefix (Linear's documented quirk).
+    team_id:
+        UUID of the destination Linear team. New issues land in this
+        team's backlog.
+    api_url:
+        GraphQL endpoint URL. Defaults to
+        ``https://api.linear.app/graphql``; overridable for proxied
+        deployments.
+    viewer_base_url:
+        Optional Bug-Fab viewer base URL. When set, the markdown body
+        gets a "View in viewer" link rendered as
+        ``<viewer_base_url>/<report_id>``.
+    default_label_ids:
+        Optional list of Linear label UUIDs applied to every created
+        issue. Useful for tagging Bug-Fab-sourced issues so they're
+        distinguishable from manually-filed ones.
+    timeout_seconds:
+        Per-request timeout passed to the underlying
+        :class:`httpx.AsyncClient`.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        team_id: str,
+        api_url: str = DEFAULT_API_URL,
+        viewer_base_url: str = "",
+        default_label_ids: list[str] | None = None,
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    ) -> None:
+        self._api_key = api_key
+        self._team_id = team_id
+        self._api_url = api_url
+        self._viewer_base_url = viewer_base_url.rstrip("/") if viewer_base_url else ""
+        self._default_label_ids: list[str] = list(default_label_ids) if default_label_ids else []
+        self._timeout = timeout_seconds
+
+    @property
+    def api_url(self) -> str:
+        """GraphQL endpoint URL (read-only)."""
+        return self._api_url
+
+    @property
+    def team_id(self) -> str:
+        """Destination Linear team UUID (read-only)."""
+        return self._team_id
+
+    @property
+    def viewer_base_url(self) -> str:
+        """Optional viewer base URL used in the rendered description footer."""
+        return self._viewer_base_url
+
+    @property
+    def default_label_ids(self) -> list[str]:
+        """Label UUIDs applied to every created issue (defensive copy)."""
+        return list(self._default_label_ids)
+
+    @property
+    def headers(self) -> dict[str, str]:
+        """HTTP headers used for every outbound Linear request.
+
+        Note the **lack** of a ``Bearer`` prefix on ``Authorization`` —
+        Linear's API rejects the GitHub-style ``Bearer <token>`` form.
+        """
+        return {
+            "Authorization": self._api_key,
+            "Content-Type": "application/json",
+        }
+
+    @classmethod
+    def from_env(cls) -> LinearSync | None:
+        """Build a :class:`LinearSync` from ``BUG_FAB_LINEAR_*`` env vars.
+
+        Reads:
+
+        * ``BUG_FAB_LINEAR_ENABLED`` — boolean toggle (``1`` / ``true``
+          / ``yes`` / ``on`` to enable; anything else disables).
+        * ``BUG_FAB_LINEAR_API_KEY`` — required when enabled.
+        * ``BUG_FAB_LINEAR_TEAM_ID`` — required when enabled.
+        * ``BUG_FAB_LINEAR_API_URL`` — optional, defaults to
+          :data:`DEFAULT_API_URL`.
+        * ``BUG_FAB_LINEAR_VIEWER_BASE_URL`` — optional.
+        * ``BUG_FAB_LINEAR_DEFAULT_LABEL_IDS`` — optional, comma-
+          separated UUIDs.
+        * ``BUG_FAB_LINEAR_TIMEOUT_SECONDS`` — optional float,
+          defaults to :data:`DEFAULT_TIMEOUT_SECONDS`.
+
+        Returns ``None`` when disabled or when a required value is
+        missing, so the result can be passed directly into a router
+        configure call without a guard.
+        """
+        enabled = os.environ.get("BUG_FAB_LINEAR_ENABLED", "").strip().lower()
+        if enabled not in {"1", "true", "yes", "on"}:
+            return None
+        api_key = os.environ.get("BUG_FAB_LINEAR_API_KEY", "").strip()
+        if not api_key:
+            logger.warning(
+                "bug_fab_linear_from_env_missing_api_key",
+                extra={"reason": "BUG_FAB_LINEAR_API_KEY unset"},
+            )
+            return None
+        team_id = os.environ.get("BUG_FAB_LINEAR_TEAM_ID", "").strip()
+        if not team_id:
+            logger.warning(
+                "bug_fab_linear_from_env_missing_team_id",
+                extra={"reason": "BUG_FAB_LINEAR_TEAM_ID unset"},
+            )
+            return None
+        api_url = os.environ.get("BUG_FAB_LINEAR_API_URL", "").strip() or DEFAULT_API_URL
+        viewer = os.environ.get("BUG_FAB_LINEAR_VIEWER_BASE_URL", "").strip()
+        raw_labels = os.environ.get("BUG_FAB_LINEAR_DEFAULT_LABEL_IDS", "").strip()
+        labels = (
+            [chunk.strip() for chunk in raw_labels.split(",") if chunk.strip()]
+            if raw_labels
+            else []
+        )
+        timeout_raw = os.environ.get("BUG_FAB_LINEAR_TIMEOUT_SECONDS", "").strip()
+        try:
+            timeout = float(timeout_raw) if timeout_raw else DEFAULT_TIMEOUT_SECONDS
+        except ValueError:
+            timeout = DEFAULT_TIMEOUT_SECONDS
+        return cls(
+            api_key=api_key,
+            team_id=team_id,
+            api_url=api_url,
+            viewer_base_url=viewer,
+            default_label_ids=labels,
+            timeout_seconds=timeout,
+        )
+
+    def build_input(self, report: Mapping[str, Any]) -> dict[str, Any]:
+        """Build the ``IssueCreateInput`` dict for the GraphQL mutation.
+
+        Pure — no I/O. Exposed so tests (and consumers wanting to
+        preview / customise the wire shape) can inspect the rendered
+        input without going through the network.
+        """
+        title = str(report.get("title") or "Untitled")
+        input_obj: dict[str, Any] = {
+            "teamId": self._team_id,
+            "title": title,
+            "description": _build_description(report, viewer_base_url=self._viewer_base_url),
+            "priority": _priority_for_severity(report.get("severity")),
+        }
+        if self._default_label_ids:
+            input_obj["labelIds"] = list(self._default_label_ids)
+        return input_obj
+
+    async def create_issue(self, report: Mapping[str, Any]) -> tuple[str | None, str | None]:
+        """Create a Linear issue for a freshly persisted Bug-Fab report.
+
+        Returns ``(identifier, url)`` on success (e.g.
+        ``("BUG-42", "https://linear.app/acme/issue/BUG-42")``) or
+        ``(None, None)`` on any failure. Exceptions are caught and
+        logged, never raised — best-effort contract matches
+        :meth:`GitHubSync.create_issue`.
+        """
+        payload = {
+            "query": ISSUE_CREATE_MUTATION,
+            "variables": {"input": self.build_input(report)},
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await client.post(self._api_url, json=payload, headers=self.headers)
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "bug_fab_linear_create_issue_error",
+                extra={"report_id": report.get("id"), "error": str(exc)},
+            )
+            return None, None
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "bug_fab_linear_create_issue_unexpected_error",
+                extra={"report_id": report.get("id"), "error": str(exc)},
+            )
+            return None, None
+
+        if resp.status_code // 100 != 2:
+            logger.warning(
+                "bug_fab_linear_create_issue_failed",
+                extra={
+                    "report_id": report.get("id"),
+                    "status_code": resp.status_code,
+                    "body": _truncate(resp.text, 200),
+                },
+            )
+            return None, None
+
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            logger.warning(
+                "bug_fab_linear_create_issue_invalid_json",
+                extra={"report_id": report.get("id"), "error": str(exc)},
+            )
+            return None, None
+
+        # Linear returns HTTP 200 with an ``errors[]`` array on
+        # validation failure. Treat any such response as a failure
+        # without surfacing the error detail (it can leak schema
+        # fragments) beyond the WARN log.
+        if isinstance(data, dict) and data.get("errors"):
+            logger.warning(
+                "bug_fab_linear_create_issue_graphql_errors",
+                extra={
+                    "report_id": report.get("id"),
+                    "errors": _truncate(str(data.get("errors")), 200),
+                },
+            )
+            return None, None
+
+        try:
+            issue_create = data["data"]["issueCreate"]
+            if not issue_create.get("success"):
+                logger.warning(
+                    "bug_fab_linear_create_issue_unsuccessful",
+                    extra={"report_id": report.get("id")},
+                )
+                return None, None
+            issue = issue_create["issue"]
+            identifier = str(issue["identifier"])
+            url = str(issue["url"])
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning(
+                "bug_fab_linear_create_issue_response_malformed",
+                extra={"report_id": report.get("id"), "error": str(exc)},
+            )
+            return None, None
+        return identifier, url
+
+
+__all__ = [
+    "DEFAULT_API_URL",
+    "DEFAULT_PRIORITY",
+    "DEFAULT_TIMEOUT_SECONDS",
+    "ISSUE_CREATE_MUTATION",
+    "SEVERITY_PRIORITY_MAP",
+    "LinearSync",
+]

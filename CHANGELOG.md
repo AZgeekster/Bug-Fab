@@ -13,6 +13,54 @@ out explicitly in each release entry.
 
 ### Added
 
+- **Four new outbound-integration adapters** under `bug_fab/integrations/`,
+  mirroring the shape `SlackSync` established earlier today
+  (`.send(report) -> bool` + `.from_env()` + same best-effort failure-
+  tolerance contract — failures log at WARN and never raise into the
+  intake response path):
+  - **`discord.py` — `DiscordSync`** (282 LOC, 25 tests). Builds a
+    Discord webhook payload using the embed shape: severity-mapped
+    integer color sidebar, four inline fields (reporter / status /
+    environment / module), title click-through to the viewer URL when
+    configured. Env: `BUG_FAB_DISCORD_{ENABLED,WEBHOOK_URL,
+    VIEWER_BASE_URL,TIMEOUT_SECONDS,USERNAME}`. Treats Discord's
+    `204 No Content` (its success code) as success alongside 2xx.
+  - **`teams.py` — `TeamsSync`** (322 LOC, 26 tests). Microsoft Teams
+    incoming-webhook via Adaptive Cards schema v1.4: severity-mapped
+    color names (`attention` / `warning` / `accent` / `good` /
+    `default`), `FactSet` for reporter/status/env/module fields with
+    empty fields elided, `Action.OpenUrl` button when a viewer URL is
+    configured (entire `actions` array omitted otherwise — some Teams
+    clients reject empty actions). Env:
+    `BUG_FAB_TEAMS_{ENABLED,WEBHOOK_URL,VIEWER_BASE_URL,TIMEOUT_SECONDS}`.
+  - **`linear.py` — `LinearSync`** (350 LOC, 35 tests). Linear issue
+    creation via GraphQL — mirrors `GitHubSync.create_issue` shape
+    (`create_issue(report) -> (identifier, url) | (None, None)`)
+    rather than the webhook shape, because Linear is an issue tracker
+    not a chat channel. Severity → priority (critical=1 / high=2 /
+    medium=3 / low=4 / unknown=0). Captures three Linear-specific
+    quirks: no `Bearer` prefix on `Authorization`, 200-with-`errors[]`
+    GraphQL convention (status code alone is insufficient — check the
+    envelope for `errors[]` AND `data.issueCreate.success: false`),
+    return the human-facing `identifier` (`BUG-42`) not the internal
+    UUID. Env: `BUG_FAB_LINEAR_{ENABLED,API_KEY,TEAM_ID,API_URL,
+    VIEWER_BASE_URL,DEFAULT_LABEL_IDS,TIMEOUT_SECONDS}`.
+  - **`pagerduty.py` — `PagerDutySync`** (369 LOC, 36 tests). Events
+    API v2 (`https://events.pagerduty.com/v2/enqueue`) with
+    **critical-by-default escalation**: non-critical severities return
+    `False` without a network call and log at DEBUG, so a default
+    deployment doesn't page on-call for every low-severity report.
+    Configurable via the `escalate_severities` tuple or
+    `BUG_FAB_PAGERDUTY_ESCALATE_SEVERITIES` (comma-separated).
+    Severity → PagerDuty severity (critical=`critical` / high=`error`
+    / medium=`warning` / low=`info`). `dedup_key` = `bug-fab-<id>` so
+    a retried webhook collapses into one incident. Env:
+    `BUG_FAB_PAGERDUTY_{ENABLED,INTEGRATION_KEY,ESCALATE_SEVERITIES,
+    API_URL,VIEWER_BASE_URL,TIMEOUT_SECONDS,DEDUP_PREFIX}`.
+
+  All four use raw `httpx` (no SDK deps). Slot through the existing
+  `webhook_sync` slot of `submit.configure()` (or `github_sync` for
+  Linear) just like Slack — no router changes. 122 new tests total.
 - **Six more first-party adapters** promoted 2026-05-21 — every pre-session draft in `notes/adapter_drafts/` was verified end-to-end under Docker, polished (draft-marker rewrites, missing `MIGRATION_NOTES.md` authored from scratch where absent, `.gitignore` added, build artifacts scrubbed), and copied to `repo/adapters/`:
   - **Express + TypeScript** at `repo/adapters/express/`. `createBugFabRouter(opts)` factory returns a mountable `express.Router`; default `FileStorage` + 9-method `IStorage` interface for custom backends; multer `memoryStorage` so the PNG magic-byte check runs before persistence. 41/41 vitest passing under `docker run --rm node:20`. Replaces the previous 🟡 sketch entry.
   - **Hono + TypeScript** at `repo/adapters/hono/`. Single `createBugFabApp({ storage })` runs unchanged on Node, Bun, Deno, Cloudflare Workers, and Vercel Edge; three Web-standard storage backends (Memory, R2, Workers KV) with no `node:fs` / `Buffer`. 44/44 vitest passing — fixed two bugs during promotion: a trailing-slash routing miss on the mounted sub-app (Hono v4's `route()` collapses `/` + `''` paths; now explicit on the parent) and a missing global `notFound` handler that was returning Hono's default plain text instead of the protocol's `{error, detail}` envelope.
