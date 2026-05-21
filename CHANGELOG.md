@@ -23,7 +23,7 @@ out explicitly in each release entry.
 
   Each adapter's `repo/docs/ADAPTERS_REGISTRY.md` row was flipped from 🟡 sketch / 🟡 draft / ⚫ out-of-scope to `🟢 reference (first-party adapter)`. The duplicate Tier-3 "out of scope" stubs for Laravel and Phoenix were removed (both became Tier-2 first-party adapters earlier the same day; see prior `## [Unreleased]` entry).
 
-  This brings the first-party adapter count from 4 (FastAPI, Flask, Django, ASP.NET) → 10 by adding Go, Rust, Laravel, Phoenix, plus today's six. The wire protocol is now demonstrated across **Python, .NET, Go, Rust, Ruby, PHP, Elixir, Swift, Kotlin, and TypeScript** in 10 production-grade adapters.
+  This brings the first-party adapter count from 4 (FastAPI, Flask, Django, ASP.NET) → 14 by adding Go, Rust, Laravel, Phoenix, plus today's six. The wire protocol is now demonstrated across **Python, .NET, Go, Rust, Ruby, PHP, Elixir, Swift, Kotlin, and TypeScript** in 14 first-party reference adapters.
 - **Phoenix (Elixir) first-party adapter** at `repo/adapters/phoenix/`.
   Promoted from private draft 2026-05-21 after a sibling-module
   reorder fix (the `BugFab.Storage.EctoStorage.BugReport` defmodule
