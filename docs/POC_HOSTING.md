@@ -73,6 +73,13 @@ COPY bug_fab /app/bug_fab
 COPY static /app/static
 COPY examples /app/examples
 
+# Optional: pre-built static marketing site co-hosted at /. Built outside
+# the Docker context and synced into marketing-dist/ before deploy. See
+# the "Co-hosting a marketing site at /" section below for the workflow.
+# Safe to leave the directory empty — the example app falls back to the
+# playground at / when no marketing-dist/index.html is present.
+COPY marketing-dist /app/marketing-dist
+
 RUN pip install --no-cache-dir .
 
 ENV PORT=8080
@@ -96,8 +103,9 @@ primary_region = "sjc"
 [env]
   BUG_FAB_STORAGE_DIR = "/data/bug_reports"
   BUG_FAB_RATE_LIMIT_ENABLED = "true"
-  BUG_FAB_RATE_LIMIT_MAX = "50"
-  BUG_FAB_RATE_LIMIT_WINDOW_SECONDS = "3600"
+  BUG_FAB_RATE_LIMIT_MAX = "5"
+  BUG_FAB_RATE_LIMIT_WINDOW_SECONDS = "900"
+  BUG_FAB_MAX_UPLOAD_MB = "2"
   BUG_FAB_VIEWER_ENABLED = "true"
   BUG_FAB_VIEWER_PAGE_SIZE = "20"
   # Leave GitHub sync OFF on the public POC so we don't accidentally
@@ -111,9 +119,9 @@ primary_region = "sjc"
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = false   # always-on; no cold starts
+  auto_stop_machines = "stop"  # machine sleeps when idle; ~$0.15/mo
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
   processes = ["app"]
 
 [[vm]]
@@ -124,9 +132,18 @@ primary_region = "sjc"
 
 Key choices:
 
-- **`min_machines_running = 1`** + **`auto_stop_machines = false`** keeps
-  the demo always-on. Without these, the machine sleeps after idle
-  and the first FAB click takes ~3 seconds to wake.
+- **`min_machines_running = 0`** + **`auto_stop_machines = "stop"`** lets
+  the machine sleep when idle. Cost drops to roughly the volume's
+  $0.15/month; trade-off is a 1-3 s cold start on the first request
+  after idle. If you'd rather pay always-on for instant first-clicks,
+  set `min_machines_running = 1` and `auto_stop_machines = false`.
+- **`BUG_FAB_RATE_LIMIT_MAX = "5"` / `_WINDOW_SECONDS = "900"`** — five
+  reports per IP per fifteen minutes. Tight on purpose for a wide-open
+  public demo; see § Hardening below for the rationale and the
+  internal-deployment defaults.
+- **`BUG_FAB_MAX_UPLOAD_MB = "2"`** — caps the multipart screenshot at
+  2 MiB. Plenty of room for html2canvas on a 4K display; no room for
+  a memory-chewing oversize upload.
 - **`memory_mb = 256`** is enough for the FastAPI process plus
   occasional screenshot processing. Bump to 512 if you enable Postgres.
 - **`cpu_kind = "shared"`** is the free-tier shape.
