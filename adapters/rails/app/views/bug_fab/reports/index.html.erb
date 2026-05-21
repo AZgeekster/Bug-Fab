@@ -1,0 +1,74 @@
+<div class="stats">
+  <% @stats.each do |status, count| %>
+    <div class="stat-card">
+      <div class="label"><%= status %></div>
+      <div class="value"><%= count %></div>
+    </div>
+  <% end %>
+  <div class="stat-card">
+    <div class="label">total</div>
+    <div class="value"><%= @total %></div>
+  </div>
+</div>
+
+<form class="filters" method="get">
+  <select name="status">
+    <option value="">all statuses</option>
+    <% BugFab::Validation::STATUSES.each do |s| %>
+      <option value="<%= s %>" <%= "selected" if @filters[:status] == s %>><%= s %></option>
+    <% end %>
+  </select>
+  <select name="severity">
+    <option value="">all severities</option>
+    <% BugFab::Validation::SEVERITIES.each do |sv| %>
+      <option value="<%= sv %>" <%= "selected" if @filters[:severity] == sv %>><%= sv %></option>
+    <% end %>
+  </select>
+  <input type="text" name="module" placeholder="module" value="<%= @filters[:module] %>" />
+  <input type="text" name="environment" placeholder="env" value="<%= @filters[:environment] %>" />
+  <button type="submit">filter</button>
+</form>
+
+<table>
+  <thead>
+    <tr>
+      <th>id</th>
+      <th>title</th>
+      <th>type</th>
+      <th>severity</th>
+      <th>status</th>
+      <th>module</th>
+      <th>created</th>
+      <th>screenshot</th>
+    </tr>
+  </thead>
+  <tbody>
+    <% @items.each do |report| %>
+      <tr>
+        <td><a href="<%= report.id %>"><%= report.id %></a></td>
+        <td><%= report.title %></td>
+        <td><%= report.report_type %></td>
+        <td><span class="badge badge-severity-<%= report.severity %>"><%= report.severity %></span></td>
+        <td><span class="badge badge-status-<%= report.status %>"><%= report.status %></span></td>
+        <td><%= report.module_name %></td>
+        <td><%= report.received_at.strftime("%Y-%m-%d %H:%M") %></td>
+        <td><%= File.exist?(report.screenshot_path.to_s) ? "yes" : "no" %></td>
+      </tr>
+    <% end %>
+    <% if @items.empty? %>
+      <tr><td colspan="8" style="text-align: center; color: #999; padding: 2rem;">No bug reports yet.</td></tr>
+    <% end %>
+  </tbody>
+</table>
+
+<% if @total_pages > 1 %>
+  <div class="pagination">
+    <% (1..@total_pages).each do |p| %>
+      <% if p == @page %>
+        <strong><%= p %></strong>
+      <% else %>
+        <a href="?page=<%= p %>&page_size=<%= @page_size %>"><%= p %></a>
+      <% end %>
+    <% end %>
+  </div>
+<% end %>

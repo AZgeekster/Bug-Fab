@@ -1,0 +1,17 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/bug-reports",
+      "destination": "/api/route"
+    },
+    {
+      "source": "/admin/bug-reports/:path*",
+      "destination": "/api/route"
+    }
+  ],
+  "functions": {
+    "api/route.ts": {
+      "runtime": "edge"
+    }
+  }
+}

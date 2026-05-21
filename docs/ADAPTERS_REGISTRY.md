@@ -105,17 +105,17 @@ Mainstream stacks where adapter demand is likely from real consumers. Bug-Fab ac
 | Field | Value |
 |---|---|
 | Stack | Express ≥ 4, Node ≥ 20 |
-| Status | 🟡 sketch |
+| Status | 🟢 reference (first-party adapter) |
 | Tier | 1 |
-| Package | (sketch) |
-| Repository | — |
+| Package | `bug-fab-express` (in-repo source; npm publish pending tag) |
+| Repository | `repo/adapters/express/` (this repo) |
 | Language | TypeScript |
 | Tracks Bug-Fab | v0.1 |
-| Conformance | untested |
-| Reference doc | [`docs/ADAPTERS.md#express--nodejs`](./ADAPTERS.md#express--nodejs) |
-| Last updated | 2026-04-29 (TKR-feedback round) |
-| Maintainer | (none — sketch only) |
-| Notes | The Fastify section of ADAPTERS.md is more current; Express still uses `multer` + callback patterns that may need a refresh once a real Express consumer surfaces. |
+| Conformance | ✅ `vitest run` returns 41/41 passing (9 conformance + 18 viewer + 14 intake) under `docker run --rm node:20` (verified 2026-05-21); cross-stack `pytest --bug-fab-conformance` against the bundled `examples/server.ts` pending |
+| Reference doc | `repo/adapters/express/README.md` + `MIGRATION_NOTES.md` |
+| Last updated | 2026-05-21 |
+| Maintainer | Bug-Fab core (AZgeekster) |
+| Notes | `createBugFabRouter(opts)` factory returns a mountable `express.Router`. Default `FileStorage` (zero-dep, JSON-on-disk); custom backends via 9-method `IStorage` interface. Multer `memoryStorage` so the PNG magic-byte check runs before persistence. Mount-prefix captured per-request from `req.baseUrl` — no construction-time mount path. Auth delegated to host app at the mount point. |
 
 ### Next.js Route Handlers (TypeScript)
 
@@ -151,6 +151,23 @@ Mainstream stacks where adapter demand is likely from real consumers. Bug-Fab ac
 | Maintainer | Bug-Fab core (AZgeekster) |
 | Notes | First-party reusable Django app: register in `INSTALLED_APPS`, run `migrate`, mount the intake + viewer URLconfs. Native Django ORM models, `BugReportAdmin` for admin UI, plain Django views (no DRF dependency). Validation reuses `bug_fab.intake.validate_payload` so the wire-protocol contract is shared with the FastAPI reference. Sync-by-design (`DjangoORMStorage`); not a thin shim over `bug_fab.storage.Storage` ABC because Django's ORM is sync. |
 
+### Spring Boot (Kotlin / JVM)
+
+| Field | Value |
+|---|---|
+| Stack | Spring Boot 3.x, Kotlin 1.9+, JDK 17 |
+| Status | 🟢 reference (first-party adapter) |
+| Tier | 1 |
+| Package | `io.bugfab:bugfab-spring:0.1.0-SNAPSHOT` (in-repo source; Maven Central publish pending tag — install via Gradle `includeBuild` or local build) |
+| Repository | `repo/adapters/spring-boot-kotlin/` (this repo) |
+| Language | Kotlin |
+| Tracks Bug-Fab | v0.1 |
+| Conformance | ✅ `gradle build test --no-daemon` returns 24/24 passing under `docker run --rm gradle:8-jdk17` (verified 2026-05-21); cross-stack `pytest --bug-fab-conformance` against a live `gradle bootRun` server pending |
+| Reference doc | `repo/adapters/spring-boot-kotlin/README.md` + `MIGRATION_NOTES.md` |
+| Last updated | 2026-05-21 |
+| Maintainer | Bug-Fab core (AZgeekster) |
+| Notes | Two storage backends: `file` (default) and `jpa` (Spring Data JPA on any JDBC). Intake controller binds the `metadata` part as `MultipartFile` (the wire-protocol-correct shape — `@RequestParam String` silently truncates). `JpaStorage` is declared `open` for CGLIB `@Transactional` proxying. **Known v0.2 cleanup**: `BugFabJpaConfiguration` activates via component scan before `@ConditionalOnProperty` evaluates when consumers scan `io.bugfab.adapter` — workaround is to keep your `@SpringBootApplication` in a sibling package; v0.2 will move the auto-config classes to `io.bugfab.adapter.config`. JPA uses Hibernate `ddl-auto` in v0.1 — add Flyway (preferred) or Liquibase before v0.2. Rate-limiter `ConcurrentHashMap` is unbounded; swap to Caffeine `BucketProxyManager` at scale. |
+
 ### NestJS (TypeScript)
 
 | Field | Value |
@@ -178,35 +195,35 @@ Real but smaller user bases or growing-mainstream stacks. Sketches welcome; main
 
 | Field | Value |
 |---|---|
-| Stack | Hono ≥ 4 (Node, Bun, Deno, Cloudflare Workers, Vercel Edge) |
-| Status | 🟡 sketch |
+| Stack | Hono ≥ 4 (Node ≥ 20, Bun, Deno, Cloudflare Workers, Vercel Edge) |
+| Status | 🟢 reference (first-party adapter) |
 | Tier | 2 |
-| Package | (sketch) |
-| Repository | — |
+| Package | `bug-fab-hono` (in-repo source; npm publish pending tag) |
+| Repository | `repo/adapters/hono/` (this repo) |
 | Language | TypeScript |
 | Tracks Bug-Fab | v0.1 |
-| Conformance | untested |
-| Reference doc | [`docs/ADAPTERS.md#hono-typescript-hono--4`](./ADAPTERS.md#hono-typescript-hono--4) |
-| Last updated | 2026-04-30 |
-| Maintainer | (none — sketch only) |
-| Notes | Edge-runtime-friendly. Sketch uses `c.req.parseBody()` for multipart, returns `Uint8Array` from `getScreenshotBytes` (so storage backends can be R2/S3/KV instead of `node:fs` for serverless deploys). Body-size limit is runtime-defined; 10/11 MiB cap enforced inside the handler. |
+| Conformance | ✅ `npm test` (vitest) returns 44/44 passing under `docker run --rm node:20` (verified 2026-05-21); cross-stack `pytest --bug-fab-conformance` against a deployed Workers / Vercel Edge instance pending |
+| Reference doc | `repo/adapters/hono/README.md` + `MIGRATION_NOTES.md` |
+| Last updated | 2026-05-21 |
+| Maintainer | Bug-Fab core (AZgeekster) |
+| Notes | Single `createBugFabApp({ storage })` returns a Hono instance that runs unchanged on Workers / Bun / Deno / Vercel Edge / Node (`@hono/node-server`). Three Web-standard storage backends (Memory, R2, Workers KV) — no `node:fs` or `Buffer`. Trailing-slash on `viewerPrefix` is wired explicitly on the parent (Hono v4's `route()` collapses sub-app `/` + `''` paths). Default `onError` + `notFound` handlers return the protocol's `{error, detail}` envelope. Vercel Edge consumers must keep screenshots under the platform's 4.5 MiB body cap. |
 
 ### SvelteKit (TypeScript)
 
 | Field | Value |
 |---|---|
-| Stack | SvelteKit ≥ 2 |
-| Status | 🟡 sketch |
+| Stack | SvelteKit ≥ 2, Node ≥ 20 |
+| Status | 🟢 reference (first-party adapter) |
 | Tier | 2 |
-| Package | (sketch) |
-| Repository | — |
+| Package | `bug-fab-sveltekit` (in-repo source; npm publish pending tag) |
+| Repository | `repo/adapters/sveltekit/` (this repo) |
 | Language | TypeScript |
 | Tracks Bug-Fab | v0.1 |
-| Conformance | untested |
-| Reference doc | [`docs/ADAPTERS.md#sveltekit`](./ADAPTERS.md#sveltekit) |
-| Last updated | 2026-04-29 (TKR-feedback round) |
-| Maintainer | (none) |
-| Notes | `+server.ts` files map naturally to the protocol. Drizzle ORM example included. |
+| Conformance | ✅ `npm ci && npm test` returns 35 passed + 1 skipped (intake 8/8, conformance 15/15, viewer 12/13 + 1 skip) under `docker run --rm node:20` (verified 2026-05-21); cross-stack `pytest --bug-fab-conformance` against a live `npm run dev` server pending |
+| Reference doc | `repo/adapters/sveltekit/README.md` + `MIGRATION_NOTES.md` |
+| Last updated | 2026-05-21 |
+| Maintainer | Bug-Fab core (AZgeekster) |
+| Notes | One `+server.ts` per protocol endpoint (8 files in `examples/route-tree/`) — no mountable-router abstraction. Two storage backends: `FileStorage` for `adapter-node` single-process, `DrizzleStorage` for Vercel / Cloudflare / multi-worker with pluggable `screenshotIO` (R2 / S3 / Postgres BYTEA). `<BugFab />` Svelte component written to the v4/v5 overlap; dev-dep pin bumped to Svelte 5 after `@sveltejs/kit@2.60.1` started requiring `@sveltejs/vite-plugin-svelte@^7`. `$lib/server/` enforcement keeps `node:fs` out of the browser bundle by construction. |
 
 ### ASP.NET Core / Razor Pages (.NET)
 
@@ -230,17 +247,17 @@ Real but smaller user bases or growing-mainstream stacks. Sketches welcome; main
 | Field | Value |
 |---|---|
 | Stack | Rails ≥ 7.1, Ruby ≥ 3.2 |
-| Status | 🟡 draft (test-suite-green, not yet promoted) |
+| Status | 🟢 reference (first-party adapter) |
 | Tier | 2 |
-| Package | (private draft) |
-| Repository | private `notes/adapter_drafts/rails/` (not yet promoted to a public repo / RubyGems) |
+| Package | `bug_fab-rails` (in-repo source; RubyGems publish pending tag) |
+| Repository | `repo/adapters/rails/` (this repo) |
 | Language | Ruby |
 | Tracks Bug-Fab | v0.1 |
-| Conformance | ✅ 22/22 in-repo tests pass on Ruby 3.3 + Rails 7.1.6 (verified 2026-05-04 via `docker run --rm ruby:3.3 bundle exec rake test`); `pytest --bug-fab-conformance` against a live `bin/rails server` not yet run |
-| Reference doc | [`docs/ADAPTERS.md` § Rails](./ADAPTERS.md) — and the in-draft `README.md` |
-| Last updated | 2026-05-04 |
-| Maintainer | (none — private draft) |
-| Notes | Mountable Rails Engine. ActiveRecord models mirror the Python `BugReportORM` schema (with `module → module_name` rename to avoid Ruby's `Module` constant clash). Test harness uses the canonical `rails plugin new --mountable --dummy-path=test/dummy` scaffold (an earlier inline `TestApplication` pattern double-evaluated engine routes; replaced 2026-05-04). Promotion path: move to `repo/adapters/rails/` or sibling `bug_fab-rails` repo, run upstream conformance, publish to RubyGems. |
+| Conformance | ✅ `bundle exec rake test` returns 22/22 passing (107 assertions) under `docker run --rm ruby:3.3` (verified 2026-05-21); cross-stack `pytest --bug-fab-conformance` against a live `bin/rails server` pending |
+| Reference doc | `repo/adapters/rails/README.md` + `MIGRATION_NOTES.md` |
+| Last updated | 2026-05-21 |
+| Maintainer | Bug-Fab core (AZgeekster) |
+| Notes | Mountable Rails Engine — drop into any Rails 7.1+ host via `mount BugFab::Engine, at: "/bug-fab"`. ActiveRecord models mirror the Python `BugReportORM` schema (with `module → module_name` rename to avoid Ruby's `Module` constant clash). Test harness uses the canonical `rails plugin new --mountable --dummy-path=test/dummy` scaffold. Ships a placeholder `bug-fab.js` asset; consumers vendor the upstream bundle into `app/assets/javascripts/bug_fab/`. Rack 3.x status-symbol deprecations (`:unprocessable_entity`, `:payload_too_large`) flagged for v0.2 cleanup. |
 
 ### Go + Gin
 
@@ -333,39 +350,24 @@ Smaller adoption or specialized stacks. Sketches OK; nothing actively pursued.
 | Maintainer | (none) |
 | Notes | Go ecosystem is small relative to Python/TS. PostgreSQL persistence sketch included. |
 
-### Laravel (PHP)
+### Vapor (Swift)
 
 | Field | Value |
 |---|---|
-| Stack | Laravel ≥ 11, PHP ≥ 8.2 |
-| Status | ⚫ out-of-scope (v0.1) |
+| Stack | Vapor ≥ 4.92, Swift ≥ 6.0 |
+| Status | 🟢 reference (first-party adapter) |
 | Tier | 3 |
-| Package | (none) |
-| Repository | — |
-| Language | PHP |
-| Tracks Bug-Fab | (none) |
-| Conformance | n/a |
-| Reference doc | — |
-| Last updated | 2026-04-30 |
-| Maintainer | (none) |
-| Notes | PHP is not in Bug-Fab's current consumer mix. Re-evaluate if a Laravel consumer surfaces. |
+| Package | (in-repo source; Swift Package Index registration pending tag) |
+| Repository | `repo/adapters/vapor/` (this repo) |
+| Language | Swift |
+| Tracks Bug-Fab | v0.1 |
+| Conformance | ✅ `swift test` returns 9/9 passing under `docker run --rm swift:6.0` (verified 2026-05-21); cross-stack `pytest --bug-fab-conformance` against a live `swift run BugFabExample` server pending |
+| Reference doc | `repo/adapters/vapor/README.md` + `MIGRATION_NOTES.md` |
+| Last updated | 2026-05-21 |
+| Maintainer | Bug-Fab core (AZgeekster) |
+| Notes | Two storage backends (`BugFabFileStorage` + `BugFabFluentStorage` for SQLite/Postgres). Required a Swift 5.10 → Swift 6.0 strict-concurrency migration: `BugReportsController` declared `Sendable` (Swift 6 disallows `@Sendable` on funcs of non-`Sendable` enclosing types), XCTVapor switched to the async `{ req async throws in ... }` pattern. **`BugFabErrorMiddleware` MUST replace** (`app.middleware = .init()`) **rather than prepend** — Vapor's pre-registered default `ErrorMiddleware` otherwise catches first and emits `{"error": true, "reason": "..."}` instead of the spec envelope. |
 
-### Phoenix (Elixir)
-
-| Field | Value |
-|---|---|
-| Stack | Phoenix ≥ 1.7 |
-| Status | ⚫ out-of-scope (v0.1) |
-| Tier | 3 |
-| Package | (none) |
-| Repository | — |
-| Language | Elixir |
-| Tracks Bug-Fab | (none) |
-| Conformance | n/a |
-| Reference doc | — |
-| Last updated | 2026-04-30 |
-| Maintainer | (none) |
-| Notes | Devoted but small ecosystem. A `bug_fab` hex package would be welcome but not on the roadmap. |
+> _(Laravel and Phoenix were previously listed here as out-of-scope sketches; both have been promoted to Tier 2 first-party reference adapters above.)_
 
 ---
 

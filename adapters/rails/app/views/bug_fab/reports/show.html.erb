@@ -1,0 +1,71 @@
+<% detail = @report.to_detail %>
+
+<p><a href="../">&larr; back to list</a></p>
+
+<h2><%= detail[:title] %></h2>
+<p>
+  <span class="badge badge-severity-<%= detail[:severity] %>"><%= detail[:severity] %></span>
+  <span class="badge badge-status-<%= detail[:status] %>"><%= detail[:status] %></span>
+  &middot; <%= detail[:report_type] %>
+  &middot; <%= detail[:created_at] %>
+</p>
+
+<div class="detail-grid">
+  <div>
+    <h3>Screenshot</h3>
+    <% if detail[:has_screenshot] %>
+      <img class="screenshot" src="<%= detail[:id] %>/screenshot" alt="bug screenshot" />
+    <% else %>
+      <p>(no screenshot)</p>
+    <% end %>
+
+    <h3>Description</h3>
+    <p><%= detail[:description].presence || "(none)" %></p>
+
+    <h3>Expected behavior</h3>
+    <p><%= detail[:expected_behavior].presence || "(none)" %></p>
+  </div>
+
+  <div>
+    <h3>Metadata</h3>
+    <table>
+      <tr><th class="field-label">id</th><td><%= detail[:id] %></td></tr>
+      <tr><th class="field-label">module</th><td><%= detail[:module] %></td></tr>
+      <tr><th class="field-label">environment</th><td><%= detail[:environment] %></td></tr>
+      <tr><th class="field-label">app_version</th><td><%= detail.dig(:context, "app_version") %></td></tr>
+      <tr><th class="field-label">url</th><td><%= detail.dig(:context, "url") %></td></tr>
+      <tr><th class="field-label">reporter</th><td><%= [detail.dig(:reporter, :name), detail.dig(:reporter, :email)].reject(&:blank?).join(" ") %></td></tr>
+      <tr><th class="field-label">tags</th><td><%= detail[:tags].join(", ") %></td></tr>
+      <tr><th class="field-label">protocol_version</th><td><%= detail[:protocol_version] %></td></tr>
+      <tr><th class="field-label">client_ts</th><td><%= detail[:client_ts] %></td></tr>
+      <tr><th class="field-label">github</th><td><%= detail[:github_issue_url] ? "<a href=\"#{detail[:github_issue_url]}\">##{detail[:github_issue_number]}</a>".html_safe : "(none)" %></td></tr>
+    </table>
+
+    <h3>User-Agent</h3>
+    <table>
+      <tr><th class="field-label">server</th><td><%= detail[:server_user_agent] %></td></tr>
+      <tr><th class="field-label">client</th><td><%= detail[:client_reported_user_agent] %></td></tr>
+    </table>
+
+    <h3>Lifecycle</h3>
+    <table>
+      <thead><tr><th>action</th><th>by</th><th>at</th><th>fix</th></tr></thead>
+      <tbody>
+        <% detail[:lifecycle].each do |entry| %>
+          <tr>
+            <td><%= entry[:action] %></td>
+            <td><%= entry[:by] %></td>
+            <td><%= entry[:at] %></td>
+            <td><%= entry[:fix_commit] %> <%= entry[:fix_description] %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+
+    <h3>Console errors</h3>
+    <pre><%= JSON.pretty_generate(detail.dig(:context, "console_errors") || []) %></pre>
+
+    <h3>Network log</h3>
+    <pre><%= JSON.pretty_generate(detail.dig(:context, "network_log") || []) %></pre>
+  </div>
+</div>

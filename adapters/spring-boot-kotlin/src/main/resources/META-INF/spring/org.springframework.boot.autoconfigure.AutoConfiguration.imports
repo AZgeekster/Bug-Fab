@@ -1,0 +1,2 @@
+io.bugfab.adapter.BugFabAutoConfiguration
+io.bugfab.adapter.BugFabJpaConfiguration

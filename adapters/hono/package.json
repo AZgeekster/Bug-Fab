@@ -1,0 +1,75 @@
+{
+  "name": "bug-fab-hono",
+  "version": "0.1.0",
+  "description": "Hono adapter for the Bug-Fab wire protocol (v0.1). Edge-runtime friendly: Cloudflare Workers, Bun, Deno, Vercel Edge.",
+  "keywords": [
+    "bug-fab",
+    "bug-report",
+    "hono",
+    "adapter",
+    "edge",
+    "cloudflare-workers",
+    "bun",
+    "vercel-edge"
+  ],
+  "license": "MIT",
+  "author": "AZgeekster",
+  "homepage": "https://github.com/AZgeekster/Bug-Fab",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AZgeekster/Bug-Fab.git",
+    "directory": "adapters/hono"
+  },
+  "bugs": {
+    "url": "https://github.com/AZgeekster/Bug-Fab/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./storage/memory": {
+      "types": "./dist/storage/MemoryStorage.d.ts",
+      "import": "./dist/storage/MemoryStorage.js"
+    },
+    "./storage/r2": {
+      "types": "./dist/storage/R2Storage.d.ts",
+      "import": "./dist/storage/R2Storage.js"
+    },
+    "./storage/kv": {
+      "types": "./dist/storage/KVStorage.d.ts",
+      "import": "./dist/storage/KVStorage.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "AGENTS.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "hono": "^4.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240117.0",
+    "@types/node": "^20.11.0",
+    "@vitest/coverage-v8": "^1.4.0",
+    "hono": "^4.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.4.0"
+  }
+}

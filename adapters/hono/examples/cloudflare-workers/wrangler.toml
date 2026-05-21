@@ -1,0 +1,18 @@
+name = "bug-fab-collector"
+main = "worker.ts"
+compatibility_date = "2026-04-01"
+
+# R2 bucket for screenshot blobs (large; not subject to KV's 25 MiB cap).
+[[r2_buckets]]
+binding = "BUG_FAB_R2"
+bucket_name = "bug-fab-screenshots"
+
+# KV namespace for metadata + the monotonic ID counter.
+# Replace `id` with the value `wrangler kv:namespace create BUG_FAB_KV` prints.
+[[kv_namespaces]]
+binding = "BUG_FAB_KV"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+# Optional GitHub sync secrets. Set with:
+#   wrangler secret put GITHUB_PAT
+#   wrangler secret put GITHUB_REPO   # e.g., "me/my-bugs"

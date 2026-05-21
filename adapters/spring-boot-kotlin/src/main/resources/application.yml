@@ -1,0 +1,39 @@
+# Bug-Fab adapter defaults — every property has a safe fallback, so
+# consumers only need to override what they actually want to change.
+# Values here are loaded with the lowest precedence; the consumer's own
+# `application.yml`, environment variables, and command-line args all
+# win on conflict.
+bugfab:
+  route-prefix: /bug-fab
+  storage: file
+  storage-dir: ./var/bug-fab
+  max-screenshot-mb: 4
+  max-metadata-kb: 256
+  id-prefix: ""
+  rate-limit:
+    enabled: false
+    max-per-window: 30
+    window-seconds: 60
+  viewer-permissions:
+    can-edit-status: true
+    can-delete: true
+    can-bulk: true
+  github:
+    enabled: false
+    repository: ""
+    personal-access-token: ""
+    api-base: "https://api.github.com"
+
+spring:
+  servlet:
+    multipart:
+      # Mirror `bugfab.max-screenshot-mb` so Spring's multipart parser
+      # doesn't truncate before our explicit size check runs. Consumers
+      # overriding `bugfab.max-screenshot-mb` MUST override this too —
+      # Spring evaluates this property at startup, not per request.
+      max-file-size: 4MB
+      max-request-size: 5MB
+      # Disk-spool every multipart part regardless of size. Keeps a hot
+      # JVM from buffering 4 MiB PNGs in heap while waiting for the
+      # controller's size check.
+      file-size-threshold: 0B

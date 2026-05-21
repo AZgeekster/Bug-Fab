@@ -1,0 +1,18 @@
+{
+  "name": "bug-fab-vercel-edge-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel deploy --prod"
+  },
+  "dependencies": {
+    "bug-fab-hono": "0.1.0",
+    "hono": "^4.0.0"
+  },
+  "devDependencies": {
+    "vercel": "^32.0.0",
+    "typescript": "^5.4.0"
+  }
+}

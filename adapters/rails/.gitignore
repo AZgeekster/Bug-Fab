@@ -1,0 +1,12 @@
+*.gem
+*.rbc
+/.bundle/
+/coverage/
+/pkg/
+/spec/reports/
+/test/tmp/
+/test/dummy/log/
+/test/dummy/tmp/
+/log/
+/tmp/
+.byebug_history

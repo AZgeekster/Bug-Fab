@@ -1,0 +1,11 @@
+# Minimal consumer: keep adapter defaults, just change the storage dir
+# to something obvious. Drop in real values once you outgrow this.
+bugfab:
+  storage: file
+  storage-dir: ./var/bug-fab-example
+  route-prefix: /bug-fab
+  rate-limit:
+    enabled: false
+
+server:
+  port: 8080

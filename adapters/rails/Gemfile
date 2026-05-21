@@ -1,0 +1,29 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+gemspec
+
+# Engine test app uses SQLite. Postgres / MySQL also work for consumers.
+gem "sqlite3", "~> 1.7"
+
+# Pin to Rails 7.1.x for the inline test-harness in test/test_helper.rb.
+# Rails 7.2 changed initializer ordering so the engine routes get
+# evaluated twice during Rails.application.initialize!, causing
+# "Invalid route name, already in use" collisions. The proper fix is a
+# generated `test/dummy/` app (per `rails plugin new`); pinning to 7.1
+# is the cheap fix for now. The gemspec range stays `>= 7.1, < 9.0`
+# because the engine itself works fine on both 7.1 and 7.2 — only the
+# test harness is fragile on 7.2.
+gem "rails", "~> 7.1.0"
+
+group :test do
+  gem "minitest", "~> 5.20"
+  gem "minitest-reporters", "~> 1.6"
+  gem "rack-test", "~> 2.1"
+end
+
+group :development do
+  gem "rubocop", "~> 1.60", require: false
+  gem "rubocop-rails", "~> 2.23", require: false
+end

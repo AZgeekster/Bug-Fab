@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bug-Fab</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 1rem; color: #1a1a1a; background: #fafafa; }
+    header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1rem; border-bottom: 1px solid #ddd; padding-bottom: 0.5rem; }
+    header h1 { font-size: 1.4rem; margin: 0; }
+    table { width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+    th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid #eee; font-size: 0.9rem; }
+    th { background: #f3f3f3; font-weight: 600; }
+    tr:hover { background: #fafcff; }
+    .stats { display: flex; gap: 1rem; margin-bottom: 1rem; }
+    .stat-card { background: #fff; border: 1px solid #e2e2e2; padding: 0.5rem 0.75rem; border-radius: 4px; min-width: 6rem; }
+    .stat-card .label { font-size: 0.75rem; text-transform: uppercase; color: #666; }
+    .stat-card .value { font-size: 1.4rem; font-weight: 600; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
+    .badge-status-open { background: #dbeafe; color: #1e40af; }
+    .badge-status-investigating { background: #fef3c7; color: #92400e; }
+    .badge-status-fixed { background: #d1fae5; color: #065f46; }
+    .badge-status-closed { background: #e5e7eb; color: #374151; }
+    .badge-severity-low { background: #d1fae5; color: #065f46; }
+    .badge-severity-medium { background: #fef3c7; color: #92400e; }
+    .badge-severity-high { background: #fed7aa; color: #9a3412; }
+    .badge-severity-critical { background: #fecaca; color: #991b1b; }
+    .filters { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+    .filters input, .filters select { padding: 0.25rem 0.5rem; font-size: 0.9rem; }
+    .pagination { margin-top: 1rem; text-align: center; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 1rem; }
+    .detail-grid .field-label { font-weight: 600; color: #555; }
+    pre { background: #f3f3f3; padding: 0.5rem; border-radius: 4px; overflow-x: auto; font-size: 0.8rem; }
+    img.screenshot { max-width: 100%; border: 1px solid #ddd; border-radius: 4px; }
+    a { color: #2563eb; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><a href="./" style="text-decoration: none; color: inherit;">Bug-Fab</a></h1>
+    <small>protocol v<%= BugFab::PROTOCOL_VERSION %> &middot; gem v<%= BugFab::VERSION %></small>
+  </header>
+  <%= yield %>
+</body>
+</html>
