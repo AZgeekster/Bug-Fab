@@ -1,0 +1,13 @@
+# Mix / Hex build artifacts.
+/_build/
+/cover/
+/deps/
+/doc/
+/.fetch
+/.elixir_ls/
+erl_crash.dump
+*.ez
+
+# Local Phoenix release builds.
+/priv/static/
+/tmp/

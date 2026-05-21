@@ -293,6 +293,23 @@ Real but smaller user bases or growing-mainstream stacks. Sketches welcome; main
 | Maintainer | Bug-Fab core (AZgeekster) |
 | Notes | Two storage backends (FileStorage + EloquentStorage), Service Provider auto-discovers via `extra.laravel.providers`. Octane-aware but **watch the default `array` cache driver** — per-worker rate-limit counters multiply the effective limit; switch to Redis for accurate per-IP limiting (documented in MIGRATION_NOTES). Native PHP `enum` + `Rule::enum()` for severity validation; intake route is CSRF-exempt because the bundle posts cross-page. |
 
+### Elixir + Phoenix
+
+| Field | Value |
+|---|---|
+| Stack | Phoenix ≥ 1.7, Elixir ≥ 1.16, OTP ≥ 26 |
+| Status | 🟢 reference (first-party adapter) |
+| Tier | 2 |
+| Package | (unpublished — Hex.pm publish pending tag) |
+| Repository | `repo/adapters/phoenix/` (this repo) |
+| Language | Elixir |
+| Tracks Bug-Fab | v0.1 |
+| Conformance | ✅ `mix test` returns 37/37 passing under `docker run --rm elixir:1.16` (verified 2026-05-21); cross-stack `pytest --bug-fab-conformance` pending |
+| Reference doc | `repo/adapters/phoenix/README.md` + `MIGRATION_NOTES.md` |
+| Last updated | 2026-05-21 |
+| Maintainer | Bug-Fab core (AZgeekster) |
+| Notes | Mountable `Plug.Router` under any Phoenix endpoint OR as a standalone `Plug.Cowboy` app — keeps non-Phoenix Plug consumers happy. Two storage backends (FileStorage + EctoStorage). Minimal embedded EEx viewer; LiveView upgrade earmarked for v0.2. Telemetry events listed in MIGRATION_NOTES but not yet wired. |
+
 ---
 
 ## Tier 3 — lower priority

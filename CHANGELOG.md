@@ -13,6 +13,17 @@ out explicitly in each release entry.
 
 ### Added
 
+- **Phoenix (Elixir) first-party adapter** at `repo/adapters/phoenix/`.
+  Promoted from private draft 2026-05-21 after a sibling-module
+  reorder fix (the `BugFab.Storage.EctoStorage.BugReport` defmodule
+  was being expanded before its definition lived in the file) unblocked
+  the compile. 37/37 `mix test` passing under `docker run --rm
+  elixir:1.16`. Mountable as a `Plug.Router` under any Phoenix
+  endpoint OR as a standalone `Plug.Cowboy` app, so non-Phoenix Plug
+  consumers can mount it too. Two storage backends (`BugFab.FileStorage`
+  cross-readable with the Python reference, `BugFab.EctoStorage` with
+  a Postgres-first migration). Minimal embedded EEx viewer; LiveView
+  upgrade and Tesla-based GitHub Issues sync earmarked for v0.2.
 - **Three new first-party adapters** promoted from private drafts on
   2026-05-21:
   - **Go + Gin** at `repo/adapters/go-gin/`. Module path
