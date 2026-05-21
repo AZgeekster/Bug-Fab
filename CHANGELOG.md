@@ -13,6 +13,28 @@ out explicitly in each release entry.
 
 ### Added
 
+- Optional Slack incoming-webhook adapter at
+  `bug_fab/integrations/slack.py` (new module). `SlackSync` transforms
+  a `BugReportDetail`-shaped payload into a Slack Block Kit message —
+  a single `attachments` entry with a severity-mapped color sidebar
+  (critical / high / medium / low → red / orange / yellow / blue;
+  unknown values fall back to gray) and four blocks: a header
+  (`<SEVERITY>: <title>`), a section with the description (truncated
+  to 500 chars to keep channel noise low), a fields section
+  (Reporter, Status, optional Environment / Module), and a context
+  line with the report id, timestamp, and optional `<view|...>` /
+  `<github issue|...>` links. Satisfies the same `.send(report) ->
+  bool` contract as `WebhookSync`, so it wires through the existing
+  `webhook_sync` slot of `submit.configure()` without router changes.
+  `SlackSync.from_env()` reads `BUG_FAB_SLACK_ENABLED`,
+  `BUG_FAB_SLACK_WEBHOOK_URL`, `BUG_FAB_SLACK_VIEWER_BASE_URL`, and
+  `BUG_FAB_SLACK_TIMEOUT_SECONDS`, returning `None` when disabled so
+  it can be passed straight into `submit.configure(webhook_sync=...)`.
+  Same best-effort failure-tolerance contract as the generic webhook:
+  Slack outages log at WARN and never block intake. 22 new integration
+  tests cover the rendered payload shape, severity-color mapping,
+  description truncation, viewer-link rendering, and the standard
+  failure modes (404, timeout, connect error).
 - Optional marketing-site co-hosting in the `examples/error-playground/`
   POC image. A new `_resolve_marketing_dir()` helper looks for
   `/app/marketing-dist` (override via the `BUG_FAB_MARKETING_DIR` env
