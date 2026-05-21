@@ -33,6 +33,7 @@ from pydantic import ValidationError
 from bug_fab._observability import EVENT_REPORT_RECEIVED
 from bug_fab._observability import emit as emit_event
 from bug_fab._rate_limit import RateLimiter
+from bug_fab._redact import redact_report
 from bug_fab.config import Settings
 from bug_fab.integrations.github import GitHubSync
 from bug_fab.integrations.webhook import WebhookSync
@@ -245,6 +246,12 @@ async def submit_bug_report(
     metadata_dict["server_user_agent"] = server_user_agent
     metadata_dict["client_reported_user_agent"] = client_user_agent
     metadata_dict["environment"] = environment
+
+    # Opt-in PII redaction runs before persistence so masked values
+    # are what land on disk — there's no second copy of the raw text
+    # to leak later. See bug_fab._redact for the documented patterns.
+    if settings.redact_pii:
+        metadata_dict = redact_report(metadata_dict)
 
     try:
         report_id = await storage.save_report(metadata_dict, screenshot_bytes)

@@ -74,6 +74,13 @@ class Settings:
     storage_dir: Path = field(default_factory=lambda: Path("./bug_reports"))
     id_prefix: str = ""
     max_upload_mb: int = 10
+    #: Opt-in PII redaction over the auto-captured buffers + free-text
+    #: fields. Off by default to preserve back-compat; flip on for any
+    #: public-facing deployment. See ``bug_fab._redact`` for the
+    #: documented vocabulary (JWTs, Luhn-validated card numbers,
+    #: emails). The redaction runs before ``storage.save_report`` so
+    #: PII never lands on disk in the first place.
+    redact_pii: bool = False
     rate_limit_enabled: bool = False
     rate_limit_max: int = 50
     rate_limit_window_seconds: int = 3600
@@ -135,6 +142,7 @@ class Settings:
             "storage_dir": Path(_env_str("BUG_FAB_STORAGE_DIR", "./bug_reports")),
             "id_prefix": _env_str("BUG_FAB_ID_PREFIX", ""),
             "max_upload_mb": _env_int("BUG_FAB_MAX_UPLOAD_MB", 10),
+            "redact_pii": _env_bool("BUG_FAB_REDACT_PII", False),
             "rate_limit_enabled": _env_bool("BUG_FAB_RATE_LIMIT_ENABLED", False),
             "rate_limit_max": _env_int("BUG_FAB_RATE_LIMIT_MAX", 50),
             "rate_limit_window_seconds": _env_int("BUG_FAB_RATE_LIMIT_WINDOW_SECONDS", 3600),

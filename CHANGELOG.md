@@ -13,6 +13,26 @@ out explicitly in each release entry.
 
 ### Added
 
+- Opt-in PII redaction for the auto-captured buffers + free-text
+  fields. New private module `bug_fab/_redact.py` defines a
+  conservative three-pattern redactor: JWTs (three base64url-ish
+  segments) collapse to `<redacted-jwt>`; credit card numbers that
+  pass Luhn validation collapse to `****-****-****-NNNN` (last four
+  preserved for chargeback correlation; non-Luhn digit groups left
+  alone so transaction IDs / phone numbers don't get masked); email
+  local-parts collapse so `alice@example.com` becomes
+  `redacted@example.com` (the domain survives for diagnostics). The
+  redactor walks a documented field set — `title`, `description`,
+  `expected_behavior`, `context.console_errors[*].{message, stack}`,
+  `context.network_log[*].url` — and runs inside the submit router
+  *before* `storage.save_report`, so masked values are what land on
+  disk. Reporter identity (`reporter.{name, email, user_id}`) is
+  deliberately preserved because the consumer's UI collected it
+  on purpose; consumers who don't want it captured should not pass
+  it. Wired through `Settings.redact_pii` (default `False`) +
+  `BUG_FAB_REDACT_PII` env var. 14 unit tests pin every pattern
+  + the pure-function contract + the documented field set + the
+  do-not-mask-reporter rule.
 - Structured-logging hooks on the lifecycle events. A new private
   module `bug_fab/_observability.py` defines a stable event vocabulary
   (`bug_fab_report_received`, `bug_fab_status_changed`,
