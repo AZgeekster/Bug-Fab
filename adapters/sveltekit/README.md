@@ -189,18 +189,7 @@ cd conformance
 ./run-conformance.sh
 ```
 
-**Status: 27/30 passing as of 2026-05-21.** The three failing tests
-are tracked for v0.1.x:
-
-- `test_missing_screenshot_is_rejected` — intake returns 415 instead
-  of 400/422 when a multipart envelope is well-formed but the
-  `screenshot` part is missing. Fix lives in `src/server/intake.ts`.
-- `test_bulk_close_fixed_returns_count` and
-  `test_bulk_archive_closed_returns_count` — the example route tree
-  mounts bulk endpoints under `/admin/reports/bulk-*` (SvelteKit
-  nesting) while the wire protocol treats them as siblings of
-  `/reports` at `/admin/bulk-*`. Move the example's bulk routes up
-  one directory to fix.
+**Status: 30/30 passing as of 2026-05-21.**
 
 See [`conformance/README.md`](./conformance/README.md) for the full
 breakdown — URL layout, boot quirks, why we use `build + node` instead

@@ -63,8 +63,12 @@ endpoints under SvelteKit-idiomatic prefixes:
 | Detail (GET) / Delete (DELETE)      | `/admin/reports/[id]` |
 | Status (PUT)                        | `/admin/reports/[id]/status` |
 | Screenshot (GET)                    | `/admin/reports/[id]/screenshot` |
-| Bulk close-fixed (POST)             | `/admin/reports/bulk-close-fixed` |
-| Bulk archive-closed (POST)          | `/admin/reports/bulk-archive-closed` |
+| Bulk close-fixed (POST)             | `/admin/bulk-close-fixed` |
+| Bulk archive-closed (POST)          | `/admin/bulk-archive-closed` |
+
+Bulk endpoints sit as siblings of `/reports` (not under it) to match
+the wire protocol's `/{viewer-base}/bulk-*` shape — `+server.ts` files
+live at `src/routes/admin/bulk-*/`, not under `src/routes/admin/reports/`.
 
 So the conformance command becomes:
 
@@ -76,32 +80,8 @@ pytest --bug-fab-conformance \
 
 ## Status
 
-**27/30 passing as of 2026-05-21.**
-
-Outstanding gaps:
-
-- `test_intake.py::test_missing_screenshot_is_rejected` — when a valid
-  multipart envelope is present but the `screenshot` part is missing,
-  the adapter returns `415 unsupported_media_type` instead of the
-  protocol-required `400`/`422`. Same classification bug Hono has —
-  intake.ts treats "envelope is wrong" and "envelope is fine but a
-  required part is missing" as the same content-type error. Fix lives
-  in `src/server/intake.ts`. Tracked for v0.1.x.
-- `test_status_workflow.py::test_bulk_close_fixed_returns_count` and
-  `test_bulk_archive_closed_returns_count` — return 404. The example
-  route tree mounts these as children of `/admin/reports/` (the
-  natural SvelteKit nesting), so they resolve to
-  `/admin/reports/bulk-close-fixed`. The wire protocol treats bulk
-  paths as siblings of `/reports`, so the conformance suite calls
-  `/admin/bulk-close-fixed`. Two fixes possible (both for v0.1.x):
-    1. Move the bulk routes up one level to
-       `src/routes/admin/bulk-close-fixed/+server.ts` so they sit
-       beside `src/routes/admin/reports/`. SvelteKit-idiomatic for the
-       wire layout; mild loss of co-location.
-    2. Document a Plain SvelteKit route alias via `hooks.server.ts`.
-
-Both options touch the example's `src/routes/` tree, which is out of
-scope for this conformance harness change.
+**30/30 passing as of 2026-05-21** (after porting Hono's intake CT-classification
+fix and moving the bulk routes out from under `/admin/reports/`).
 
 ## Why a full SvelteKit app
 

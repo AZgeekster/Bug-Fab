@@ -13,23 +13,23 @@
 # conformance suite is meant to catch.
 #
 # URL layout (must match `examples/route-tree/src/routes/`):
-#   POST /api/bug-reports                    intake
-#   GET  /admin/reports                      list
-#   GET  /admin/reports/{id}                 detail
-#   DELETE /admin/reports/{id}               delete
-#   PUT  /admin/reports/{id}/status          status
-#   GET  /admin/reports/{id}/screenshot      screenshot
-#   POST /admin/reports/bulk-close-fixed     bulk close   (note: under /reports/)
-#   POST /admin/reports/bulk-archive-closed  bulk archive (note: under /reports/)
+#   POST /api/bug-reports                  intake
+#   GET  /admin/reports                    list
+#   GET  /admin/reports/{id}               detail
+#   DELETE /admin/reports/{id}             delete
+#   PUT  /admin/reports/{id}/status        status
+#   GET  /admin/reports/{id}/screenshot    screenshot
+#   POST /admin/bulk-close-fixed           bulk close
+#   POST /admin/bulk-archive-closed        bulk archive
 #
 # So:
 #   --base-url=http://sveltekit-adapter:8080/api
 #   --viewer-base-url=http://sveltekit-adapter:8080/admin
 #
-# Bulk endpoints will fail conformance because the example route tree
-# mounts them under `/admin/reports/bulk-*` (the SvelteKit convention)
-# while the wire protocol expects them as siblings of `/reports` —
-# i.e. `/admin/bulk-*`. See README.md § Status for the v0.2 follow-up.
+# Bulk endpoints sit as siblings of `/reports` (not under it) — the wire
+# protocol expects `/{viewer-base}/bulk-*`, NOT `/{viewer-base}/reports/bulk-*`.
+# The SvelteKit file-router maps directory layout to URL paths, so each
+# bulk endpoint lives at `src/routes/admin/bulk-*/+server.ts`.
 #
 # Usage:
 #   ./run-conformance.sh

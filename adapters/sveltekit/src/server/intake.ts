@@ -28,13 +28,27 @@ export function createIntakeHandler(opts: BugFabAdapterOptions): RequestHandler 
   return async (event: RequestEvent): Promise<Response> => {
     const { request } = event;
 
-    // Content-Type check — must be multipart/form-data. SvelteKit's
-    // `request.formData()` will throw on non-multipart bodies, but a
-    // pre-check yields a cleaner error envelope.
-    const contentType = request.headers.get('content-type') ?? '';
-    if (!contentType.toLowerCase().startsWith('multipart/form-data')) {
+    // Content-Type check.
+    //
+    // Per docs/PROTOCOL.md §Error mapping:
+    //   - "multipart Content-Type wrong" (e.g., application/json) → 415
+    //   - "multipart missing required parts" → 400 validation_error
+    //
+    // We accept any form-style envelope here (multipart OR urlencoded);
+    // the missing-parts check below distinguishes the two error modes.
+    // An urlencoded body can never carry a file, so it falls through to
+    // the missing-screenshot 400 path — which is what the protocol
+    // mandates for that case. httpx's `client.post(..., files=None)`
+    // sends `application/x-www-form-urlencoded`, so without this branch
+    // the conformance `test_missing_screenshot_is_rejected` would see a
+    // wrong-shape 415 instead of the required 400.
+    const contentType = (request.headers.get('content-type') ?? '').toLowerCase();
+    const isFormEnvelope =
+      contentType.startsWith('multipart/form-data') ||
+      contentType.startsWith('application/x-www-form-urlencoded');
+    if (!isFormEnvelope) {
       return jsonError(
-        Errors.unsupportedMediaType('Request must be multipart/form-data with metadata + screenshot parts.'),
+        Errors.unsupportedMediaType('Content-Type must be multipart/form-data with metadata + screenshot parts.'),
         415
       );
     }

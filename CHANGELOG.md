@@ -11,6 +11,19 @@ out explicitly in each release entry.
 
 ## [Unreleased]
 
+### Fixed
+
+- **SvelteKit conformance — 27/30 → 30/30.** Two changes in the
+  `bug-fab-sveltekit` adapter + its example route tree:
+  - `src/server/intake.ts` now accepts both `multipart/form-data` and
+    `application/x-www-form-urlencoded` envelopes; the missing-screenshot
+    branch is what produces the 400 (was incorrectly 415 when httpx sent
+    urlencoded for `files=None`). Same classification fix Hono just got.
+  - `examples/route-tree/`'s bulk endpoints moved from
+    `src/routes/admin/reports/bulk-*` up to `src/routes/admin/bulk-*` so
+    they sit as siblings of `/reports`, matching the wire protocol's
+    `/{viewer-base}/bulk-*` shape.
+
 ### Added
 
 - **Flask + Django adapter audit follow-ups** closed (the OPEN items
