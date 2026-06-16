@@ -90,16 +90,13 @@ packages = ["bug_fab"]
 # Fly.io build before this fix.
 [tool.hatch.build.targets.wheel.force-include]
 "static" = "bug_fab/static"
-# Django adapter ships its own DTL templates, static manifest, and migrations
-# next to the Python source. Without these force-include entries the wheel
-# would be missing them and any consumer registering the adapter via
-# `INSTALLED_APPS` would crash with `TemplateDoesNotExist: bug_fab/list.html`
-# at first request. Editable installs work without these because hatch resolves
-# the package path back to the source tree, masking the bug — caught by the
-# 2026-05-01 Django audit.
-"bug_fab/adapters/django/templates" = "bug_fab/adapters/django/templates"
-"bug_fab/adapters/django/static" = "bug_fab/adapters/django/static"
-"bug_fab/adapters/django/migrations" = "bug_fab/adapters/django/migrations"
+# The Django adapter's templates/static/migrations live INSIDE the bug_fab
+# package and are git-tracked, so hatchling's default `packages` selection
+# already ships them — no force-include needed. Self-referential entries for
+# them used to be tolerated but newer hatchling hard-errors with "A second
+# file is being added to the wheel archive at the same path". Only the
+# top-level `static/` mapping above is legitimate (it sits outside the
+# package and must be relocated to bug_fab/static/).
 
 [tool.hatch.build.targets.sdist]
 include = [
