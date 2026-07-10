@@ -78,6 +78,31 @@ out explicitly in each release entry.
 
 ### Fixed
 
+- **The Phoenix adapter no longer loses reports after a delete.**
+  `EctoStorage.save_report/3` derived the next report id from
+  `COUNT(*) + 1`, beneath a comment claiming the enclosing transaction
+  prevented collisions. Counting is not allocation: delete `bug-001` from
+  three reports and the next insert computes `3`, colliding with the live
+  `bug-003` on the unique index. Ids now come from a single-row counter
+  incremented with an atomic `UPDATE`, matching the Python reference and the
+  Rails adapter. **Adds a migration** — run `mix ecto.migrate` before
+  upgrading. Report ids remain `bug-NNN` and are never reused; the exact
+  sequence after a delete is not, and never was, guaranteed to be gapless.
+
+- **The Rails adapter's GitHub sync no longer creates blank issues.**
+  `BugFab::GitHub` read string keys (`detail['title']`) from the
+  symbol-keyed hash `BugReport#to_detail` returns, so every field resolved
+  to nil: issues arrived titled `[Bug-Fab] ` with an empty body and only the
+  generic `bug-fab` label. The POST returned 201, so it failed silently. It
+  also read `module` from `context`, where it does not live. The test suite
+  sets `github_enabled = false`, which is why nothing caught it.
+
+- **The published repository was missing two entire adapters.** An unanchored
+  `lib/` in `.gitignore` excluded `adapters/rails/lib/` and
+  `adapters/phoenix/lib/`, and an unanchored `bug-reports/` excluded the
+  Next.js example's route handlers. A clone got a Rails gem with no `lib/`
+  and a Phoenix package with no modules.
+
 - **SvelteKit conformance — 27/30 → 30/30.** Two changes in the
   `bug-fab-sveltekit` adapter + its example route tree:
   - `src/server/intake.ts` now accepts both `multipart/form-data` and

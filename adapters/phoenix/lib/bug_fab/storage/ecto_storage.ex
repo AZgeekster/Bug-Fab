@@ -87,6 +87,18 @@ defmodule BugFab.Storage.EctoStorage.BugReport do
   end
 end
 
+defmodule BugFab.Storage.EctoStorage.IdCounter do
+  @moduledoc false
+  use Ecto.Schema
+
+  # Single-row allocator for sequential `bug-NNN` ids. See the
+  # `create_bug_fab_id_counter` migration for why this exists.
+  @primary_key {:id, :integer, autogenerate: false}
+  schema "bug_fab_id_counter" do
+    field :last_value, :integer, default: 0
+  end
+end
+
 defmodule BugFab.Storage.EctoStorage do
   @moduledoc """
   Ecto-backed storage backend (Postgres preferred, SQLite via
@@ -113,6 +125,7 @@ defmodule BugFab.Storage.EctoStorage do
   @behaviour BugFab.Storage
 
   alias BugFab.Storage.EctoStorage.BugReport
+  alias BugFab.Storage.EctoStorage.IdCounter
 
   @impl true
   def handle(opts) do
@@ -130,12 +143,36 @@ defmodule BugFab.Storage.EctoStorage do
     %{repo: repo, screenshot_dir: screenshot_dir, id_prefix: id_prefix}
   end
 
+  # Allocate the next report number by incrementing the single counter row.
+  #
+  # A single atomic `UPDATE ... SET last_value = last_value + 1` -- never a
+  # `SELECT ... FOR UPDATE`, which is a syntax error on SQLite and this
+  # adapter ships `ecto_sqlite3`. SQLite serializes writers so the increment
+  # cannot be lost (a losing writer gets SQLITE_BUSY and retries); Postgres
+  # holds a row lock for the statement's duration. The read-back is
+  # read-your-own-write within the enclosing transaction.
+  #
+  # Must not be `COUNT(*) + 1`: counting is not allocation. Delete `bug-001`
+  # from three reports and the next insert computes 3, colliding with the
+  # live `bug-003` on the unique index.
+  defp next_report_number(repo) do
+    import Ecto.Query
+
+    {1, _} =
+      from(c in IdCounter, where: c.id == 1, update: [inc: [last_value: 1]])
+      |> repo.update_all([])
+
+    repo.one!(from c in IdCounter, where: c.id == 1, select: c.last_value)
+  end
+
   @impl true
   def save_report(%{repo: repo} = h, metadata, screenshot) do
-    # Counter-based id assignment under a transaction so concurrent intake
-    # never produces colliding bug-NNN values.
+    # The id is allocated inside the same transaction as the insert, so a
+    # rolled-back insert cannot leave a live report holding a skipped number.
+    # (Numbers may still be skipped on rollback -- the protocol guarantees ids
+    # are unique and never reused, not that they are gapless.)
     repo.transaction(fn ->
-      n = repo.aggregate(BugReport, :count, :id) + 1
+      n = next_report_number(repo)
       report_id = "bug-#{h.id_prefix}#{:io_lib.format("~3..0B", [n]) |> IO.iodata_to_binary()}"
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 

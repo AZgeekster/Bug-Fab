@@ -27,7 +27,7 @@ module BugFab
 
       uri = URI.join(config.github_api_base + "/", "repos/#{config.github_repo}/issues")
       body = {
-        title: "[Bug-Fab] #{detail['title']}",
+        title: "[Bug-Fab] #{detail[:title]}",
         body: format_body(detail),
         labels: build_labels(detail)
       }
@@ -64,27 +64,44 @@ module BugFab
     end
 
     # Format the issue body. Pure presentation; not authoritative.
+    #
+    # Key style is load-bearing here. `BugReport#to_detail` returns a hash with
+    # SYMBOL keys at the top level, whose `:context` value is the raw metadata
+    # sub-hash and therefore has STRING keys. `show.html.erb` already reads it
+    # that way (`detail.dig(:context, "url")`).
+    #
+    # This method used to read string keys throughout (`detail['severity']`,
+    # `detail.dig('context', 'module')`), so every interpolation resolved to
+    # nil: issues were titled "[Bug-Fab] " with an empty body and only the
+    # generic `bug-fab` label. The POST succeeded, so it failed silently. Note
+    # `:module` is top-level on the detail hash, not nested under `:context`.
     def format_body(detail)
+      context = detail[:context] || {}
+      reporter = detail[:reporter] || {}
+      # `to_detail` coerces reporter fields with `.to_s`, so absent ones are
+      # "" rather than nil -- `||` would happily pick the empty string.
+      who = reporter[:email].presence || reporter[:name].presence || "anonymous"
+
       <<~MD
-        **Severity:** #{detail['severity']}
-        **Module:** #{detail.dig('context', 'module')}
-        **Reporter:** #{detail.dig('reporter', 'email') || detail.dig('reporter', 'name') || 'anonymous'}
-        **App version:** #{detail.dig('context', 'app_version')}
-        **Environment:** #{detail['environment']}
-        **URL:** #{detail.dig('context', 'url')}
+        **Severity:** #{detail[:severity]}
+        **Module:** #{detail[:module]}
+        **Reporter:** #{who}
+        **App version:** #{context['app_version']}
+        **Environment:** #{detail[:environment]}
+        **URL:** #{context['url']}
 
         ---
 
-        #{detail['description']}
+        #{detail[:description]}
 
-        **Expected:** #{detail['expected_behavior']}
+        **Expected:** #{detail[:expected_behavior]}
       MD
     end
 
     def build_labels(detail)
       labels = ["bug-fab"]
-      labels << "severity:#{detail['severity']}" if detail["severity"]
-      labels << detail["report_type"] if detail["report_type"]
+      labels << "severity:#{detail[:severity]}" if detail[:severity].present?
+      labels << detail[:report_type] if detail[:report_type].present?
       labels.compact
     end
 
