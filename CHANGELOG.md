@@ -53,6 +53,29 @@ out explicitly in each release entry.
   `publish` now depends on it. Nothing previously ran the protocol contract
   against the implementation that defines it.
 
+### Security
+
+- **`BUG_FAB_REDACT_PII` now actually redacts on the Flask and Django
+  adapters.** The redactor was only ever called from the FastAPI intake
+  router. An operator who enabled the flag on Flask or Django got a control
+  that reported success and did nothing, and the unmasked tokens and email
+  addresses were written to storage. If you ran either adapter with
+  `BUG_FAB_REDACT_PII=true`, assume previously-stored reports are unredacted.
+
+- **Outbound webhook URLs are no longer written to logs.** The Slack, Discord,
+  Teams, and generic webhook integrations logged the full target URL at `WARN`
+  on every delivery failure. For all four, the URL *is* the credential —
+  anyone holding `hooks.slack.com/services/T…/B…/<secret>` can post as the
+  integration. Log lines now carry only `scheme://host`. Rotate any webhook
+  URL that may have been captured by a log sink.
+
+- **Path-traversal guard added to the Express and SvelteKit viewer routes.**
+  Neither adapter validated the report-id path parameter before passing it to
+  a storage lookup or a filesystem join. The guard is the same
+  `^bug-[A-Za-z]?\d{1,12}$` shape check the reference and Hono adapters use,
+  and it now runs on all four `:id` routes in each adapter, not only the
+  screenshot route.
+
 ### Fixed
 
 - **SvelteKit conformance — 27/30 → 30/30.** Two changes in the

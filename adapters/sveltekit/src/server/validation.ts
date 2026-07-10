@@ -30,6 +30,19 @@ export function isValidPngMagic(buf: Uint8Array): boolean {
   return true;
 }
 
+// Path-traversal guard. Report IDs are `bug-NNN`, optionally carrying a
+// single-letter environment prefix (`bug-P001`). `event.params.id` reaches a
+// filesystem join inside FileStorage, so an id outside this shape must be
+// rejected with 404 before storage sees it.
+//
+// Identical to the reference implementation's `_REPORT_ID_RE` and the Hono
+// adapter's `REPORT_ID_RE`. Do not re-derive it.
+const REPORT_ID_RE = /^bug-[A-Za-z]?\d{1,12}$/;
+
+export function isValidReportId(id: unknown): id is string {
+  return typeof id === 'string' && REPORT_ID_RE.test(id);
+}
+
 export function isValidSeverity(v: unknown): v is Severity {
   return typeof v === 'string' && (VALID_SEVERITIES as readonly string[]).includes(v);
 }

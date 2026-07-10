@@ -45,6 +45,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlsplit
 
 #: Mask used in place of redacted JWT payloads. Kept short so error
 #: messages remain readable around the redaction.
@@ -168,4 +169,33 @@ def redact_report(metadata: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
-__all__ = ["redact_report", "redact_text"]
+def safe_url(url: str) -> str:
+    """Reduce a URL to ``scheme://host`` so it is safe to write to a log.
+
+    Outbound webhook URLs are routinely *themselves* the credential —
+    ``hooks.slack.com/services/T…/B…/<secret>``,
+    ``discord.com/api/webhooks/<id>/<token>``. Anyone holding the full URL
+    can post as the integration. Logging one at WARN on every delivery
+    failure copies it into whatever log sink the consumer runs, where it
+    outlives the incident and is rarely treated as secret material.
+
+    The host is retained because it is the only part an operator needs in
+    order to tell *which* integration failed. Userinfo, path, query, and
+    fragment are dropped — the secret can hide in any of them.
+
+    Never raises: this runs inside exception handlers, and a redactor that
+    throws while logging an error would replace the real failure with its own.
+    """
+    try:
+        parsed = urlsplit(url)
+    except ValueError:  # pragma: no cover - urlsplit is near-total
+        return "<unparseable-url>"
+    if not parsed.scheme or not parsed.hostname:
+        return "<unparseable-url>"
+    host = parsed.hostname
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    return f"{parsed.scheme}://{host}"
+
+
+__all__ = ["redact_report", "redact_text", "safe_url"]

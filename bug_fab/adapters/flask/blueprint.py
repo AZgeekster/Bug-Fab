@@ -38,6 +38,7 @@ from flask import Blueprint, Response, abort, jsonify, render_template, request,
 from pydantic import ValidationError
 
 from bug_fab._rate_limit import RateLimiter
+from bug_fab._redact import redact_report
 from bug_fab.adapters.flask._runtime import (
     resolve_static_dir,
     resolve_template_dir,
@@ -357,6 +358,12 @@ def make_blueprint(
         metadata_dict["environment"] = (
             validated.metadata.context.environment or metadata_obj_raw.get("environment") or ""
         )
+
+        # Opt-in PII redaction runs before persistence so masked values are
+        # what land on disk — there is no second copy of the raw text to
+        # leak later. See bug_fab._redact for the documented patterns.
+        if settings.redact_pii:
+            metadata_dict = redact_report(metadata_dict)
 
         try:
             report_id = run_sync(storage.save_report(metadata_dict, screenshot_bytes))

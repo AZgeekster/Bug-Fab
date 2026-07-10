@@ -28,7 +28,7 @@ import express, { type Request, type Response, type Router } from 'express'
 
 import { Errors } from './errors.js'
 import {
-  isValidStatus, isValidSeverity, validateStatusUpdate,
+  isValidReportId, isValidStatus, isValidSeverity, validateStatusUpdate,
   VALID_STATUSES, VALID_SEVERITIES,
 } from './validation.js'
 import type {
@@ -119,7 +119,7 @@ export function registerViewerRoutes(
   // JSON consumers (fetch / curl) get the protocol shape.
   router.get('/reports/:id', async (req: Request, res: Response): Promise<void> => {
     const id = req.params.id
-    if (!id) {
+    if (!isValidReportId(id)) {
       res.status(404).json(Errors.notFound('report'))
       return
     }
@@ -149,7 +149,7 @@ export function registerViewerRoutes(
   // ----- GET /reports/:id/screenshot -----
   router.get('/reports/:id/screenshot', async (req: Request, res: Response): Promise<void> => {
     const id = req.params.id
-    if (!id) {
+    if (!isValidReportId(id)) {
       res.status(404).json(Errors.notFound('screenshot'))
       return
     }
@@ -182,7 +182,7 @@ export function registerViewerRoutes(
       express.json({ limit: '64kb' }),
       async (req: Request, res: Response): Promise<void> => {
         const id = req.params.id
-        if (!id) {
+        if (!isValidReportId(id)) {
           res.status(404).json(Errors.notFound('report'))
           return
         }
@@ -248,7 +248,7 @@ export function registerViewerRoutes(
   if (canDelete) {
     router.delete('/reports/:id', async (req: Request, res: Response): Promise<void> => {
       const id = req.params.id
-      if (!id) {
+      if (!isValidReportId(id)) {
         res.status(404).json(Errors.notFound('report'))
         return
       }

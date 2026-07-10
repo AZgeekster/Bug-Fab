@@ -62,6 +62,8 @@ from typing import Any
 
 import httpx
 
+from bug_fab._redact import safe_url
+
 logger = logging.getLogger(__name__)
 
 #: Per-request timeout default. Teams' incoming-webhook endpoint
@@ -295,7 +297,7 @@ class TeamsSync:
                 "bug_fab_teams_send_error",
                 extra={
                     "report_id": report.get("id"),
-                    "url": self._url,
+                    "url": safe_url(self._url),
                     "error": str(exc),
                 },
             )
@@ -305,7 +307,7 @@ class TeamsSync:
                 "bug_fab_teams_send_unexpected_error",
                 extra={
                     "report_id": report.get("id"),
-                    "url": self._url,
+                    "url": safe_url(self._url),
                     "error": str(exc),
                 },
             )
@@ -318,7 +320,7 @@ class TeamsSync:
                 "bug_fab_teams_send_failed",
                 extra={
                     "report_id": report.get("id"),
-                    "url": self._url,
+                    "url": safe_url(self._url),
                     "status_code": resp.status_code,
                     "body": body,
                 },
