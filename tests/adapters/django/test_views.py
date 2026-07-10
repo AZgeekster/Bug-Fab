@@ -95,13 +95,15 @@ def test_intake_rejects_invalid_severity(client, png_bytes):
 
 
 def test_intake_rejects_unknown_protocol_version(client, png_bytes):
+    """PROTOCOL.md § Versioning: an unknown version is 400, not a schema error."""
     payload = {
         "protocol_version": "9.9",
         "title": "x",
         "client_ts": "2026-04-27T00:00:00Z",
     }
     response = _post_intake(client, json.dumps(payload), png_bytes)
-    assert response.status_code == 422
+    assert response.status_code == 400
+    assert response.json()["error"] == "unsupported_protocol_version"
 
 
 def test_intake_rejects_overlong_reporter(client, png_bytes):

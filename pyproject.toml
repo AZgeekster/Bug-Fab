@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bug-fab"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "Framework-agnostic bug-reporting tool that overlays on web frontends to capture screenshots, annotations, and contextual data."
 readme = "README.md"
 requires-python = ">=3.10"

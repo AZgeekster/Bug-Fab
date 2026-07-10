@@ -11,6 +11,48 @@ out explicitly in each release entry.
 
 ## [Unreleased]
 
+### Changed (Breaking)
+
+- **The FastAPI adapter now emits the protocol's `{"error", "detail"}` error
+  envelope on every error response.** It previously raised bare
+  `HTTPException`, which serializes to `{"detail": ...}` with no
+  machine-readable `error` code — non-conformant with `docs/PROTOCOL.md`
+  § Error response shape, and inconsistent with the Flask and Django
+  adapters, which have always been correct. Clients that branch on the
+  response body must now read `body["error"]`. Status codes are unchanged
+  except where noted below. A `413` now carries `limit_bytes` and a `429`
+  now carries `retry_after_seconds`, as the protocol requires.
+
+  One documented deviation remains: a `500` raised by the `get_storage`
+  dependency (the consumer never called `configure()`) still emits
+  `{"detail": ...}`. FastAPI discards a dependency's return value, so a
+  dependency can only short-circuit by raising, and a raised
+  `HTTPException` cannot carry the envelope.
+
+- **An unknown `protocol_version` on intake now returns `400
+  unsupported_protocol_version` instead of `422 schema_error`.**
+  `docs/PROTOCOL.md` § Versioning has always required this; the reference
+  adapter typed the field as `Literal["0.1"]`, so Pydantic rejected an
+  unknown version as a generic schema error before any version check could
+  run. Clients could not distinguish "I do not speak your version" (fix by
+  upgrading) from "your payload is malformed" (do not retry). Affects the
+  FastAPI, Flask, and Django adapters. A *missing* `protocol_version` is
+  unchanged and still surfaces as `422 schema_error`.
+
+### Added
+
+- **The conformance suite now checks the error envelope and the
+  `protocol_version` gate.** `pytest --bug-fab-conformance` asserts that
+  every error body carries a string `error` key, and that an unknown
+  `protocol_version` yields `400 unsupported_protocol_version`. Adapter
+  authors should expect two new tests. The suite deliberately does not
+  assert behavior for a *missing* version — the protocol pins the error
+  code only for an unrecognized value.
+
+- **CI runs the conformance suite against the reference adapter**, and
+  `publish` now depends on it. Nothing previously ran the protocol contract
+  against the implementation that defines it.
+
 ### Fixed
 
 - **SvelteKit conformance — 27/30 → 30/30.** Two changes in the

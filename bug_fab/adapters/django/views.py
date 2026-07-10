@@ -51,8 +51,10 @@ from django.views.decorators.http import require_http_methods
 from pydantic import ValidationError as PydanticValidationError
 
 from bug_fab.intake import (
+    IntakeError,
     PayloadTooLarge,
     UnsupportedMediaType,
+    UnsupportedProtocolVersion,
     validate_payload,
 )
 from bug_fab.intake import (
@@ -218,6 +220,8 @@ def intake_view(request: HttpRequest) -> HttpResponse:
         return _err("payload_too_large", str(exc), 413)
     except UnsupportedMediaType as exc:
         return _err("unsupported_media_type", str(exc), 415)
+    except UnsupportedProtocolVersion as exc:
+        return _err("unsupported_protocol_version", str(exc), 400)
     except IntakeValidationError as exc:
         # JSON-decode failures carry an empty detail list; surface as 400
         # with the message. Schema failures carry the Pydantic error list
@@ -225,6 +229,11 @@ def intake_view(request: HttpRequest) -> HttpResponse:
         if exc.detail:
             return _err("schema_error", exc.detail, 422)
         return _err("validation_error", str(exc), 400)
+    except IntakeError as exc:  # pragma: no cover - defensive catch-all
+        # Mirrors the Flask adapter. Without this, a future IntakeError
+        # subclass added to bug_fab.intake would escape as a 500 here while
+        # Flask kept returning the correct protocol envelope.
+        return _err(exc.code, exc.message, exc.status_code)
 
     # Build the persistence payload. Server-captured User-Agent wins over
     # the client value per ``docs/PROTOCOL.md`` § User-Agent trust boundary.

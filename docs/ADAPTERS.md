@@ -32,7 +32,34 @@ Before diving into stack-specific code, here is the universal checklist. Every e
 | Bulk ops | `POST /bulk-close-fixed` and `POST /bulk-archive-closed` must return correct counts. |
 | Auth | Adapter exposes routes; consumer protects them at the mount point. v0.1 has no auth abstraction. |
 | Viewer mount prefix | The viewer router exposes a root HTML list at the empty path (`GET ""` resolved against its mount prefix). Adapter authors MUST mount the viewer under a non-empty URL prefix so the root list has a reachable address. See [Viewer mount-prefix note](#viewer-mount-prefix-note) below. |
+| Error envelope | Every `4xx` body is `{"error": <code>, "detail": ...}`. Do not fall back to the framework's native error body — FastAPI's `{"detail"}`, Rails' `{"status", "error"}`, Spring's `{"timestamp", "path", ...}` all look right by status code and break clients that branch on `error`. |
 | Conformance | Adapter passes the [conformance suite](./CONFORMANCE.md). |
+
+---
+
+## Notice for adapter authors — two new conformance tests (`0.1.0a2`)
+
+`pytest --bug-fab-conformance` gained two assertions. Both encode clauses
+that `PROTOCOL.md` has always contained but that the suite never checked,
+so an adapter can be newly-red without having changed:
+
+1. **`test_error_responses_use_the_protocol_envelope`** — an error body
+   must carry a string `error` key alongside `detail`.
+2. **`test_unknown_protocol_version_returns_400_unsupported_protocol_version`**
+   — an unrecognized `protocol_version` must return `400` with
+   `error: "unsupported_protocol_version"`.
+
+The second test deliberately sends an *unknown* version rather than a
+*missing* one. The protocol pins the error code only for an unrecognized
+value, and first-party adapters legitimately differ on the missing case
+(Phoenix returns `unsupported_protocol_version`; Vapor and the Python
+reference return a schema/validation error). Do not read the test as
+blessing either behavior for a missing field.
+
+A common way to fail the second test: typing `protocol_version` as a
+closed enum, so the schema validator rejects an unknown version before any
+version check runs. Check the raw value *before* schema validation. The
+Python reference does this in `bug_fab.intake.check_protocol_version`.
 
 ---
 

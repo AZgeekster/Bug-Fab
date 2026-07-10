@@ -28,6 +28,56 @@ called out at the top of the section.
 
 ---
 
+## From `0.1.0a1` to `0.1.0a2`
+
+**Breaking?** Yes — two wire-visible changes. Both bring the FastAPI
+reference adapter into line with `docs/PROTOCOL.md`, which the Flask and
+Django adapters already followed. Nothing changes for consumers who only
+read status codes.
+
+**Protocol version:** unchanged (`0.1`).
+
+**What you need to do:**
+
+1. **If your client branches on the error body, read `error`, not `detail`.**
+   Every `4xx` from the FastAPI adapter now carries the protocol envelope:
+
+   ```jsonc
+   // before — FastAPI's native HTTPException body
+   { "detail": "Screenshot must be a PNG image (image/png)" }
+
+   // after — the protocol envelope
+   { "error": "unsupported_media_type", "detail": "Screenshot must be a PNG image (image/png)" }
+   ```
+
+   A `413` now also carries `limit_bytes`; a `429` now also carries
+   `retry_after_seconds`.
+
+2. **If you submit an unknown `protocol_version`, expect `400`, not `422`.**
+   The code is `unsupported_protocol_version`. A *missing*
+   `protocol_version` is unchanged — still `422 schema_error`.
+
+**Optional follow-ups:**
+
+- Adapter authors: run `pytest --bug-fab-conformance` against your adapter.
+  Two tests are new — the envelope check and the `protocol_version` gate.
+  Most first-party adapters already pass both.
+
+**Pitfalls:**
+
+- A `500` raised because `configure()` was never called still returns
+  `{"detail": ...}` with no `error` key. This is a documented deviation:
+  that path is a FastAPI dependency, and FastAPI discards a dependency's
+  return value, so it can only short-circuit by raising. Do not write a
+  client that assumes `error` is present on a `5xx`.
+- The `require_can_edit_status` / `require_can_delete` / `require_can_bulk`
+  dependencies are still exported and still work, but the bundled viewer
+  routes no longer attach them — they check permissions in the handler body
+  so the `403` can carry the envelope. If you mounted them yourself, nothing
+  changes.
+
+---
+
 ## From `0.1.0a1` to `0.1.0`
 
 **Breaking?** No. `0.1.0a1` was an alpha release used to reserve the

@@ -31,6 +31,11 @@ from .schemas import BugReportCreate
 #: per ``docs/PROTOCOL.md`` § Intake.
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
+#: The only wire-protocol version this release speaks. ``docs/PROTOCOL.md``
+#: § Versioning requires adapters to reject any *other* value with
+#: ``400 unsupported_protocol_version``.
+PROTOCOL_VERSION = "0.1"
+
 
 class IntakeError(Exception):
     """Base class for protocol intake validation failures.
@@ -69,6 +74,20 @@ class UnsupportedMediaType(IntakeError):
     message = "Screenshot must be a PNG image"
 
 
+class UnsupportedProtocolVersion(IntakeError):
+    """Metadata declares a ``protocol_version`` this adapter does not speak. Maps to HTTP 400.
+
+    Deliberately a direct :class:`IntakeError` subclass rather than a
+    :class:`ValidationError` one: adapters branch on ``ValidationError`` to
+    choose between ``400 validation_error`` and ``422 schema_error``, and an
+    unknown version is neither.
+    """
+
+    status_code = 400
+    code = "unsupported_protocol_version"
+    message = "Unsupported protocol_version"
+
+
 class ValidationError(IntakeError):
     """Metadata is unparseable JSON or fails Pydantic schema validation. Maps to HTTP 422.
 
@@ -102,6 +121,27 @@ class ValidatedPayload:
     user_agent: str
 
 
+def check_protocol_version(metadata_obj: Any) -> None:
+    """Reject a metadata object that declares an unknown ``protocol_version``.
+
+    Runs *before* schema validation. ``BugReportCreate.protocol_version`` is
+    typed ``Literal["0.1"]``, so a Pydantic pass over an unknown version
+    would surface it as a ``422 schema_error`` and the protocol's dedicated
+    ``400 unsupported_protocol_version`` code could never be emitted.
+
+    A *missing* version is deliberately left to schema validation. The
+    protocol pins the code for an unknown value only, and first-party
+    adapters disagree on the missing case.
+    """
+    if not isinstance(metadata_obj, dict):
+        return
+    declared = metadata_obj.get("protocol_version")
+    if declared is not None and declared != PROTOCOL_VERSION:
+        raise UnsupportedProtocolVersion(
+            f"Unsupported protocol_version {declared!r}; this adapter speaks {PROTOCOL_VERSION!r}"
+        )
+
+
 def _parse_metadata(metadata_json: str) -> BugReportCreate:
     """Parse the JSON metadata string and validate it against the schema.
 
@@ -109,7 +149,8 @@ def _parse_metadata(metadata_json: str) -> BugReportCreate:
     schema violations. JSON-decode failures carry an empty ``detail`` so
     adapters can branch on a non-empty list when they want to surface
     field-level diagnostics; Pydantic failures carry the full
-    ``e.errors()`` list.
+    ``e.errors()`` list. An unknown ``protocol_version`` raises
+    :class:`UnsupportedProtocolVersion` before either.
     """
     try:
         metadata_obj: Any = json.loads(metadata_json)
@@ -118,6 +159,7 @@ def _parse_metadata(metadata_json: str) -> BugReportCreate:
             message=f"metadata is not valid JSON: {exc.msg}",
             detail=[],
         ) from exc
+    check_protocol_version(metadata_obj)
     try:
         return BugReportCreate.model_validate(metadata_obj)
     except PydanticValidationError as exc:
@@ -171,6 +213,8 @@ def validate_payload(
     UnsupportedMediaType
         Content-type is not ``image/png`` or magic bytes do not match
         (HTTP 415).
+    UnsupportedProtocolVersion
+        Metadata declares a ``protocol_version`` other than ``"0.1"`` (HTTP 400).
     ValidationError
         Metadata JSON is unparseable or fails the schema (HTTP 422).
     """
