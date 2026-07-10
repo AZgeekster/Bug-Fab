@@ -18,7 +18,6 @@ import contextlib
 import json
 import logging
 import os
-import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +26,7 @@ from typing import Any, ClassVar
 from sqlalchemy import Engine, func, select, text, update
 from sqlalchemy.orm import Session
 
+from bug_fab._report_id import REPORT_ID_RE
 from bug_fab.schemas import (
     BugReportContext,
     BugReportDetail,
@@ -49,7 +49,7 @@ from ._models import (
 
 logger = logging.getLogger(__name__)
 
-_REPORT_ID_RE = re.compile(r"^bug-[A-Za-z]?\d{3,}$")
+_REPORT_ID_RE = REPORT_ID_RE
 _ARCHIVE_SUBDIR = "archive"
 
 

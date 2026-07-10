@@ -230,6 +230,18 @@ async def submit_bug_report(
     # invalid." An unknown protocol_version is checked before schema
     # validation, because BugReportCreate types the field as Literal["0.1"]
     # and would otherwise swallow it into a 422.
+    # Cap the metadata string before json.loads. Only the screenshot was
+    # bounded before, so a tiny PNG plus a several-hundred-MB metadata string
+    # was parsed into memory and persisted. Measured in UTF-8 bytes.
+    max_metadata_bytes = settings.max_metadata_kb * 1024
+    metadata_bytes = len(metadata.encode("utf-8"))
+    if metadata_bytes > max_metadata_bytes:
+        return protocol_error(
+            status.HTTP_413_CONTENT_TOO_LARGE,
+            "payload_too_large",
+            f"metadata exceeds maximum size of {settings.max_metadata_kb} KiB",
+            limit_bytes=max_metadata_bytes,
+        )
     try:
         metadata_obj: dict[str, Any] = json.loads(metadata)
     except json.JSONDecodeError as exc:

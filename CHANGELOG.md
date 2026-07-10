@@ -85,6 +85,14 @@ out explicitly in each release entry.
 
 ### Security
 
+- **Intake now caps the `metadata` field size** (`BUG_FAB_MAX_METADATA_KB`,
+  default 256 KiB). Only the screenshot was bounded before, so a tiny valid
+  PNG paired with a several-hundred-MB metadata string was parsed into memory
+  and persisted. Enforced on the FastAPI, Flask, and Django adapters and in
+  the shared `bug_fab.intake.validate_payload` helper, so any adapter built on
+  it inherits the bound. Over-size metadata returns `413 payload_too_large`
+  with `limit_bytes`.
+
 - **`BUG_FAB_REDACT_PII` now actually redacts on the Flask and Django
   adapters.** The redactor was only ever called from the FastAPI intake
   router. An operator who enabled the flag on Flask or Django got a control
@@ -107,6 +115,19 @@ out explicitly in each release entry.
   screenshot route.
 
 ### Fixed
+
+- **The webhook dead-letter queue no longer grows geometrically on replay.**
+  `replay_dead_letters` re-drove each envelope through `send()`, which wrote a
+  *new* dead letter on terminal failure while the original was unlinked only on
+  success. Replaying against a still-down receiver turned N dead letters into
+  2N, then 4N. Replay now suppresses re-persistence, so the count stays flat.
+
+- **The report-id shape guard is now one definition instead of four.** The
+  route/viewer guards used `\d{1,12}` while the file and SQL storage backends
+  used `\d{3,}`, so `bug-1` passed the route guard then 404'd inside storage,
+  and a 13-digit id did the reverse. The audit calls this regex "the primary
+  path-traversal defense"; it is now a single `^bug-[A-Za-z]?\d{3,12}$` shared
+  by every layer.
 
 - **The Phoenix adapter no longer loses reports after a delete.**
   `EctoStorage.save_report/3` derived the next report id from

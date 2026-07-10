@@ -30,7 +30,6 @@ import contextlib
 import json
 import logging
 import os
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -40,6 +39,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone as dj_timezone
 
+from bug_fab._report_id import REPORT_ID_RE as _CANONICAL_REPORT_ID_RE
 from bug_fab.schemas import (
     BugReportContext,
     BugReportDetail,
@@ -61,7 +61,7 @@ logger = logging.getLogger(__name__)
 #: Path-traversal guard mirroring the FastAPI viewer's regex. Anything
 #: outside this character class is rejected at the route layer with 404
 #: before it reaches the storage class.
-REPORT_ID_RE = re.compile(r"^bug-[A-Za-z]?\d{1,12}$")
+REPORT_ID_RE = _CANONICAL_REPORT_ID_RE
 
 
 class StorageError(ValueError):

@@ -96,6 +96,18 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_SCREENSHOT_BYTES = 10 * 1024 * 1024
 
 
+def _max_metadata_bytes() -> int:
+    """Resolve the metadata byte cap from ``BUG_FAB_MAX_METADATA_KB`` (or 256 KiB).
+
+    Delegates to ``Settings.from_env`` so the default and parse rules stay
+    identical to the FastAPI and Flask adapters — a cap that differs per
+    adapter is the class of bug this phase exists to close.
+    """
+    from bug_fab.config import Settings
+
+    return Settings.from_env().max_metadata_kb * 1024
+
+
 def _max_upload_bytes() -> int:
     """Resolve the screenshot byte cap from env (or the default)."""
     raw = os.environ.get("BUG_FAB_MAX_UPLOAD_BYTES")
@@ -230,6 +242,7 @@ def intake_view(request: HttpRequest) -> HttpResponse:
             screenshot_content_type=getattr(screenshot_file, "content_type", None) or "image/png",
             request_user_agent=request.META.get("HTTP_USER_AGENT", ""),
             max_screenshot_bytes=_max_upload_bytes(),
+            max_metadata_bytes=_max_metadata_bytes(),
         )
     except PayloadTooLarge as exc:
         return _err("payload_too_large", str(exc), 413)

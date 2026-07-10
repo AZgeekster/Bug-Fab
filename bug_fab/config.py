@@ -74,6 +74,14 @@ class Settings:
     storage_dir: Path = field(default_factory=lambda: Path("./bug_reports"))
     id_prefix: str = ""
     max_upload_mb: int = 10
+    #: Hard cap on the ``metadata`` JSON string, in kibibytes. Only the
+    #: screenshot was bounded before; ``metadata`` went straight to
+    #: ``json.loads`` with no limit, so a tiny PNG plus a several-hundred-MB
+    #: metadata string was parsed into memory and persisted. 256 KiB is far
+    #: above any legitimate report (the largest fields are the console-error
+    #: and network-log buffers) while closing the amplification. Raise it if
+    #: a consumer genuinely captures larger buffers.
+    max_metadata_kb: int = 256
     #: Opt-in PII redaction over the auto-captured buffers + free-text
     #: fields. Off by default to preserve back-compat; flip on for any
     #: public-facing deployment. See ``bug_fab._redact`` for the
@@ -142,6 +150,7 @@ class Settings:
             "storage_dir": Path(_env_str("BUG_FAB_STORAGE_DIR", "./bug_reports")),
             "id_prefix": _env_str("BUG_FAB_ID_PREFIX", ""),
             "max_upload_mb": _env_int("BUG_FAB_MAX_UPLOAD_MB", 10),
+            "max_metadata_kb": _env_int("BUG_FAB_MAX_METADATA_KB", 256),
             "redact_pii": _env_bool("BUG_FAB_REDACT_PII", False),
             "rate_limit_enabled": _env_bool("BUG_FAB_RATE_LIMIT_ENABLED", False),
             "rate_limit_max": _env_int("BUG_FAB_RATE_LIMIT_MAX", 50),

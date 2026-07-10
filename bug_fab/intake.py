@@ -176,6 +176,7 @@ def validate_payload(
     screenshot_content_type: str | None,
     request_user_agent: str | None,
     max_screenshot_bytes: int = 5 * 1024 * 1024,
+    max_metadata_bytes: int = 256 * 1024,
 ) -> ValidatedPayload:
     """Validate a multipart bug-report submission per the v0.1 protocol.
 
@@ -218,8 +219,17 @@ def validate_payload(
     ValidationError
         Metadata JSON is unparseable or fails the schema (HTTP 422).
     """
-    # 1. Size check first — it's the cheapest test and rejects DoS-shaped
-    #    uploads before we look at any bytes.
+    # 1. Size checks first — the cheapest tests, and they reject DoS-shaped
+    #    uploads before we look at any bytes or parse any JSON. The metadata
+    #    cap matters as much as the screenshot cap: `metadata` feeds
+    #    `json.loads` with `BugReportContext(extra="allow")` and unbounded
+    #    `list[dict]` buffers, so an unbounded string is parsed into memory
+    #    and persisted. Measured in UTF-8 bytes, not characters.
+    metadata_bytes = len(metadata_json.encode("utf-8"))
+    if metadata_bytes > max_metadata_bytes:
+        raise PayloadTooLarge(
+            f"metadata exceeds maximum size of {max_metadata_bytes} bytes (got {metadata_bytes})"
+        )
     if len(screenshot_bytes) > max_screenshot_bytes:
         raise PayloadTooLarge(f"Screenshot exceeds maximum size of {max_screenshot_bytes} bytes")
 

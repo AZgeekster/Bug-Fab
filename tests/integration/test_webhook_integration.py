@@ -640,6 +640,13 @@ def test_replay_dead_letters_keeps_failed_envelopes(tmp_path) -> None:  # type: 
     assert stats == {"attempted": 1, "succeeded": 0, "failed": 1, "malformed": 0}
     # Envelope stays — operator must decide whether to retry later or purge.
     assert (dlq / fname).exists()
+    # C6: a failed replay must NOT write a *second* dead letter. Asserting the
+    # original survives is not enough — the bug left it in place and added a
+    # new file. Two more replays against the still-down receiver must keep the
+    # count at exactly one, or the DLQ grows N → 2N → 4N.
+    for _ in range(2):
+        _run(replay_dead_letters(sync))
+    assert sorted(p.name for p in dlq.glob("*.json")) == [fname]
 
 
 def test_replay_dead_letters_returns_zero_stats_when_dir_missing() -> None:

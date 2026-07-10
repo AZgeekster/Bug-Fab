@@ -23,12 +23,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from bug_fab._report_id import REPORT_ID_RE
 from bug_fab.schemas import (
     BugReportContext,
     BugReportDetail,
@@ -39,7 +39,7 @@ from bug_fab.schemas import (
 )
 from bug_fab.storage.base import Storage
 
-_REPORT_ID_RE = re.compile(r"^bug-[A-Za-z]?\d{3,}$")
+_REPORT_ID_RE = REPORT_ID_RE
 _INDEX_FILENAME = "index.json"
 _ARCHIVE_SUBDIR = "archive"
 

@@ -232,6 +232,39 @@ def test_oversize_screenshot_returns_413(app_factory, settings_factory, make_png
     assert response.status_code == 413
 
 
+def test_oversize_metadata_returns_413(app_factory, settings_factory, tiny_png: bytes) -> None:
+    """A tiny screenshot with a giant metadata string must be rejected before json.loads.
+
+    Only the screenshot was bounded before, so a valid PNG plus a
+    several-hundred-MB metadata string was parsed into memory and persisted.
+    """
+    settings = settings_factory(max_metadata_kb=8)
+    md = _baseline_metadata()
+    md["description"] = "A" * (16 * 1024)  # 16 KiB — over the 8 KiB cap
+    client = app_factory(settings=settings)
+    response = client.post(
+        "/bug-reports",
+        data={"metadata": json.dumps(md)},
+        files={"screenshot": ("shot.png", tiny_png, "image/png")},
+    )
+    assert response.status_code == 413
+    body = response.json()
+    assert body["error"] == "payload_too_large"
+    assert body["limit_bytes"] == 8 * 1024
+
+
+def test_metadata_at_the_cap_is_accepted(app_factory, settings_factory, tiny_png: bytes) -> None:
+    """The bound is a ceiling, not an off-by-one reject of legitimate reports."""
+    settings = settings_factory(max_metadata_kb=256)
+    client = app_factory(settings=settings)
+    response = client.post(
+        "/bug-reports",
+        data={"metadata": json.dumps(_baseline_metadata())},
+        files={"screenshot": ("shot.png", tiny_png, "image/png")},
+    )
+    assert response.status_code == 201
+
+
 # -----------------------------------------------------------------------------
 # Content-type / magic byte
 # -----------------------------------------------------------------------------

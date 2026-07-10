@@ -24,7 +24,6 @@ destructive actions without changing their auth middleware.
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -40,6 +39,7 @@ from bug_fab._observability import (
     EVENT_STATUS_CHANGED,
 )
 from bug_fab._observability import emit as emit_event
+from bug_fab._report_id import REPORT_ID_RE
 from bug_fab.config import Settings
 from bug_fab.integrations.github import GitHubSync
 from bug_fab.routers._errors import protocol_error
@@ -55,11 +55,11 @@ logger = logging.getLogger(__name__)
 
 viewer_router = APIRouter(tags=["bug-fab-viewer"])
 
-#: Path-traversal guard — the file backend uses ``bug-NNN`` IDs and the
-#: SQL backends use the same shape (with optional ``P`` / ``D`` env
-#: prefix). Any input outside this character class is rejected with a
-#: 404 before it reaches the storage layer.
-_REPORT_ID_RE = re.compile(r"^bug-[A-Za-z]?\d{1,12}$")
+#: Path-traversal guard. Re-exported from the single canonical definition —
+#: it must not diverge from the storage backends' copy, which is exactly the
+#: bug (`bug-1` passed here but was rejected by FileStorage) that consolidation
+#: fixed. See :mod:`bug_fab._report_id`.
+_REPORT_ID_RE = REPORT_ID_RE
 
 _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))

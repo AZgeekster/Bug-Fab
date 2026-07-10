@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any
 
 from flask import Blueprint, Response, abort, jsonify, render_template, request, send_from_directory
@@ -39,6 +38,7 @@ from pydantic import ValidationError
 
 from bug_fab._rate_limit import RateLimiter
 from bug_fab._redact import redact_report
+from bug_fab._report_id import REPORT_ID_RE
 from bug_fab.adapters.flask._runtime import (
     resolve_static_dir,
     resolve_template_dir,
@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 #: Path-traversal guard — mirrors :data:`bug_fab.routers.viewer._REPORT_ID_RE`.
 #: Any input outside this character class is rejected with 404 before it
 #: reaches the storage layer.
-_REPORT_ID_RE = re.compile(r"^bug-[A-Za-z]?\d{1,12}$")
+_REPORT_ID_RE = REPORT_ID_RE
 
 
 def _client_ip() -> str:
@@ -330,6 +330,7 @@ def make_blueprint(
                 screenshot_content_type=(screenshot_file.mimetype or "image/png"),
                 request_user_agent=request.headers.get("User-Agent"),
                 max_screenshot_bytes=max_bytes,
+                max_metadata_bytes=settings.max_metadata_kb * 1024,
             )
         except PayloadTooLarge as exc:
             return _error("payload_too_large", exc.message, 413, limit_bytes=max_bytes)
