@@ -187,6 +187,33 @@ public sealed class IntakeTests
         result.Failures.Should().Contain(f => f.Field == "reporter.name");
     }
 
+    [Fact]
+    public async Task Ids_are_not_reused_after_delete()
+    {
+        await using var app = TestApp.BuildApp(NewStorageDir());
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new Uri(app.Urls.First()) };
+
+        async Task<string> Submit()
+        {
+            using var form = MultipartHelper.BuildIntake(ValidMetadata, MultipartHelper.MinimalPng);
+            var res = await client.PostAsync("/bug-fab/bug-reports", form);
+            res.StatusCode.Should().Be(HttpStatusCode.Created);
+            return (await res.Content.ReadFromJsonAsync<JsonElement>())
+                .GetProperty("id").GetString()!;
+        }
+
+        var ids = new[] { await Submit(), await Submit(), await Submit() };
+        ids.Should().Equal("bug-001", "bug-002", "bug-003");
+
+        // Delete the highest-numbered report. MAX(IdSequence)+1 would then
+        // recompute 3 and reissue bug-003; the counter row must mint bug-004.
+        var del = await client.DeleteAsync($"/bug-fab/reports/{ids[^1]}");
+        del.StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        (await Submit()).Should().Be("bug-004");
+    }
+
     private static string NewStorageDir()
     {
         var dir = Path.Combine(Path.GetTempPath(), "bug-fab-tests-" + Guid.NewGuid().ToString("N"));

@@ -72,6 +72,15 @@ out explicitly in each release entry.
 
 ### Fixed
 
+- **The ASP.NET adapter no longer reuses report ids after a delete.** Its EF Core
+  storage derived the next id from `MAX(IdSequence) + 1`; delete the highest report
+  and the next insert recomputed that same number, colliding with (or reissuing the
+  retired id of) `bug-003`. Ids now come from a single-row `bug_fab_id_counter`
+  table — bumped by an atomic `UPDATE ... SET last_value = last_value + 1`
+  (`ExecuteUpdate`) on relational providers, so a delete can't rewind it and
+  concurrent intake can't lose an increment. Ships an `AddIdCounter` EF migration;
+  consumers using `EnsureCreated` need no action.
+
 - **The Vapor and Spring adapters no longer reuse report ids after a delete.**
   Both allocated ids from a row count / process-local counter: delete `bug-001`
   from three reports and the next insert computed `bug-003`, colliding with a

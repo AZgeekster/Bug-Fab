@@ -26,6 +26,7 @@ public class BugFabDbContext : DbContext
 
     public DbSet<BugReport> BugReports => Set<BugReport>();
     public DbSet<BugReportLifecycle> Lifecycle => Set<BugReportLifecycle>();
+    public DbSet<BugFabIdCounter> IdCounters => Set<BugFabIdCounter>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
