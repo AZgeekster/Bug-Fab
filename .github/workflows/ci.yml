@@ -144,6 +144,44 @@ jobs:
         if: failure()
         run: cat "${RUNNER_TEMP}/conformance-server.log" || true
 
+  adapter-conformance:
+    # Runs each non-Python adapter's own Docker conformance harness against
+    # the bundled protocol suite. Until this existed, the root CI ran only
+    # the Python suite -- 14 adapters could drift with a green build. Three
+    # adapters even shipped .github/workflows/ files nested under adapters/*/
+    # that GitHub Actions never executes; those are deleted in the same change
+    # that adds this job.
+    name: conformance (${{ matrix.adapter }})
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter:
+          - express
+          - go-gin
+          - hono
+          - laravel
+          - phoenix
+          - rails
+          - rust-axum
+          - spring-boot-kotlin
+          - sveltekit
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Run the adapter conformance harness
+        # Each harness is self-contained (docker compose up + the python
+        # conformance plugin from a sibling container) and exit-code-faithful:
+        # 0 pass, 1 non-conformant, 2 harness failure. ubuntu-latest ships
+        # Docker + compose, so no setup step is needed.
+        shell: bash
+        working-directory: adapters/${{ matrix.adapter }}/conformance
+        run: |
+          chmod +x run-conformance.sh
+          ./run-conformance.sh
+
   e2e:
     name: e2e (browser smoke)
     runs-on: ubuntu-latest

@@ -73,23 +73,32 @@ export function createIntakeHandler(opts: BugFabAdapterOptions): RequestHandler 
         400
       );
     }
-    if (!(screenshot instanceof File) && !(screenshot instanceof Blob)) {
+    // `instanceof File`/`Blob` does not type-check here: tsconfig sets
+    // types:["node"], so the ambient `File`/`Blob` are Node's, while the
+    // multipart value carries the DOM shape. Duck-type on the members we use
+    // (a present, non-string entry that exposes `.arrayBuffer`) instead.
+    if (
+      screenshot === null ||
+      typeof screenshot === 'string' ||
+      typeof (screenshot as { arrayBuffer?: unknown }).arrayBuffer !== 'function'
+    ) {
       return jsonError(Errors.validationError('screenshot part is required'), 400);
     }
+    const file = screenshot as { arrayBuffer(): Promise<ArrayBuffer>; size: number; type?: string };
 
     // Screenshot size + content-type checks. We check the declared MIME first
     // for a quick reject; magic bytes verify after we read.
-    const declaredType = (screenshot as File).type ?? '';
+    const declaredType = file.type ?? '';
     if (declaredType && declaredType !== 'image/png') {
       return jsonError(Errors.unsupportedMediaType(), 415);
     }
-    if (screenshot.size > maxBytes) {
+    if (file.size > maxBytes) {
       return jsonError(Errors.payloadTooLarge(maxBytes), 413);
     }
 
     let screenshotBytes: Uint8Array;
     try {
-      screenshotBytes = new Uint8Array(await screenshot.arrayBuffer());
+      screenshotBytes = new Uint8Array(await file.arrayBuffer());
     } catch (err) {
       return jsonError(
         Errors.validationError(`Failed to read screenshot: ${err instanceof Error ? err.message : String(err)}`),

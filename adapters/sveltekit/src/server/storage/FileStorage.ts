@@ -144,9 +144,6 @@ export class FileStorage implements IStorage {
   private reportDir(id: string): string {
     return join(this.dir, id);
   }
-  private metaPath(id: string): string {
-    return join(this.reportDir(id), 'metadata.json');
-  }
   private screenshotFile(id: string): string {
     return join(this.reportDir(id), 'screenshot.png');
   }

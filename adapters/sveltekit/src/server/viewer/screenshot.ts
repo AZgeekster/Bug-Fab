@@ -31,7 +31,10 @@ export function createScreenshotHandler(opts: BugFabAdapterOptions): RequestHand
       return jsonError(Errors.notFound(id), 404);
     }
 
-    return new Response(bytes, {
+    // `bytes` is a Uint8Array; wrap it so it satisfies BodyInit under the
+    // Node + DOM lib mix (tsconfig sets types:["node"], which narrows the
+    // ambient Response body types).
+    return new Response(bytes.buffer as ArrayBuffer, {
       status: 200,
       headers: {
         'Content-Type': 'image/png',

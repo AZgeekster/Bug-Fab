@@ -53,6 +53,36 @@ out explicitly in each release entry.
   `publish` now depends on it. Nothing previously ran the protocol contract
   against the implementation that defines it.
 
+- **CI runs every non-Python adapter's conformance harness.** A matrix job
+  runs the nine adapters that ship `conformance/run-conformance.sh` on each
+  push. The root pipeline previously ran only the Python suite, so all
+  fourteen adapters could drift with a green build. Three adapters carried
+  `.github/workflows/` files nested under `adapters/*/` that GitHub Actions
+  never executes; those are removed — they read as coverage without providing
+  any.
+
+### Fixed
+
+- **The SvelteKit adapter builds and typechecks again.** `svelte.config.js`
+  imported `vitePreprocess` from the moved `@sveltejs/kit/vite` and set a
+  `package` config key that `@sveltejs/package` v2 removed, so `npm run build`
+  failed outright; three source files also had type errors, so
+  `tsc --noEmit` never passed. All fixed — the package was unpublishable. The
+  conformance harness now runs the real `npm run build` instead of a
+  `tsc --noCheck` workaround.
+
+- **`multer` bumped to 2.x in the Express adapter**, clearing the 1.x
+  advisory chain (the vulnerable path is the intake handler). **`sqlx` bumped
+  to 0.8** in the rust-axum adapter, dropping the `=0.7.4` pin that blocked
+  the fix. **`golang.org/x/net` bumped to 0.38** in the go-gin adapter. Each
+  adapter's own suite passes on the new version.
+
+- **The `fastapi-jinja-docker` example no longer 500s on a fresh install.**
+  It used the name-first `TemplateResponse(name, context)` signature, removed
+  in Starlette 1.0. Switched to the request-first form. The package also now
+  declares `starlette>=0.48`, which the routers require for the RFC-9110
+  status-code aliases.
+
 ### Security
 
 - **`BUG_FAB_REDACT_PII` now actually redacts on the Flask and Django

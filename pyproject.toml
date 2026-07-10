@@ -34,6 +34,11 @@ classifiers = [
 ]
 dependencies = [
     "fastapi>=0.110",
+    # The routers use the RFC-9110 status aliases HTTP_422_UNPROCESSABLE_CONTENT
+    # and HTTP_413_CONTENT_TOO_LARGE, added in Starlette 0.48. fastapi>=0.110
+    # permits older Starlette, so pin it directly rather than raising the
+    # fastapi floor (which would also drag in unrelated FastAPI changes).
+    "starlette>=0.48",
     "pydantic>=2.0",
     "python-multipart",
     "httpx",
