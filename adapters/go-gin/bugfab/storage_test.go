@@ -155,6 +155,25 @@ func TestFileStorage_ListReportsFiltersAndPaginates(t *testing.T) {
 	}
 }
 
+func TestFileStorage_ListReportsFiltersByEnvironment(t *testing.T) {
+	// environment is denormalized into the index entry now — the filter
+	// used to match nothing because buildIndexEntry omitted it.
+	s := newTestStorage(t)
+	prod := sampleMetadata()
+	prod["environment"] = "production"
+	staging := sampleMetadata()
+	staging["environment"] = "staging"
+	s.SaveReport(prod, tinyPNG)
+	s.SaveReport(staging, tinyPNG)
+	_, total, err := s.ListReports(map[string]string{"environment": "production"}, 1, 100)
+	if err != nil {
+		t.Fatalf("ListReports: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("want 1 production report, got %d", total)
+	}
+}
+
 func TestFileStorage_UpdateStatusAppendsLifecycle(t *testing.T) {
 	s := newTestStorage(t)
 	id, _ := s.SaveReport(sampleMetadata(), tinyPNG)

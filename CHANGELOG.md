@@ -76,9 +76,12 @@ out explicitly in each release entry.
   no-op on the file backend (the field was never denormalized into the index
   and the matcher never checked it) and on the SQL backend (the column existed
   but the filter loop skipped it). Filtering by `environment` returned the full
-  unfiltered list. Fixed across the FastAPI, Flask, and Django adapters and both
-  storage backends; existing file-backend reports are matched once re-indexed by
-  any write.
+  unfiltered list. Fixed on the Python reference (FastAPI/Flask/Django, both
+  storage backends) and on the Go, Spring (Kotlin `FileStorage`), and Vapor file
+  backends, each of which listed `environment` in its matcher but never wrote it
+  to the index. Existing file-backend reports are matched once re-indexed by any
+  write; Vapor's index entry keeps the field optional so older `index.json`
+  files still load.
 
 - **The viewer `stats` block now aggregates over the active filters.** The
   contract in `BugReportListResponse` says `stats` counts the filtered result

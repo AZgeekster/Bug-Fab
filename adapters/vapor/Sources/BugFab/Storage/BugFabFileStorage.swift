@@ -227,6 +227,10 @@ public final class BugFabFileStorage: BugFabStorage, @unchecked Sendable {
         var createdAt: String
         var hasScreenshot: Bool
         var githubIssueUrl: String?
+        // Optional so an index.json written before this field existed still
+        // decodes (a missing key would otherwise fail the whole index read
+        // and lose every entry). Fresh writes always populate it.
+        var environment: String?
 
         enum CodingKeys: String, CodingKey {
             case id, title
@@ -235,6 +239,7 @@ public final class BugFabFileStorage: BugFabStorage, @unchecked Sendable {
             case createdAt = "created_at"
             case hasScreenshot = "has_screenshot"
             case githubIssueUrl = "github_issue_url"
+            case environment
         }
     }
 
@@ -364,7 +369,7 @@ public final class BugFabFileStorage: BugFabStorage, @unchecked Sendable {
     }
 
     static func matches(entry: IndexEntry, filters: [String: String]) -> Bool {
-        for key in ["status", "severity", "module", "report_type"] {
+        for key in ["status", "severity", "module", "report_type", "environment"] {
             guard let wanted = filters[key], !wanted.isEmpty else { continue }
             let actual: String
             switch key {
@@ -372,14 +377,10 @@ public final class BugFabFileStorage: BugFabStorage, @unchecked Sendable {
             case "severity": actual = entry.severity
             case "module": actual = entry.module
             case "report_type": actual = entry.reportType
+            case "environment": actual = entry.environment ?? ""
             default: continue
             }
             if actual != wanted { return false }
-        }
-        if let env = filters["environment"], !env.isEmpty {
-            // environment isn't on the index — for FileStorage this filter
-            // is a no-op (matches all). SQL backends apply it properly.
-            _ = env
         }
         return true
     }
@@ -478,7 +479,7 @@ public final class BugFabFileStorage: BugFabStorage, @unchecked Sendable {
             reportType: s("report_type"), severity: s("severity"),
             status: s("status"), module: s("module"),
             createdAt: s("created_at"), hasScreenshot: true,
-            githubIssueUrl: nil
+            githubIssueUrl: nil, environment: s("environment")
         )
     }
 

@@ -161,6 +161,7 @@ data class LifecycleEvent(
  * protocol's deprecated-values rule).
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
+@JsonIgnoreProperties(ignoreUnknown = true)
 data class BugReportSummary(
     val id: String,
     val title: String,

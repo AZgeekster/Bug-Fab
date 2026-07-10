@@ -45,6 +45,18 @@ class FileStorageRoundtripTest {
     }
 
     @Test
+    fun `list filters by environment`(@TempDir tmp: Path) {
+        // environment lives in the index entry now — the filter used to
+        // match nothing because buildIndexEntry omitted it.
+        val storage = FileStorage(tmp)
+        storage.saveReport(makeMetadata("prod") + mapOf("environment" to "production"), pngBytes)
+        storage.saveReport(makeMetadata("stg") + mapOf("environment" to "staging"), pngBytes)
+        val (items, total) = storage.listReports(mapOf("environment" to "production"), 1, 20)
+        assertEquals(1, total)
+        assertEquals("prod", items[0].title)
+    }
+
+    @Test
     fun `id prefix is honored`(@TempDir tmp: Path) {
         val storage = FileStorage(tmp, idPrefix = "P")
         val id = storage.saveReport(makeMetadata(), pngBytes)

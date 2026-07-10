@@ -41,6 +41,44 @@ final class BugFabHappyPathTests: XCTestCase {
     }
 }
 
+final class BugFabFilterTests: XCTestCase {
+    func testListFiltersByEnvironment() async throws {
+        // environment is denormalized into the index entry now — the filter
+        // used to be a documented no-op that matched every report.
+        let app = try await makeTestApp()
+        defer { Task { try? await app.asyncShutdown() } }
+        let png = pngBytes()
+        for env in ["production", "staging"] {
+            let metadata = """
+                {
+                  "protocol_version": "0.1",
+                  "title": "\(env) one",
+                  "client_ts": "2026-04-27T00:00:00Z",
+                  "severity": "high",
+                  "tags": ["test"],
+                  "context": {
+                    "url": "https://example.com/",
+                    "user_agent": "test-agent/1.0",
+                    "environment": "\(env)"
+                  }
+                }
+                """
+            try await app.testable().test(.POST, "/api/bug-reports") { req async throws in
+                try buildMultipart(req: &req, metadata: metadata, png: png)
+            } afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .created)
+            }
+        }
+        try await app.testable().test(.GET, "/admin/reports?environment=production") {
+            res async throws in
+            XCTAssertEqual(res.status, .ok)
+            let list = try res.content.decode(BugFabBugReportListResponse.self)
+            XCTAssertEqual(list.total, 1)
+            XCTAssertEqual(list.items.first?.title, "production one")
+        }
+    }
+}
+
 final class BugFabValidationTests: XCTestCase {
     func testSeverityRejected() async throws {
         let app = try await makeTestApp()

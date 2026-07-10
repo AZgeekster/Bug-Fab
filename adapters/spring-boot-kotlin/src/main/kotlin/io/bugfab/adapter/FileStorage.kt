@@ -256,6 +256,7 @@ class FileStorage(
         "created_at" to (report["created_at"] ?: ""),
         "has_screenshot" to (report["has_screenshot"] ?: true),
         "github_issue_url" to report["github_issue_url"],
+        "environment" to (report["environment"] ?: ""),
     )
 
     private fun matchesFilters(entry: Map<String, Any?>, filters: Map<String, String>): Boolean {
