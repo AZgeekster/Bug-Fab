@@ -59,7 +59,11 @@ django = [
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "ruff>=0.5",
+    # Pin the minor series. `ruff format` output is not stable across minors,
+    # and the version here must agree with the `ruff-pre-commit` rev in
+    # `.pre-commit-config.yaml` — otherwise the hook reformats a file one way
+    # and CI's `ruff format --check` rejects it the other way.
+    "ruff>=0.15,<0.16",
     "pre-commit>=3.0",
     "build",
     "twine",

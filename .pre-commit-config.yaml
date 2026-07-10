@@ -28,8 +28,13 @@ repos:
             | scripts/check_forbidden_strings\.py
           )$
 
+  # Keep this rev inside the `ruff>=0.15,<0.16` range declared in
+  # pyproject.toml's [dev] extra. `ruff format` output differs across minor
+  # versions, so a drifted pin makes this hook and CI's `ruff format --check`
+  # reformat the same file in opposite directions -- an unresolvable loop for
+  # anyone whose commit touches a file the two disagree about.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.5.7
+    rev: v0.15.12
     hooks:
       - id: ruff
         args: [--fix]
