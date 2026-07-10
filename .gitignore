@@ -11,8 +11,12 @@ develop-eggs/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Anchored to the repo root. Unanchored, `lib/` matches at ANY depth, which
+# silently excluded `adapters/rails/lib/`, `adapters/phoenix/lib/`, and every
+# `src/lib/` in the JS adapters and examples -- two entire first-party
+# adapters were absent from the published repo.
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -93,8 +97,14 @@ $RECYCLE.BIN/
 
 # --- Bug-Fab runtime artifacts ---
 # Local storage directories created by example apps and dev runs.
-# Match both hyphen and underscore variants — examples use bug_reports/.
-bug-reports/
+#
+# `bug_reports/` (underscore) is the storage-dir name; leaving it unanchored is
+# safe because no source directory uses that name.
+#
+# The hyphenated variant is NOT a storage-dir name -- `bug-reports` is the
+# protocol's URL segment, so unanchored it excluded route directories such as
+# `examples/nextjs-minimal/src/app/api/bug-reports/`. Anchored to the root.
+/bug-reports/
 bug_reports/
 .bug-fab-storage/
 *.db
