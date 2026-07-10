@@ -39,6 +39,15 @@ out explicitly in each release entry.
   FastAPI, Flask, and Django adapters. A *missing* `protocol_version` is
   unchanged and still surfaces as `422 schema_error`.
 
+### Changed
+
+- **The GitHub and Linear integrations now truncate long text with the `…`
+  character instead of `...`.** All six built-in integrations shared six
+  copies of a truncation helper that had drifted into two forms; they now
+  share one, matching the Slack, Discord, Teams, and PagerDuty behavior. Only
+  the truncation marker on an over-length issue title or description changes;
+  nothing else about the posted content differs.
+
 ### Added
 
 - **The conformance suite now checks the error envelope and the

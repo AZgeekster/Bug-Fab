@@ -27,6 +27,8 @@ from typing import Any
 
 import httpx
 
+from bug_fab.integrations._base import truncate
+
 logger = logging.getLogger(__name__)
 
 #: Default ``severity:`` and ``env:`` label palette. Hex values match every
@@ -56,13 +58,6 @@ DEFAULT_STATE_MAP: dict[str, str] = {
 #: Pinned GitHub REST API version. Uses the documented header so the API
 #: behaves deterministically across server-side rollouts.
 GITHUB_API_VERSION = "2022-11-28"
-
-
-def _truncate(text: str, limit: int) -> str:
-    """Trim ``text`` to ``limit`` chars, appending an ellipsis when cut."""
-    if len(text) <= limit:
-        return text
-    return text[: max(limit - 3, 0)] + "..."
 
 
 class GitHubSync:
@@ -149,7 +144,7 @@ class GitHubSync:
                                 extra={
                                     "label": name,
                                     "status_code": resp.status_code,
-                                    "body": _truncate(resp.text, 200),
+                                    "body": truncate(resp.text, 200),
                                 },
                             )
                     except httpx.HTTPError as exc:
@@ -190,7 +185,7 @@ class GitHubSync:
                 extra={
                     "report_id": report.get("id"),
                     "status_code": resp.status_code,
-                    "body": _truncate(resp.text, 200),
+                    "body": truncate(resp.text, 200),
                 },
             )
             return None, None
@@ -228,7 +223,7 @@ class GitHubSync:
                 extra={
                     "issue_number": issue_number,
                     "status_code": resp.status_code,
-                    "body": _truncate(resp.text, 200),
+                    "body": truncate(resp.text, 200),
                 },
             )
             return False
@@ -320,7 +315,7 @@ def _format_auto_context_block(context: Mapping[str, Any]) -> str:
 
     parts: list[str] = ["<details><summary>Auto-captured context</summary>", ""]
     if user_agent:
-        parts.append(f"- **User-Agent:** `{_truncate(str(user_agent), 200)}`")
+        parts.append(f"- **User-Agent:** `{truncate(str(user_agent), 200)}`")
     if viewport:
         parts.append(f"- **Viewport:** {viewport}")
 
@@ -329,14 +324,14 @@ def _format_auto_context_block(context: Mapping[str, Any]) -> str:
         for entry in list(console_errors)[:10]:
             level = str(entry.get("level", "log")) if isinstance(entry, dict) else "log"
             message = str(entry.get("message", "")) if isinstance(entry, dict) else str(entry)
-            parts.append(f"[{level}] {_truncate(message, 200)}")
+            parts.append(f"[{level}] {truncate(message, 200)}")
         parts.append("```")
 
     if network_log:
         parts += ["", "**Failed network requests (first 10):**", "", "```"]
         for entry in list(network_log)[:10]:
             if not isinstance(entry, dict):
-                parts.append(_truncate(str(entry), 200))
+                parts.append(truncate(str(entry), 200))
                 continue
             method = entry.get("method", "?")
             url = entry.get("url", "")

@@ -60,11 +60,19 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
-import httpx
-
 from bug_fab._redact import safe_url
+from bug_fab.integrations._base import DeliveryEvents, post_json, truncate
 
 logger = logging.getLogger(__name__)
+
+#: WARN event names emitted when a Teams delivery fails. Passed to
+#: :func:`bug_fab.integrations._base.post_json` so the shared delivery
+#: helper logs under this module's logger with these names.
+_DELIVERY_EVENTS = DeliveryEvents(
+    error="bug_fab_teams_send_error",
+    unexpected="bug_fab_teams_send_unexpected_error",
+    failed="bug_fab_teams_send_failed",
+)
 
 #: Per-request timeout default. Teams' incoming-webhook endpoint
 #: normally responds in well under a second; the cap keeps a slow Teams
@@ -102,13 +110,6 @@ SEVERITY_COLORS: dict[str, str] = {
 #: outside the locked vocabulary. ``default`` renders as the client's
 #: regular text color — neutral, no semantic claim.
 DEFAULT_COLOR = "default"
-
-
-def _truncate(text: str, limit: int) -> str:
-    """Hard-cap ``text`` at ``limit`` chars, appending an ellipsis on overflow."""
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1].rstrip() + "…"
 
 
 class TeamsSync:
@@ -194,7 +195,7 @@ class TeamsSync:
             reporter_name = "anonymous"
 
         body_text = (
-            _truncate(description, MAX_DESCRIPTION_CHARS) if description else "_(no description)_"
+            truncate(description, MAX_DESCRIPTION_CHARS) if description else "_(no description)_"
         )
 
         header_text = f"{severity_raw.upper()}: {title}"
@@ -285,48 +286,15 @@ class TeamsSync:
         delivery cannot block the intake response path.
         """
         payload = self.build_payload(report)
-        try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.post(
-                    self._url,
-                    json=payload,
-                    headers={"Content-Type": "application/json"},
-                )
-        except httpx.HTTPError as exc:
-            logger.warning(
-                "bug_fab_teams_send_error",
-                extra={
-                    "report_id": report.get("id"),
-                    "url": safe_url(self._url),
-                    "error": str(exc),
-                },
-            )
-            return False
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning(
-                "bug_fab_teams_send_unexpected_error",
-                extra={
-                    "report_id": report.get("id"),
-                    "url": safe_url(self._url),
-                    "error": str(exc),
-                },
-            )
-            return False
-        if resp.status_code // 100 != 2:
-            body = resp.text
-            if len(body) > 200:
-                body = body[:197] + "..."
-            logger.warning(
-                "bug_fab_teams_send_failed",
-                extra={
-                    "report_id": report.get("id"),
-                    "url": safe_url(self._url),
-                    "status_code": resp.status_code,
-                    "body": body,
-                },
-            )
-            return False
-        return True
+        return await post_json(
+            url=self._url,
+            payload=payload,
+            timeout=self._timeout,
+            log=logger,
+            events=_DELIVERY_EVENTS,
+            report_id=report.get("id"),
+            log_url=safe_url(self._url),
+        )
 
 
 __all__ = [

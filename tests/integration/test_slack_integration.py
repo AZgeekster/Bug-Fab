@@ -64,7 +64,7 @@ def _make_sync_with_transport(
 
     transport = httpx.MockTransport(_wrapped)
 
-    import bug_fab.integrations.slack as slack_module
+    import bug_fab.integrations._base as delivery_base
 
     real_client = httpx.AsyncClient
 
@@ -73,7 +73,7 @@ def _make_sync_with_transport(
             kwargs["transport"] = transport
             super().__init__(*args, **kwargs)
 
-    slack_module.httpx.AsyncClient = _MockClient  # type: ignore[attr-defined]
+    delivery_base.httpx.AsyncClient = _MockClient  # type: ignore[attr-defined]
     sync = SlackSync(url, viewer_base_url=viewer_base_url, timeout_seconds=timeout_seconds)
     return sync, captured
 
@@ -81,11 +81,11 @@ def _make_sync_with_transport(
 @pytest.fixture(autouse=True)
 def _restore_httpx_async_client() -> Any:
     """Restore ``httpx.AsyncClient`` after every test to avoid bleed-through."""
-    import bug_fab.integrations.slack as slack_module
+    import bug_fab.integrations._base as delivery_base
 
-    original = slack_module.httpx.AsyncClient
+    original = delivery_base.httpx.AsyncClient
     yield
-    slack_module.httpx.AsyncClient = original
+    delivery_base.httpx.AsyncClient = original
 
 
 def _make_report(**overrides: Any) -> dict[str, Any]:

@@ -67,7 +67,7 @@ def _make_sync_with_transport(
 
     transport = httpx.MockTransport(_wrapped)
 
-    import bug_fab.integrations.discord as discord_module
+    import bug_fab.integrations._base as delivery_base
 
     real_client = httpx.AsyncClient
 
@@ -76,7 +76,7 @@ def _make_sync_with_transport(
             kwargs["transport"] = transport
             super().__init__(*args, **kwargs)
 
-    discord_module.httpx.AsyncClient = _MockClient  # type: ignore[attr-defined]
+    delivery_base.httpx.AsyncClient = _MockClient  # type: ignore[attr-defined]
     sync = DiscordSync(
         url,
         viewer_base_url=viewer_base_url,
@@ -89,11 +89,11 @@ def _make_sync_with_transport(
 @pytest.fixture(autouse=True)
 def _restore_httpx_async_client() -> Any:
     """Restore ``httpx.AsyncClient`` after every test to avoid bleed-through."""
-    import bug_fab.integrations.discord as discord_module
+    import bug_fab.integrations._base as delivery_base
 
-    original = discord_module.httpx.AsyncClient
+    original = delivery_base.httpx.AsyncClient
     yield
-    discord_module.httpx.AsyncClient = original
+    delivery_base.httpx.AsyncClient = original
 
 
 def _make_report(**overrides: Any) -> dict[str, Any]:
