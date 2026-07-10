@@ -72,6 +72,16 @@ out explicitly in each release entry.
 
 ### Fixed
 
+- **The Vapor adapter no longer reuses report ids after a delete.** Its Fluent
+  storage minted ids from `COUNT(*) + 1`; delete `bug-001` from three reports and
+  the next insert computed `bug-003`, colliding with a live row on the primary
+  key and losing the report. Ids now come from a single-row counter incremented
+  by an atomic `UPDATE ... SET last_value = last_value + 1` inside the insert
+  transaction (portable across the SQLite test driver and the Postgres
+  production driver; never `SELECT ... FOR UPDATE`, which is a syntax error on
+  SQLite). **Consumers wiring the Fluent backend must add the new
+  `CreateBugFabIdCounter` migration** alongside `CreateBugFabReport`.
+
 - **The `environment` filter on `GET /reports` now works.** It was a silent
   no-op on the file backend (the field was never denormalized into the index
   and the matcher never checked it) and on the SQL backend (the column existed

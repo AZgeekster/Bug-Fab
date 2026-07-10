@@ -216,6 +216,29 @@ final class BugFabFluentTests: XCTestCase {
             XCTAssertEqual(list.total, 1)
         }
     }
+
+    func testIdsAreNotReusedAfterDelete() async throws {
+        // The allocator was COUNT(*)+1: create three, delete the first, create
+        // a fourth, and the count-based id would be bug-003 — colliding with a
+        // live row on the primary key. The counter-row allocator must mint
+        // bug-004 instead.
+        let app = try await Application.make(.testing)
+        try setupFluentApp(app)
+        defer { Task { try? await app.asyncShutdown() } }
+        let storage = BugFabFluentStorage(app: app)
+        let png = pngBytes()
+        var ids: [String] = []
+        for _ in 0..<3 {
+            let id = try await storage.saveReport(
+                metadata: BugFabFluentStorage.decodeJSON(validMetadata()), screenshotBytes: png)
+            ids.append(id)
+        }
+        XCTAssertEqual(ids, ["bug-001", "bug-002", "bug-003"])
+        _ = try await storage.deleteReport(id: "bug-001")
+        let fourth = try await storage.saveReport(
+            metadata: BugFabFluentStorage.decodeJSON(validMetadata()), screenshotBytes: png)
+        XCTAssertEqual(fourth, "bug-004")
+    }
 }
 
 // MARK: - Test helpers
@@ -263,6 +286,7 @@ func makeTestAppWithRateLimit() async throws -> Application {
 func setupFluentApp(_ app: Application) throws {
     app.databases.use(.sqlite(.memory), as: .sqlite)
     app.migrations.add(CreateBugFabReport())
+    app.migrations.add(CreateBugFabIdCounter())
     try app.autoMigrate().wait()
     let storage = BugFabFluentStorage(app: app)
     try app.bugFab(storage: storage)
