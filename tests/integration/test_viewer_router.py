@@ -257,6 +257,60 @@ def test_reports_filter_by_severity(app_factory, tiny_png: bytes) -> None:
     assert response.json()["total"] == 1
 
 
+def _context(environment: str) -> dict[str, Any]:
+    """A valid intake ``context`` with a chosen ``environment``.
+
+    ``environment`` reaches the stored report through ``context`` on the
+    real intake path (the top-level metadata field is not part of the
+    intake schema), so filter tests must set it here rather than on the
+    metadata root.
+    """
+    return {
+        "url": "/x",
+        "module": "modA",
+        "user_agent": "client-ua/1.0",
+        "viewport_width": 1024,
+        "viewport_height": 768,
+        "console_errors": [],
+        "network_log": [],
+        "environment": environment,
+    }
+
+
+def test_reports_filter_by_environment(app_factory, tiny_png: bytes) -> None:
+    """The `environment` filter narrows the list — it used to be a silent no-op."""
+    client = app_factory()
+    vp = _vp(client)
+    _seed(client, tiny_png, title="prod one", context=_context("production"))
+    _seed(client, tiny_png, title="staging one", context=_context("staging"))
+    response = client.get(f"{vp}/reports", params={"environment": "production"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["title"] == "prod one"
+
+
+def test_reports_stats_honor_active_filters(app_factory, tiny_png: bytes) -> None:
+    """`stats` counts the filtered result set, not the whole dataset.
+
+    Seed two `critical` reports (one moved to `fixed`) plus a `low` `open`
+    report. Filtering by `severity=critical` must report `open=1`, not the
+    unfiltered `open=2` — the contract in `schemas.BugReportListResponse`
+    says `stats` aggregates over the filtered set.
+    """
+    client = app_factory()
+    vp = _vp(client)
+    _seed(client, tiny_png, title="crit open", severity="critical")
+    crit_fixed = _seed(client, tiny_png, title="crit fixed", severity="critical")
+    _seed(client, tiny_png, title="low open", severity="low")
+    client.put(f"{vp}/reports/{crit_fixed}/status", json={"status": "fixed"})
+
+    body = client.get(f"{vp}/reports", params={"severity": "critical"}).json()
+    assert body["total"] == 2
+    stats = body["stats"]
+    assert stats == {"open": 1, "investigating": 0, "fixed": 1, "closed": 0}
+
+
 def test_reports_pagination(app_factory, tiny_png: bytes) -> None:
     client = app_factory()
     vp = _vp(client)

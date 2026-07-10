@@ -363,7 +363,7 @@ class SqlStorageBase(Storage):
                 select(func.count()).select_from(BugReport).where(BugReport.archived_at.is_(None))
             )
 
-            for key in ("status", "severity", "module"):
+            for key in ("status", "severity", "module", "environment"):
                 wanted = (filters or {}).get(key)
                 if wanted:
                     column = getattr(BugReport, key)
@@ -385,10 +385,15 @@ class SqlStorageBase(Storage):
                     | func.lower(BugReport.id).like(needle)
                 )
 
-            # Note: ``report_type`` is not stored as a typed column in v0.1 —
-            # it lives in ``metadata_json``. Filtering on it would force a
-            # full scan + JSON parse, so we silently ignore the filter at the
-            # SQL layer (matches FileStorage tolerance).
+            # Divergence, documented: ``report_type`` is not a typed column
+            # in v0.1 — it lives in ``metadata_json``. Filtering on it would
+            # force a full scan + JSON parse, so the SQL backend ignores a
+            # ``report_type`` filter. The file backend DOES honor it (it is a
+            # denormalized index field there), so the two backends differ on
+            # this one key. ``report_type`` is not exposed as a viewer query
+            # parameter, so this divergence is unreachable from the HTTP
+            # surface; a consumer calling ``list_reports`` directly should not
+            # rely on ``report_type`` filtering against a SQL backend.
 
             total = int(session.execute(count_stmt).scalar_one())
 

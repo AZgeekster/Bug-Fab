@@ -72,6 +72,26 @@ out explicitly in each release entry.
 
 ### Fixed
 
+- **The `environment` filter on `GET /reports` now works.** It was a silent
+  no-op on the file backend (the field was never denormalized into the index
+  and the matcher never checked it) and on the SQL backend (the column existed
+  but the filter loop skipped it). Filtering by `environment` returned the full
+  unfiltered list. Fixed across the FastAPI, Flask, and Django adapters and both
+  storage backends; existing file-backend reports are matched once re-indexed by
+  any write.
+
+- **The viewer `stats` block now aggregates over the active filters.** The
+  contract in `BugReportListResponse` says `stats` counts the filtered result
+  set, but every Python adapter computed the counts over the whole dataset.
+  Filtering by `severity=critical` now reports each status count *within* that
+  filter. The four lifecycle states are still always present.
+
+- **The Django adapter no longer leaks a `total` key in the JSON `stats`
+  block.** `GET /reports` emitted a fifth `total` key the reference and Flask
+  adapters strip; the JSON contract is the four lifecycle states only. (The
+  HTML viewer's "Total" stat card is unaffected — it reads a filtered total the
+  server still computes for the page.)
+
 - **The SvelteKit adapter builds and typechecks again.** `svelte.config.js`
   imported `vitePreprocess` from the moved `@sveltejs/kit/vite` and set a
   `package` config key that `@sveltejs/package` v2 removed, so `npm run build`

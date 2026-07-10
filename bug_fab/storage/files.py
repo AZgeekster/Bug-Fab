@@ -294,11 +294,12 @@ class FileStorage(Storage):
             "created_at": report.get("created_at", ""),
             "has_screenshot": report.get("has_screenshot", True),
             "github_issue_url": report.get("github_issue_url"),
+            "environment": report.get("environment", ""),
         }
 
     def _matches_filters(self, entry: dict, filters: dict) -> bool:
         """Return True if every non-empty filter matches the entry."""
-        for key in ("status", "severity", "module", "report_type"):
+        for key in ("status", "severity", "module", "report_type", "environment"):
             wanted = filters.get(key)
             if wanted and entry.get(key) != wanted:
                 return False

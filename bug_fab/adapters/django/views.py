@@ -197,13 +197,22 @@ VIEWER_PERMISSIONS: dict[str, bool] = {
 }
 
 
-def _compute_stats(storage: DjangoORMStorage) -> dict[str, int]:
-    """Aggregate stat-card counts by status across non-archived reports."""
+def _compute_stats(storage: DjangoORMStorage, filters: dict[str, str]) -> dict[str, int]:
+    """Aggregate stat-card counts over the **filtered** result set.
+
+    Matches the reference (`bug_fab.routers.viewer._compute_stats`): each
+    of the four lifecycle states is counted within the active ``filters``
+    with its own ``status`` substituted in, so a severity/module/
+    environment filter narrows every card. A fifth ``total`` key (the
+    filtered count with no status constraint) feeds the HTML viewer's
+    "Total" stat card; the JSON list endpoint strips it, since the
+    envelope's top-level ``total`` is already authoritative there.
+    """
     stats: dict[str, int] = {}
     for state in ("open", "investigating", "fixed", "closed"):
-        _, total = storage.list_reports({"status": state}, page=1, page_size=1)
+        _, total = storage.list_reports({**filters, "status": state}, page=1, page_size=1)
         stats[state] = total
-    _, total = storage.list_reports({}, page=1, page_size=1)
+    _, total = storage.list_reports(filters, page=1, page_size=1)
     stats["total"] = total
     return stats
 
@@ -342,7 +351,7 @@ def report_list_html(request: HttpRequest) -> HttpResponse:
     page_size = max(min(int(request.GET.get("page_size", "20") or 20), 200), 1)
     filters = _build_filters(request)
     items, total = storage.list_reports(filters, page, page_size)
-    stats = _compute_stats(storage)
+    stats = _compute_stats(storage, filters)
     total_pages = max((total + page_size - 1) // page_size, 1)
     context = {
         "items": [item.model_dump() for item in items],
@@ -370,14 +379,17 @@ def report_list_json(request: HttpRequest) -> HttpResponse:
     page_size = max(min(int(request.GET.get("page_size", "20") or 20), 200), 1)
     filters = _build_filters(request)
     items, total = storage.list_reports(filters, page, page_size)
-    stats = _compute_stats(storage)
+    stats = _compute_stats(storage, filters)
     return JsonResponse(
         {
             "items": [item.model_dump() for item in items],
             "total": total,
             "page": page,
             "page_size": page_size,
-            "stats": stats,
+            # Strip to the four lifecycle states — the ``total`` key that
+            # ``_compute_stats`` computes for the HTML "Total" card is not
+            # part of the JSON list contract (matches the reference + Flask).
+            "stats": {k: stats.get(k, 0) for k in ("open", "investigating", "fixed", "closed")},
         }
     )
 

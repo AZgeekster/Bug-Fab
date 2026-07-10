@@ -235,6 +235,52 @@ def test_list_returns_protocol_envelope(
     assert {"items", "total", "page", "page_size", "stats"} <= set(body.keys())
     assert body["total"] == 1
     assert body["stats"]["open"] == 1
+    # JSON stats carry exactly the four lifecycle states — the `total` key
+    # that feeds the HTML "Total" card is stripped from the JSON contract.
+    assert set(body["stats"]) == {"open", "investigating", "fixed", "closed"}
+
+
+def _variant(
+    base: dict[str, Any], *, severity: str | None = None, environment: str | None = None
+) -> dict:
+    """Copy ``base`` metadata with severity and/or context.environment changed."""
+    out = json.loads(json.dumps(base))
+    if severity is not None:
+        out["severity"] = severity
+    if environment is not None:
+        out["context"]["environment"] = environment
+    return out
+
+
+def test_list_filter_by_environment(
+    tmp_path: Path,
+    tiny_png: bytes,
+    valid_metadata_dict: dict[str, Any],
+) -> None:
+    """The `environment` filter narrows the list (it was a silent no-op)."""
+    _, client = _make_app(tmp_path=tmp_path)
+    _seed_one(client, _variant(valid_metadata_dict, environment="production"), tiny_png)
+    _seed_one(client, _variant(valid_metadata_dict, environment="staging"), tiny_png)
+    resp = client.get("/bug-fab/reports", query_string={"environment": "production"})
+    assert resp.status_code == 200
+    assert resp.get_json()["total"] == 1
+
+
+def test_list_stats_honor_active_filters(
+    tmp_path: Path,
+    tiny_png: bytes,
+    valid_metadata_dict: dict[str, Any],
+) -> None:
+    """`stats` counts the filtered result set, not the whole dataset."""
+    _, client = _make_app(tmp_path=tmp_path)
+    _seed_one(client, _variant(valid_metadata_dict, severity="critical"), tiny_png)
+    crit_fixed = _seed_one(client, _variant(valid_metadata_dict, severity="critical"), tiny_png)
+    _seed_one(client, _variant(valid_metadata_dict, severity="low"), tiny_png)
+    client.put(f"/bug-fab/reports/{crit_fixed}/status", json={"status": "fixed"})
+
+    body = client.get("/bug-fab/reports", query_string={"severity": "critical"}).get_json()
+    assert body["total"] == 2
+    assert body["stats"] == {"open": 1, "investigating": 0, "fixed": 1, "closed": 0}
 
 
 def test_get_screenshot_returns_png_bytes(

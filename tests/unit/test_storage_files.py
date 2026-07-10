@@ -113,6 +113,7 @@ def test_list_pagination(file_storage: FileStorage, tiny_png: bytes) -> None:
         ("severity", "critical", "low"),
         ("module", "alpha", "beta"),
         ("report_type", "feature_request", "bug"),
+        ("environment", "production", "staging"),
     ],
 )
 def test_list_filters(

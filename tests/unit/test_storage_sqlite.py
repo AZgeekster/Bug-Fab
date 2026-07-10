@@ -135,6 +135,17 @@ def test_list_filter_module(sqlite_storage: SQLiteStorage, tiny_png: bytes) -> N
     assert total == 1
 
 
+def test_list_filter_environment(sqlite_storage: SQLiteStorage, tiny_png: bytes) -> None:
+    # The `environment` column exists on the row but the SQL filter loop
+    # used to skip it, so this filter was a silent no-op.
+    _run(sqlite_storage.save_report(_baseline_metadata(environment="production"), tiny_png))
+    _run(sqlite_storage.save_report(_baseline_metadata(environment="staging"), tiny_png))
+    items, total = _run(
+        sqlite_storage.list_reports({"environment": "production"}, page=1, page_size=20)
+    )
+    assert total == 1
+
+
 def test_list_filter_search(sqlite_storage: SQLiteStorage, tiny_png: bytes) -> None:
     _run(sqlite_storage.save_report(_baseline_metadata(title="alpha widget"), tiny_png))
     _run(sqlite_storage.save_report(_baseline_metadata(title="beta gadget"), tiny_png))

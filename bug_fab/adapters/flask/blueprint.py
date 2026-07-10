@@ -119,19 +119,22 @@ def _build_filters(
     return {key: value.strip() for key, value in raw.items() if value and value.strip()}
 
 
-def _compute_stats(storage: Storage) -> dict[str, int]:
-    """Aggregate stat-card counts from the storage backend.
+def _compute_stats(storage: Storage, filters: dict[str, str]) -> dict[str, int]:
+    """Aggregate stat-card counts over the **filtered** result set.
 
-    Mirrors :func:`bug_fab.routers.viewer._compute_stats` so the Flask
-    viewer renders the same five-card stat row the FastAPI reference
-    does. Each filter is one ``list_reports`` call with ``page_size=1``
-    purely for the total — the items are discarded.
+    Mirrors :func:`bug_fab.routers.viewer._compute_stats`: each of the
+    four lifecycle states is counted within the active ``filters`` with
+    its own ``status`` substituted in, so a severity/module/environment
+    filter narrows every card. The fifth ``total`` key (the filtered
+    count with no status constraint) feeds the HTML viewer's "Total"
+    card; the JSON list endpoint strips it. Each call uses
+    ``page_size=1`` purely for the total — the items are discarded.
     """
     stats: dict[str, int] = {}
     for state in ("open", "investigating", "fixed", "closed"):
-        _, total = run_sync(storage.list_reports({"status": state}, page=1, page_size=1))
+        _, total = run_sync(storage.list_reports({**filters, "status": state}, page=1, page_size=1))
         stats[state] = total
-    _, total = run_sync(storage.list_reports({}, page=1, page_size=1))
+    _, total = run_sync(storage.list_reports(filters, page=1, page_size=1))
     stats["total"] = total
     return stats
 
@@ -438,7 +441,7 @@ def make_blueprint(
             environment=request.args.get("environment"),
         )
         items, total = run_sync(storage.list_reports(filters, page, effective_page_size))
-        stats = _compute_stats(storage)
+        stats = _compute_stats(storage, filters)
         total_pages = max((total + effective_page_size - 1) // effective_page_size, 1)
         return render_template(
             "list.html",
@@ -477,7 +480,7 @@ def make_blueprint(
         )
         items, total = run_sync(storage.list_reports(filters, page, effective_page_size))
         # Compute stats for the protocol's documented response shape.
-        stats = _compute_stats(storage)
+        stats = _compute_stats(storage, filters)
         # The protocol's list response includes ``stats`` — see
         # PROTOCOL.md § GET /reports. The FastAPI reference's
         # BugReportListResponse model omits it (a v0.1 known-gap); the

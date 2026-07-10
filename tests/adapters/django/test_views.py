@@ -139,6 +139,9 @@ def test_list_json_returns_pagination_envelope(client, metadata_json, png_bytes)
     assert len(body["items"]) == 2
     assert "stats" in body
     assert body["stats"]["open"] == 2
+    # Exactly the four lifecycle states — no `total` rollup key, which the
+    # JSON list response used to leak (the reference and Flask strip it).
+    assert set(body["stats"]) == {"open", "investigating", "fixed", "closed"}
 
 
 def test_list_filters_by_status(client, metadata_json, png_bytes):
@@ -146,6 +149,40 @@ def test_list_filters_by_status(client, metadata_json, png_bytes):
     response = client.get("/reports", {"status": "fixed"})
     assert response.status_code == 200
     assert response.json()["total"] == 0
+
+
+def _with(metadata_json: str, **changes) -> str:
+    """Return the baseline metadata JSON with top-level keys overridden."""
+    data = json.loads(metadata_json)
+    data.update(changes)
+    return json.dumps(data)
+
+
+def test_list_filters_by_environment(client, metadata_json, png_bytes):
+    prod = json.loads(metadata_json)
+    staging = json.loads(metadata_json)
+    staging["context"] = {**staging["context"], "environment": "staging"}
+    _post_intake(client, json.dumps(prod), png_bytes)  # context.environment == "prod"
+    _post_intake(client, json.dumps(staging), png_bytes)
+    response = client.get("/reports", {"environment": "prod"})
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+
+
+def test_list_stats_honor_active_filters(client, metadata_json, png_bytes):
+    # Two `high` reports (one moved to `fixed`) plus a `low` `open` report.
+    # Filtering by severity=high must report open=1, not the unfiltered 2.
+    _post_intake(client, _with(metadata_json, severity="high"), png_bytes)
+    fixed_id = _post_intake(client, _with(metadata_json, severity="high"), png_bytes).json()["id"]
+    _post_intake(client, _with(metadata_json, severity="low"), png_bytes)
+    client.put(
+        f"/reports/{fixed_id}/status",
+        data=json.dumps({"status": "fixed"}),
+        content_type="application/json",
+    )
+    body = client.get("/reports", {"severity": "high"}).json()
+    assert body["total"] == 2
+    assert body["stats"] == {"open": 1, "investigating": 0, "fixed": 1, "closed": 0}
 
 
 def test_detail_json_returns_full_payload(client, metadata_json, png_bytes):
