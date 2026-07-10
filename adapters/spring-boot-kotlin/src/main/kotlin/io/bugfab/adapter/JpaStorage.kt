@@ -9,13 +9,14 @@ import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.Lob
+import jakarta.persistence.LockModeType
 import jakarta.persistence.Table
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Lock
 import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 import org.springframework.transaction.annotation.Transactional
-import java.util.concurrent.atomic.AtomicLong
 
 /**
  * JPA-backed storage. One table with the full report stored as a JSON
@@ -99,6 +100,33 @@ interface BugFabReportRepository : JpaRepository<BugFabReportEntity, String> {
     fun archiveByStatus(@Param("status") status: String): Int
 }
 
+/**
+ * Single-row counter that mints sequential `bug-NNN` ids. Replaces the
+ * process-local `AtomicLong` that could collide across JVM instances and
+ * reissue a deleted id. Incremented under a pessimistic write lock inside
+ * the insert transaction so concurrent submissions serialize.
+ */
+@Entity
+@Table(name = "bug_fab_id_counter")
+class BugFabIdCounterEntity {
+    @Id
+    @Column(name = "id")
+    var id: Int = 1
+
+    @Column(name = "last_value", nullable = false)
+    var lastValue: Long = 0
+}
+
+interface BugFabIdCounterRepository : JpaRepository<BugFabIdCounterEntity, Int> {
+
+    // SELECT ... FOR UPDATE on the single counter row. Valid on both H2
+    // (tests) and Postgres (prod); the lock is held for the enclosing
+    // transaction so the read-increment-write cannot lose an update.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT c FROM BugFabIdCounterEntity c WHERE c.id = 1")
+    fun findAndLock(): BugFabIdCounterEntity?
+}
+
 // `open` is required because the methods are annotated `@Transactional`
 // and Spring proxies them with CGLIB by default (Spring Boot 2.x+ set
 // `spring.aop.proxy-target-class=true`). Kotlin classes are final by
@@ -108,39 +136,43 @@ interface BugFabReportRepository : JpaRepository<BugFabReportEntity, String> {
 // stereotype annotation — so we open it explicitly.
 open class JpaStorage(
     private val repository: BugFabReportRepository,
+    private val counterRepository: BugFabIdCounterRepository,
     private val idPrefix: String = "",
 ) : Storage {
 
     private val mapper: ObjectMapper = jacksonObjectMapper()
-    private val counter = AtomicLong(0)
 
     @Transactional
     override fun saveReport(metadata: Map<String, Any?>, screenshotBytes: ByteArray): String {
-        synchronized(counter) {
-            if (counter.get() == 0L) {
-                // First write of this session — seed the counter from the
-                // highest id already in the DB. Cheap because the count
-                // query hits a primary-key index.
-                val ids = repository.findAll().mapNotNull { parseSeq(it.id) }
-                counter.set(ids.maxOrNull() ?: 0L)
-            }
-            val seq = counter.incrementAndGet()
-            val id = "bug-${idPrefix}${"%03d".format(seq)}"
-            val now = nowIso()
-            val report = buildReport(id, metadata, now)
-            val entity = BugFabReportEntity().apply {
-                this.id = id
-                this.status = report["status"] as String
-                this.severity = report["severity"] as String
-                this.module = report["module"] as String
-                this.environment = report["environment"] as String
-                this.createdAt = now
-                this.payloadJson = mapper.writeValueAsString(report)
-                this.screenshot = screenshotBytes
-            }
-            repository.save(entity)
-            return id
+        // Allocate from the counter row, not COUNT(*)/max: a delete must not
+        // rewind the sequence and reissue a live id. The row is fetched under
+        // a pessimistic write lock held for this transaction, so concurrent
+        // submissions serialize on it rather than racing an in-JVM AtomicLong.
+        val counter = counterRepository.findAndLock() ?: run {
+            // Seed once from the highest existing id so a DB that predates the
+            // counter (e.g. rows minted by the old AtomicLong) doesn't reissue
+            // a taken id.
+            val maxExisting = repository.findAll().mapNotNull { parseSeq(it.id) }.maxOrNull() ?: 0L
+            counterRepository.saveAndFlush(BugFabIdCounterEntity().apply { lastValue = maxExisting })
         }
+        counter.lastValue += 1
+        counterRepository.save(counter)
+        val seq = counter.lastValue
+        val id = "bug-${idPrefix}${"%03d".format(seq)}"
+        val now = nowIso()
+        val report = buildReport(id, metadata, now)
+        val entity = BugFabReportEntity().apply {
+            this.id = id
+            this.status = report["status"] as String
+            this.severity = report["severity"] as String
+            this.module = report["module"] as String
+            this.environment = report["environment"] as String
+            this.createdAt = now
+            this.payloadJson = mapper.writeValueAsString(report)
+            this.screenshot = screenshotBytes
+        }
+        repository.save(entity)
+        return id
     }
 
     @Transactional(readOnly = true)

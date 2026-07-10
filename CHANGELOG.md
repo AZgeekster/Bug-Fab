@@ -72,15 +72,19 @@ out explicitly in each release entry.
 
 ### Fixed
 
-- **The Vapor adapter no longer reuses report ids after a delete.** Its Fluent
-  storage minted ids from `COUNT(*) + 1`; delete `bug-001` from three reports and
-  the next insert computed `bug-003`, colliding with a live row on the primary
-  key and losing the report. Ids now come from a single-row counter incremented
-  by an atomic `UPDATE ... SET last_value = last_value + 1` inside the insert
-  transaction (portable across the SQLite test driver and the Postgres
-  production driver; never `SELECT ... FOR UPDATE`, which is a syntax error on
-  SQLite). **Consumers wiring the Fluent backend must add the new
-  `CreateBugFabIdCounter` migration** alongside `CreateBugFabReport`.
+- **The Vapor and Spring adapters no longer reuse report ids after a delete.**
+  Both allocated ids from a row count / process-local counter: delete `bug-001`
+  from three reports and the next insert computed `bug-003`, colliding with a
+  live row on the primary key and losing the report (Spring's `AtomicLong` also
+  couldn't coordinate across JVM instances). Both now mint ids from a single-row
+  counter that a delete can't rewind — Vapor via an atomic
+  `UPDATE ... SET last_value = last_value + 1` (raw SQL, portable across its
+  SQLite test driver and Postgres prod driver; never `SELECT ... FOR UPDATE`, a
+  SQLite syntax error), Spring via a counter entity fetched under
+  `@Lock(PESSIMISTIC_WRITE)` inside the insert transaction (valid on both H2 and
+  Postgres). **Consumers wiring the Vapor Fluent backend must add the new
+  `CreateBugFabIdCounter` migration** alongside `CreateBugFabReport`; the Spring
+  counter table is created by the adapter's JPA schema management.
 
 - **The `environment` filter on `GET /reports` now works.** It was a silent
   no-op on the file backend (the field was never denormalized into the index
