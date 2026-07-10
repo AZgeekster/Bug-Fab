@@ -18,6 +18,7 @@
 //! a concrete type.
 
 pub mod file;
+pub(crate) mod report;
 #[cfg(feature = "sqlx")]
 pub mod sqlx;
 

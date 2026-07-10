@@ -13,12 +13,11 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 
-use super::{ListFilters, Storage, StorageError};
+use super::{report, ListFilters, Storage, StorageError};
 use crate::schemas::{BugReportDetail, BugReportSummary};
 
 const SCHEMA: &str = r#"
@@ -70,11 +69,6 @@ impl SqlxStorage {
         })
     }
 
-    fn now_iso() -> String {
-        let now: DateTime<Utc> = Utc::now();
-        now.to_rfc3339_opts(chrono::SecondsFormat::Micros, false)
-    }
-
     async fn next_id(&self) -> Result<String, StorageError> {
         let mut tx = self.pool.begin().await?;
         // Init the counter row on first call.
@@ -93,81 +87,6 @@ impl SqlxStorage {
     }
 }
 
-// Reimplement payload assembly inline rather than reach across to
-// `file::FileStorage` private associated functions — keeps the two
-// backends independently testable. See MIGRATION_NOTES.md for the
-// rationale.
-mod payload {
-    use super::*;
-
-    pub(super) fn build_report(report_id: &str, metadata: &Value, now: &str) -> Value {
-        let context = metadata
-            .get("context")
-            .cloned()
-            .unwrap_or_else(|| Value::Object(Default::default()));
-        let reporter_in = metadata
-            .get("reporter")
-            .cloned()
-            .unwrap_or_else(|| Value::Object(Default::default()));
-        let module = metadata
-            .get("module")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .or_else(|| {
-                context
-                    .get("module")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-            })
-            .unwrap_or_default();
-        let environment = metadata
-            .get("environment")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .or_else(|| {
-                context
-                    .get("environment")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-            })
-            .unwrap_or_default();
-        json!({
-            "id": report_id,
-            "protocol_version": metadata.get("protocol_version").cloned().unwrap_or_else(|| Value::String("0.1".into())),
-            "title": metadata.get("title").cloned().unwrap_or_else(|| Value::String(String::new())),
-            "client_ts": metadata.get("client_ts").cloned().unwrap_or_else(|| Value::String(String::new())),
-            "report_type": metadata.get("report_type").cloned().unwrap_or_else(|| Value::String("bug".into())),
-            "description": metadata.get("description").cloned().unwrap_or_else(|| Value::String(String::new())),
-            "expected_behavior": metadata.get("expected_behavior").cloned().unwrap_or_else(|| Value::String(String::new())),
-            "severity": metadata.get("severity").cloned().unwrap_or_else(|| Value::String("medium".into())),
-            "status": "open",
-            "tags": metadata.get("tags").cloned().unwrap_or_else(|| Value::Array(vec![])),
-            "reporter": json!({
-                "name": reporter_in.get("name").cloned().unwrap_or_else(|| Value::String(String::new())),
-                "email": reporter_in.get("email").cloned().unwrap_or_else(|| Value::String(String::new())),
-                "user_id": reporter_in.get("user_id").cloned().unwrap_or_else(|| Value::String(String::new())),
-            }),
-            "context": context,
-            "module": module,
-            "created_at": now,
-            "updated_at": now,
-            "has_screenshot": true,
-            "server_user_agent": metadata.get("server_user_agent").cloned().unwrap_or_else(|| Value::String(String::new())),
-            "client_reported_user_agent": metadata.get("client_reported_user_agent").cloned().unwrap_or_else(|| Value::String(String::new())),
-            "environment": environment,
-            "github_issue_url": Value::Null,
-            "github_issue_number": Value::Null,
-            "lifecycle": [json!({
-                "action": "created",
-                "by": metadata.get("submitted_by").cloned().unwrap_or_else(|| Value::String(String::new())),
-                "at": now,
-                "fix_commit": "",
-                "fix_description": "",
-            })],
-        })
-    }
-}
-
 #[async_trait]
 impl Storage for SqlxStorage {
     async fn save_report(
@@ -176,8 +95,8 @@ impl Storage for SqlxStorage {
         screenshot_bytes: Vec<u8>,
     ) -> Result<String, StorageError> {
         let report_id = self.next_id().await?;
-        let now = Self::now_iso();
-        let report = payload::build_report(&report_id, &metadata, &now);
+        let now = report::now_iso();
+        let report = report::build_report(&report_id, &metadata, &now);
         let payload_text = serde_json::to_string(&report)?;
         let severity = report
             .get("severity")
@@ -314,7 +233,7 @@ impl Storage for SqlxStorage {
             return Ok(None);
         };
         let mut data: Value = serde_json::from_str(&text)?;
-        let now = Self::now_iso();
+        let now = report::now_iso();
         if let Some(obj) = data.as_object_mut() {
             obj.insert("status".to_string(), Value::String(status.to_string()));
             obj.insert("updated_at".to_string(), Value::String(now.clone()));
@@ -357,7 +276,7 @@ impl Storage for SqlxStorage {
     }
 
     async fn archive_report(&self, report_id: &str) -> Result<bool, StorageError> {
-        let now = Self::now_iso();
+        let now = report::now_iso();
         let res = sqlx::query("UPDATE reports SET archived_at = ? WHERE id = ? AND archived_at IS NULL")
             .bind(now)
             .bind(report_id)
@@ -385,7 +304,7 @@ impl Storage for SqlxStorage {
     }
 
     async fn bulk_archive_closed(&self) -> Result<u64, StorageError> {
-        let now = Self::now_iso();
+        let now = report::now_iso();
         let res = sqlx::query(
             "UPDATE reports SET archived_at = ? WHERE status = 'closed' AND archived_at IS NULL",
         )
