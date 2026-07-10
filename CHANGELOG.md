@@ -577,6 +577,20 @@ out explicitly in each release entry.
   a first-class hook into the viewer's inline scripts instead of
   needing to whitelist `'unsafe-inline'` or fork templates.
 
+- **Bump `next` to 14.2.35 in the `examples/nextjs-minimal` POC.**
+  Clears CVE-2025-29927 (critical — middleware authorization bypass via
+  a forged `x-middleware-subrequest` header) plus eight further
+  advisories; nine cleared, none introduced. **This is an example app
+  only — the shipped `bug_fab` package has no Next.js dependency.** The
+  CVE was never reachable in the example itself, which has no
+  `middleware.ts` and gates its admin routes per-handler. It mattered
+  because `src/lib/bug-fab/auth.ts` points production consumers at a
+  `middleware.ts` path matcher, so anyone following that advice on the
+  old pin would have landed on the exploitable pattern. Note that Next
+  14 reached end of life on 2025-10-26 and 14.2.35 is its final
+  security backport — advisories still open against the 14 line have no
+  patch short of a Next 15/16 migration.
+
 ## [0.1.0a1] - 2026-04-27
 
 Initial alpha release. Reserves the `bug-fab` name on PyPI and validates
