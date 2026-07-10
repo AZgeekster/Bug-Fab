@@ -112,10 +112,26 @@ export class DrizzleStorage implements IStorage {
   }
 
   /**
-   * Resolves the next free id. Reads max(id) from DB on first call. NOT safe
-   * across multiple concurrent inserts — wrap in a transaction with a
-   * sequence/identity column for production. This sketch uses a counter so
-   * the FileStorage and DrizzleStorage have analogous shapes.
+   * Resolves the next free id. Reads max(id) from DB on first call, then
+   * increments a process-local counter.
+   *
+   * NOT production-safe, and this is a sketch (the `db` is typed at the
+   * boundary and this file ships without a live drizzle dependency), so the
+   * counter below is illustrative only. Two failure modes to design out in a
+   * real integration:
+   *
+   * 1. **Reuse after delete + restart.** The counter re-seeds from `max(id)`
+   *    on the next process start, so deleting the highest report and restarting
+   *    reissues that id — the protocol says ids are never reused.
+   * 2. **Concurrency.** `counter++` races across concurrent inserts.
+   *
+   * The runnable adapters (Python reference, Phoenix, Rails, Vapor, Spring,
+   * ASP.NET) all fix both with a single-row counter table bumped by an atomic
+   * `UPDATE bug_fab_id_counter SET last_value = last_value + 1` inside the
+   * insert transaction (never `SELECT ... FOR UPDATE`, a SQLite syntax error).
+   * In drizzle that is a raw `sql\`...\`` statement returning the new value; a
+   * database sequence / identity column is the other standard option. Do one of
+   * those before shipping.
    */
   private async nextId(): Promise<string> {
     if (!this.counterLoaded) {
