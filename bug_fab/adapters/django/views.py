@@ -57,6 +57,7 @@ from bug_fab.intake import (
     PayloadTooLarge,
     UnsupportedMediaType,
     UnsupportedProtocolVersion,
+    max_request_bytes,
     validate_payload,
 )
 from bug_fab.intake import (
@@ -133,11 +134,16 @@ def _redact_pii_enabled() -> bool:
     return Settings.from_env().redact_pii
 
 
-def _err(code: str, detail: Any, http_status: int) -> JsonResponse:
-    """Return the protocol-standard ``{"error", "detail"}`` envelope."""
+def _err(code: str, detail: Any, http_status: int, limit_bytes: int | None = None) -> JsonResponse:
+    """Return the protocol-standard ``{"error", "detail"}`` envelope.
+
+    ``limit_bytes`` overrides the value attached to a ``payload_too_large``
+    body — the pre-parse total-request guard reports the whole-body cap,
+    while the per-field screenshot check reports the screenshot cap.
+    """
     body: dict[str, Any] = {"error": code, "detail": detail}
     if code == "payload_too_large":
-        body["limit_bytes"] = _max_upload_bytes()
+        body["limit_bytes"] = limit_bytes if limit_bytes is not None else _max_upload_bytes()
     return JsonResponse(body, status=http_status)
 
 
@@ -238,6 +244,25 @@ def intake_view(request: HttpRequest) -> HttpResponse:
     :func:`bug_fab.adapters.django.github_sync.create_issue` (best-effort,
     failures logged not raised).
     """
+    # Pre-parse size guard: reject by declared Content-Length before
+    # request.POST/request.FILES trigger body parsing. A missing or
+    # non-integer header falls through to the precise per-field caps.
+    declared_length = request.META.get("CONTENT_LENGTH")
+    if declared_length:
+        try:
+            declared = int(declared_length)
+        except ValueError:
+            declared = -1
+        if declared >= 0:
+            max_request = max_request_bytes(_max_upload_bytes(), _max_metadata_bytes())
+            if declared > max_request:
+                return _err(
+                    "payload_too_large",
+                    f"Request body exceeds maximum size of {max_request} bytes",
+                    413,
+                    limit_bytes=max_request,
+                )
+
     metadata_raw = request.POST.get("metadata")
     screenshot_file = request.FILES.get("screenshot")
     if not metadata_raw or screenshot_file is None:

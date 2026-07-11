@@ -15,11 +15,13 @@ from typing import Any
 import pytest
 
 from bug_fab.intake import (
+    MULTIPART_OVERHEAD_BYTES,
     IntakeError,
     PayloadTooLarge,
     UnsupportedMediaType,
     ValidatedPayload,
     ValidationError,
+    max_request_bytes,
     validate_payload,
 )
 from bug_fab.schemas import BugReportCreate
@@ -191,3 +193,13 @@ def test_missing_content_type_raises_415(tiny_png: bytes) -> None:
             request_user_agent=None,
         )
     assert exc_info.value.status_code == 415
+
+
+def test_max_request_bytes_sums_caps_plus_overhead() -> None:
+    """The pre-parse total bound is screenshot + metadata caps + framing slack."""
+    screenshot_cap = 10 * 1024 * 1024
+    metadata_cap = 256 * 1024
+    assert (
+        max_request_bytes(screenshot_cap, metadata_cap)
+        == screenshot_cap + metadata_cap + MULTIPART_OVERHEAD_BYTES
+    )

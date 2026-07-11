@@ -205,6 +205,29 @@ def test_submit_rejects_oversized_screenshot_with_413(
     assert "limit_bytes" in body
 
 
+def test_submit_rejects_oversized_content_length_before_parse(tmp_path: Path) -> None:
+    """S5: a body over the total cap is rejected 413 by Content-Length before
+    request.form/request.files parse it.
+
+    The body is not valid multipart, so only the pre-parse guard can yield
+    413 — a reverted guard would parse (and find no fields), returning the
+    400 "metadata and screenshot are both required" error.
+    """
+    settings = Settings(storage_dir=tmp_path / "bug_reports", max_upload_mb=1)
+    _, client = _make_app(tmp_path=tmp_path, settings=settings)
+    oversized = b"x" * (2 * 1024 * 1024)  # > 1 MiB + 256 KiB + framing cap
+    resp = client.post(
+        "/bug-fab/bug-reports",
+        data=oversized,
+        content_type="multipart/form-data; boundary=zzz",
+    )
+    assert resp.status_code == 413
+    body = resp.get_json()
+    assert body["error"] == "payload_too_large"
+    expected = 1 * 1024 * 1024 + settings.max_metadata_kb * 1024 + 16 * 1024
+    assert body["limit_bytes"] == expected
+
+
 # -----------------------------------------------------------------------------
 # Viewer JSON paths
 # -----------------------------------------------------------------------------

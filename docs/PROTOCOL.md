@@ -163,7 +163,7 @@ Adapters MUST capture the request-header `User-Agent` independently and MUST NOT
 | Metadata JSON | 256 KiB recommended | Console / network buffers dominate. Adapters SHOULD truncate or cap individual buffer entries (e.g., last 50 console errors, last 50 network entries) before payload assembly on the client side. |
 | Total request | 11 MiB recommended | Sum of caps + multipart overhead. Adapters MAY enforce stricter limits. |
 
-When a limit is exceeded, the adapter MUST return `413` with the documented error shape, including a `limit_bytes` field that names the actual cap.
+When a limit is exceeded, the adapter MUST return `413` with the documented error shape, including a `limit_bytes` field that names the actual cap. Adapters SHOULD check the request's declared `Content-Length` against the total-request cap and reject *before* buffering the body, so the cap protects the resource it bounds; the per-field caps still apply after parsing. A request without `Content-Length` (chunked transfer) is bounded only by the per-field caps and by the front-door server (reverse proxy, ASGI/WSGI limits).
 
 ### Response — `201 Created`
 

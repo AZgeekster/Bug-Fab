@@ -130,6 +130,16 @@ out explicitly in each release entry.
   non-Python adapters carry the same raw-header trust and are tracked
   separately.
 
+- **Oversized uploads are now rejected by `Content-Length` before the body is
+  parsed.** The size caps previously ran only after the framework had buffered
+  the whole multipart body, so the cap couldn't protect the memory it bounds. A
+  request whose declared `Content-Length` exceeds the combined screenshot +
+  metadata cap now returns `413 payload_too_large` before the body is read, on
+  the FastAPI, Flask, and Django adapters. The precise per-field `413`s are
+  unchanged. A body sent without `Content-Length` (chunked transfer) still
+  reaches the per-field checks — hard transport-level limits belong at the
+  reverse proxy / ASGI/WSGI server.
+
 - **The Django adapter no longer leaks a `total` key in the JSON `stats`
   block.** `GET /reports` emitted a fifth `total` key the reference and Flask
   adapters strip; the JSON contract is the four lifecycle states only. (The

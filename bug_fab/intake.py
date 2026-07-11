@@ -36,6 +36,30 @@ _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 #: ``400 unsupported_protocol_version``.
 PROTOCOL_VERSION = "0.1"
 
+#: Fixed allowance added to the sum of the field caps when computing the
+#: pre-parse ``Content-Length`` bound. Covers multipart framing — the
+#: boundary lines and per-part headers that ride alongside the two fields —
+#: so a request sized at exactly the field caps is not rejected by the
+#: coarse guard before the precise per-field checks can run.
+MULTIPART_OVERHEAD_BYTES = 16 * 1024
+
+
+def max_request_bytes(max_screenshot_bytes: int, max_metadata_bytes: int) -> int:
+    """Coarse total-body bound for the pre-parse ``Content-Length`` guard.
+
+    Adapters check the request's declared ``Content-Length`` against this
+    value *before* the framework buffers the body, so an absurdly large
+    upload is rejected without being read into memory or spooled to disk.
+    It is deliberately loose — the sum of the screenshot and metadata caps
+    plus :data:`MULTIPART_OVERHEAD_BYTES` — because the precise per-field
+    ``413`` responses still fire after parsing and produce the exact error.
+    A body with no ``Content-Length`` (chunked transfer) bypasses this
+    guard and is bounded only by the post-parse field checks; front-door
+    limits (nginx ``client_max_body_size``, the ASGI/WSGI server) remain
+    the right answer for hard transport-level enforcement.
+    """
+    return max_screenshot_bytes + max_metadata_bytes + MULTIPART_OVERHEAD_BYTES
+
 
 class IntakeError(Exception):
     """Base class for protocol intake validation failures.

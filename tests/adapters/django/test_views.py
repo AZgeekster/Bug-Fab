@@ -85,6 +85,28 @@ def test_intake_rejects_non_png_bytes(client, metadata_json):
     assert response.json()["error"] == "unsupported_media_type"
 
 
+def test_intake_rejects_oversized_content_length_before_parse(client, monkeypatch):
+    """S5: Content-Length over the total cap yields 413 before request.POST
+    parses the body.
+
+    The body is not valid multipart, so only the pre-parse guard produces a
+    413 here; a reverted guard would parse it (finding no fields) and return
+    the 400 "metadata and screenshot are both required" error.
+    """
+    monkeypatch.setenv("BUG_FAB_MAX_UPLOAD_BYTES", str(1 * 1024 * 1024))
+    oversized = b"x" * (2 * 1024 * 1024)  # under the 12 MiB DATA_UPLOAD cap
+    response = client.post(
+        "/bug-reports",
+        data=oversized,
+        content_type="multipart/form-data; boundary=zzz",
+    )
+    assert response.status_code == 413
+    body = response.json()
+    assert body["error"] == "payload_too_large"
+    expected = 1 * 1024 * 1024 + 256 * 1024 + 16 * 1024
+    assert body["limit_bytes"] == expected
+
+
 def test_intake_rejects_invalid_severity(client, png_bytes):
     payload = json.loads(
         '{"protocol_version":"0.1","title":"x","client_ts":"2026-04-27T00:00:00Z","severity":"urgent"}'

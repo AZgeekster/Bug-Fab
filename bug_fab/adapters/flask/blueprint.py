@@ -50,6 +50,7 @@ from bug_fab.intake import (
     IntakeError,
     PayloadTooLarge,
     UnsupportedMediaType,
+    max_request_bytes,
     validate_payload,
 )
 from bug_fab.intake import (
@@ -311,6 +312,24 @@ def make_blueprint(
                 429,
                 retry_after_seconds=settings.rate_limit_window_seconds,
             )
+
+        # Pre-parse size guard: reject by declared Content-Length before
+        # touching request.form/request.files, which parse the body lazily
+        # on first access. A missing header falls through to the precise
+        # per-field caps in validate_payload.
+        declared_length = request.content_length
+        if declared_length is not None:
+            max_request = max_request_bytes(
+                settings.max_upload_mb * 1024 * 1024,
+                settings.max_metadata_kb * 1024,
+            )
+            if declared_length > max_request:
+                return _error(
+                    "payload_too_large",
+                    f"Request body exceeds maximum size of {max_request} bytes",
+                    413,
+                    limit_bytes=max_request,
+                )
 
         metadata_raw = request.form.get("metadata")
         screenshot_file = request.files.get("screenshot")

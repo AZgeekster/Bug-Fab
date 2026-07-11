@@ -25,11 +25,12 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Container
+from collections.abc import Awaitable, Callable, Container
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from bug_fab._observability import EVENT_REPORT_RECEIVED
@@ -37,7 +38,7 @@ from bug_fab._observability import emit as emit_event
 from bug_fab._rate_limit import RateLimiter, resolve_client_ip
 from bug_fab._redact import redact_report
 from bug_fab.config import Settings
-from bug_fab.intake import UnsupportedProtocolVersion, check_protocol_version
+from bug_fab.intake import UnsupportedProtocolVersion, check_protocol_version, max_request_bytes
 from bug_fab.integrations.github import GitHubSync
 from bug_fab.integrations.webhook import WebhookSync
 from bug_fab.routers._errors import protocol_error
@@ -46,7 +47,49 @@ from bug_fab.storage.base import Storage
 
 logger = logging.getLogger(__name__)
 
-submit_router = APIRouter(tags=["bug-fab"])
+
+class _ContentLengthLimitedRoute(APIRoute):
+    """Reject an oversized request by its declared ``Content-Length``.
+
+    FastAPI parses the multipart body *before* the path operation (and
+    before any dependency) runs, so an in-handler size check cannot stop
+    the body from being buffered. This custom route wraps the handler and
+    inspects ``Content-Length`` first, returning the protocol ``413``
+    envelope without ever reading the body. A missing header (chunked
+    transfer) or a non-integer value falls through to the normal handler,
+    where the precise per-field caps still apply. See
+    :func:`bug_fab.intake.max_request_bytes`.
+    """
+
+    def get_route_handler(self) -> Callable[[Request], Awaitable[Response]]:
+        original = super().get_route_handler()
+
+        async def limited(request: Request) -> Response:
+            raw = request.headers.get("content-length")
+            if raw is not None:
+                try:
+                    declared = int(raw)
+                except ValueError:
+                    declared = -1
+                if declared >= 0:
+                    settings = get_settings()
+                    limit = max_request_bytes(
+                        settings.max_upload_mb * 1024 * 1024,
+                        settings.max_metadata_kb * 1024,
+                    )
+                    if declared > limit:
+                        return protocol_error(
+                            status.HTTP_413_CONTENT_TOO_LARGE,
+                            "payload_too_large",
+                            f"Request body exceeds maximum size of {limit} bytes",
+                            limit_bytes=limit,
+                        )
+            return await original(request)
+
+        return limited
+
+
+submit_router = APIRouter(tags=["bug-fab"], route_class=_ContentLengthLimitedRoute)
 
 #: Magic-byte signature for the only image format accepted on intake.
 #: PROTOCOL.md v0.1 locks the screenshot media type to ``image/png``;

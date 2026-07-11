@@ -16,6 +16,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
+import bug_fab.routers.submit as submit_module
 from bug_fab._rate_limit import RateLimiter
 
 
@@ -371,6 +374,37 @@ def test_spoofed_forwarded_for_does_not_evade_rate_limit(
         headers={"X-Forwarded-For": "10.0.0.2"},
     )
     assert second.status_code == 429
+
+
+def test_oversized_content_length_rejected_before_parse(
+    app_factory, settings_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S5: a body whose Content-Length exceeds the total cap is rejected 413
+    before the multipart body is parsed.
+
+    Proven by sending a body that is NOT valid multipart: only the
+    pre-parse guard can produce a 413 here — the per-field size checks
+    never run because the body would fail parsing first (a reverted guard
+    yields a 4xx parse/validation error, not 413).
+    """
+    settings = settings_factory(max_upload_mb=1)  # total cap ~1.27 MiB
+    # The custom route reads settings via the module-level get_settings(),
+    # which the configure() path populates in production; dependency
+    # overrides (used by app_factory) don't reach it, so set it directly.
+    monkeypatch.setattr(submit_module, "_SETTINGS", settings)
+    client = app_factory(settings=settings)
+
+    oversized = b"x" * (2 * 1024 * 1024)
+    response = client.post(
+        "/bug-reports",
+        content=oversized,
+        headers={"content-type": "multipart/form-data; boundary=zzz"},
+    )
+    assert response.status_code == 413
+    body = response.json()
+    assert body["error"] == "payload_too_large"
+    expected = 1 * 1024 * 1024 + settings.max_metadata_kb * 1024 + 16 * 1024
+    assert body["limit_bytes"] == expected
 
 
 # -----------------------------------------------------------------------------
