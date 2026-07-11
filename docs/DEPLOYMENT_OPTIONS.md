@@ -401,9 +401,33 @@ rather than user accountability.
 BUG_FAB_RATE_LIMIT_ENABLED=true
 BUG_FAB_RATE_LIMIT_MAX=50              # requests per window per IP
 BUG_FAB_RATE_LIMIT_WINDOW_SECONDS=3600 # 1 hour
+BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES=    # comma-separated proxy IPs; empty = trust none
 ```
 
 When exceeded, the intake endpoint returns `429 Too Many Requests`.
+
+### `X-Forwarded-For` and trusted proxies
+
+The limiter keys on the client IP. `X-Forwarded-For` is client-controlled
+and trivially spoofed — an attacker who rotates the header on every request
+lands in a fresh bucket each time and defeats the limiter entirely. So the
+header is honored **only** when the direct connection comes from a proxy you
+list in `BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES`:
+
+```bash
+# nginx / Cloudflare / a load balancer terminates TLS at these IPs:
+BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES=10.0.0.1,10.0.0.2
+```
+
+- **Empty (the default)** — the header is ignored and the limiter keys on
+  the direct peer address. This is the safe default: it can never be spoofed,
+  but every client behind the same proxy shares one bucket, so set the
+  trusted-proxy list when you run behind a reverse proxy.
+- **`*`** — trust every peer's `X-Forwarded-For`. Use only when *every*
+  request is guaranteed to arrive through a proxy you control; otherwise it
+  reopens the spoofing hole.
+
+Only the first hop of `X-Forwarded-For` is read.
 
 **Per-user rate limiting** lands in v0.2 alongside `AuthAdapter`. At
 that point the default flips from off-by-default to per-user with a

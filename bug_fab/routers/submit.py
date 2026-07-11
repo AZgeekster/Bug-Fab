@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Container
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
@@ -33,7 +34,7 @@ from pydantic import ValidationError
 
 from bug_fab._observability import EVENT_REPORT_RECEIVED
 from bug_fab._observability import emit as emit_event
-from bug_fab._rate_limit import RateLimiter
+from bug_fab._rate_limit import RateLimiter, resolve_client_ip
 from bug_fab._redact import redact_report
 from bug_fab.config import Settings
 from bug_fab.intake import UnsupportedProtocolVersion, check_protocol_version
@@ -159,20 +160,16 @@ def get_rate_limiter() -> RateLimiter | None:
     return _RATE_LIMITER
 
 
-def _client_ip(request: Request) -> str:
-    """Best-effort source-IP extraction.
+def _client_ip(request: Request, trusted_proxies: Container[str]) -> str:
+    """Best-effort source-IP extraction for the rate-limit key.
 
-    Honors ``X-Forwarded-For`` (first hop) when present so deployments
-    behind a reverse proxy still meter per-end-user. Falls back to the
-    direct peer address. Returns ``"unknown"`` when nothing is available
-    so the limiter still sees a stable key.
+    Delegates the ``X-Forwarded-For`` trust decision to
+    :func:`bug_fab._rate_limit.resolve_client_ip`: the header is honored
+    only when the direct peer is a configured trusted proxy, so a spoofed
+    header cannot mint a fresh bucket per request.
     """
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
+    peer = request.client.host if request.client else None
+    return resolve_client_ip(peer, request.headers.get("x-forwarded-for"), trusted_proxies)
 
 
 def _is_png(payload: bytes) -> bool:
@@ -213,7 +210,9 @@ async def submit_bug_report(
     returns a ``Response``, and the response's own status wins over the
     decorator's ``status_code=201``. See :mod:`bug_fab.routers._errors`.
     """
-    if limiter is not None and not limiter.check(_client_ip(request)):
+    if limiter is not None and not limiter.check(
+        _client_ip(request, settings.rate_limit_trusted_proxies)
+    ):
         return protocol_error(
             status.HTTP_429_TOO_MANY_REQUESTS,
             "rate_limited",
@@ -344,7 +343,7 @@ async def submit_bug_report(
         module=detail.module,
         environment=environment,
         has_screenshot=detail.has_screenshot,
-        client_ip=_client_ip(request),
+        client_ip=_client_ip(request, settings.rate_limit_trusted_proxies),
     )
 
     # GitHub sync is best-effort. A failed POST does not roll back the

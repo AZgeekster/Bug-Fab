@@ -45,6 +45,14 @@ def _env_str(name: str, default: str) -> str:
     return raw
 
 
+def _env_str_set(name: str) -> frozenset[str]:
+    """Parse a comma-separated env var into a set, dropping blank entries."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return frozenset()
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
+
+
 def _env_float(name: str, default: float) -> float:
     """Parse a float env var, falling back to the default on missing/invalid."""
     raw = os.environ.get(name)
@@ -92,6 +100,14 @@ class Settings:
     rate_limit_enabled: bool = False
     rate_limit_max: int = 50
     rate_limit_window_seconds: int = 3600
+    #: Direct-peer addresses allowed to supply ``X-Forwarded-For`` for the
+    #: rate-limit key. ``X-Forwarded-For`` is client-controlled and spoofable,
+    #: so it is honored only when the connecting peer is in this set; empty
+    #: (the secure default) meters by the direct peer address and ignores the
+    #: header entirely. The wildcard ``"*"`` trusts every peer — set it only
+    #: when every request is terminated behind a proxy you control. See
+    #: ``bug_fab._rate_limit.resolve_client_ip``.
+    rate_limit_trusted_proxies: frozenset[str] = frozenset()
     viewer_enabled: bool = True
     viewer_page_size: int = 20
     github_enabled: bool = False
@@ -155,6 +171,7 @@ class Settings:
             "rate_limit_enabled": _env_bool("BUG_FAB_RATE_LIMIT_ENABLED", False),
             "rate_limit_max": _env_int("BUG_FAB_RATE_LIMIT_MAX", 50),
             "rate_limit_window_seconds": _env_int("BUG_FAB_RATE_LIMIT_WINDOW_SECONDS", 3600),
+            "rate_limit_trusted_proxies": _env_str_set("BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES"),
             "viewer_enabled": _env_bool("BUG_FAB_VIEWER_ENABLED", True),
             "viewer_page_size": _env_int("BUG_FAB_VIEWER_PAGE_SIZE", 20),
             "github_enabled": _env_bool("BUG_FAB_GITHUB_ENABLED", False),

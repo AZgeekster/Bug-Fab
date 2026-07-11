@@ -177,6 +177,7 @@ All knobs have `BUG_FAB_*` env vars; the alternative is to build a
 BUG_FAB_STORAGE_DIR=/var/bug-fab/reports
 BUG_FAB_RATE_LIMIT_ENABLED=true
 BUG_FAB_RATE_LIMIT_MAX=50
+BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES=  # proxy IPs allowed to set X-Forwarded-For
 BUG_FAB_VIEWER_PAGE_SIZE=20
 BUG_FAB_GITHUB_ENABLED=false
 ```

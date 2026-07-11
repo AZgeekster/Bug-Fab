@@ -31,12 +31,13 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Container
 from typing import Any
 
 from flask import Blueprint, Response, abort, jsonify, render_template, request, send_from_directory
 from pydantic import ValidationError
 
-from bug_fab._rate_limit import RateLimiter
+from bug_fab._rate_limit import RateLimiter, resolve_client_ip
 from bug_fab._redact import redact_report
 from bug_fab._report_id import REPORT_ID_RE
 from bug_fab.adapters.flask._runtime import (
@@ -68,20 +69,17 @@ logger = logging.getLogger(__name__)
 _REPORT_ID_RE = REPORT_ID_RE
 
 
-def _client_ip() -> str:
-    """Best-effort source-IP extraction — mirrors FastAPI router's helper.
+def _client_ip(trusted_proxies: Container[str]) -> str:
+    """Best-effort source-IP extraction — mirrors the FastAPI router's helper.
 
-    Honors ``X-Forwarded-For`` (first hop) when present so deployments
-    behind a reverse proxy still meter per-end-user. Falls back to
-    Flask's ``request.remote_addr``. Returns ``"unknown"`` when nothing
-    is available so the limiter still sees a stable key.
+    Delegates the ``X-Forwarded-For`` trust decision to
+    :func:`bug_fab._rate_limit.resolve_client_ip`: the header is honored
+    only when Flask's ``request.remote_addr`` is a configured trusted
+    proxy, so a spoofed header cannot mint a fresh bucket per request.
     """
-    forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
-        first = forwarded.split(",", 1)[0].strip()
-        if first:
-            return first
-    return request.remote_addr or "unknown"
+    return resolve_client_ip(
+        request.remote_addr, request.headers.get("X-Forwarded-For"), trusted_proxies
+    )
 
 
 def _error(code: str, detail: Any, status_code: int, **extra: Any) -> tuple[Response, int]:
@@ -301,7 +299,9 @@ def make_blueprint(
     @bp.post("/bug-reports")
     def submit_bug_report() -> tuple[Response, int]:
         """Persist a new bug report per ``docs/PROTOCOL.md`` § Intake."""
-        if rate_limiter is not None and not rate_limiter.check(_client_ip()):
+        if rate_limiter is not None and not rate_limiter.check(
+            _client_ip(settings.rate_limit_trusted_proxies)
+        ):
             return _error(
                 "rate_limited",
                 (

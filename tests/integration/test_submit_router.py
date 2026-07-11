@@ -341,6 +341,38 @@ def test_rate_limit_returns_429_when_exceeded(
     assert "rate limit" in response.text.lower()
 
 
+def test_spoofed_forwarded_for_does_not_evade_rate_limit(
+    app_factory, settings_factory, tiny_png: bytes
+) -> None:
+    """S3f: with no trusted proxies, a rotating ``X-Forwarded-For`` cannot mint
+    a fresh bucket per request — the untrusted peer address keys the limiter."""
+    settings = settings_factory(
+        rate_limit_enabled=True,
+        rate_limit_max=1,
+        rate_limit_window_seconds=60,
+    )
+    limiter = RateLimiter(max_per_window=1, window_seconds=60)
+    client = app_factory(settings=settings, rate_limiter=limiter)
+
+    payload = json.dumps(_baseline_metadata())
+    files = {"screenshot": ("shot.png", tiny_png, "image/png")}
+    first = client.post(
+        "/bug-reports",
+        data={"metadata": payload},
+        files=files,
+        headers={"X-Forwarded-For": "10.0.0.1"},
+    )
+    assert first.status_code == 201
+    # A different spoofed header from the same (untrusted) peer is still capped.
+    second = client.post(
+        "/bug-reports",
+        data={"metadata": payload},
+        files=files,
+        headers={"X-Forwarded-For": "10.0.0.2"},
+    )
+    assert second.status_code == 429
+
+
 # -----------------------------------------------------------------------------
 # Protocol error envelope (PROTOCOL.md § Error response shape)
 #

@@ -112,6 +112,24 @@ out explicitly in each release entry.
   Filtering by `severity=critical` now reports each status count *within* that
   filter. The four lifecycle states are still always present.
 
+- **Enabling the rate limiter is no longer a memory-exhaustion sink.** The
+  per-IP limiter (FastAPI + Flask) never removed a key once it was created, so
+  a client cycling through source addresses grew the tracking map without
+  bound. Idle buckets are now evicted by a sweep that runs at most once per
+  window. Behavior for a steady set of clients is unchanged.
+
+- **`X-Forwarded-For` is no longer trusted unconditionally as the rate-limit
+  key.** The header is client-controlled and spoofable: rotating it per request
+  minted a fresh bucket each time and defeated the limiter entirely. It is now
+  honored only when the direct peer is listed in the new
+  `rate_limit_trusted_proxies` setting (env `BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES`,
+  comma-separated; `*` trusts all). **Behavior change:** the default is empty,
+  so a deployment behind a reverse proxy that relied on per-end-user metering
+  now meters per-proxy until it lists its proxy IPs. Set the variable to restore
+  per-client metering. Applies to the FastAPI and Flask adapters; the
+  non-Python adapters carry the same raw-header trust and are tracked
+  separately.
+
 - **The Django adapter no longer leaks a `total` key in the JSON `stats`
   block.** `GET /reports` emitted a fifth `total` key the reference and Flask
   adapters strip; the JSON contract is the four lifecycle states only. (The
