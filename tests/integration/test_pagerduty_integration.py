@@ -28,8 +28,6 @@ harness shape ``test_slack_integration`` uses. The tests verify that:
 
 from __future__ import annotations
 
-import asyncio
-import json
 from typing import Any
 
 import httpx
@@ -45,11 +43,29 @@ from bug_fab.integrations.pagerduty import (
     SEVERITY_MAP,
     PagerDutySync,
 )
+from tests._helpers import (
+    clear_env_prefix,
+    install_capturing_async_client,
+)
+from tests._helpers import (
+    decode_json_body as _decode_body,
+)
+from tests._helpers import (
+    make_report_detail as _make_report,
+)
+from tests._helpers import (
+    run_coro as _run,
+)
 
 
-def _run(coro: Any) -> Any:
-    """Drive an async coroutine on a fresh event loop, matching slack tests."""
-    return asyncio.new_event_loop().run_until_complete(coro)
+@pytest.fixture(autouse=True)
+def _hermetic_pagerduty_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Strip pre-existing ``BUG_FAB_PAGERDUTY_*`` vars so ``from_env`` tests are hermetic.
+
+    The tests used to ``delenv`` only the variables they named and failed
+    spuriously on machines exporting other ``BUG_FAB_PAGERDUTY_*`` values.
+    """
+    clear_env_prefix(monkeypatch, "BUG_FAB_PAGERDUTY_")
 
 
 def _make_sync_with_transport(
@@ -67,24 +83,7 @@ def _make_sync_with_transport(
     Returns ``(sync, captured_requests)``; the list is appended to in
     order so post-hoc assertions can inspect headers and decoded body.
     """
-    captured: list[httpx.Request] = []
-
-    def _wrapped(request: httpx.Request) -> httpx.Response:
-        captured.append(request)
-        return handler(request)
-
-    transport = httpx.MockTransport(_wrapped)
-
-    import bug_fab.integrations._base as delivery_base
-
-    real_client = httpx.AsyncClient
-
-    class _MockClient(real_client):  # type: ignore[misc, valid-type]
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            kwargs["transport"] = transport
-            super().__init__(*args, **kwargs)
-
-    delivery_base.httpx.AsyncClient = _MockClient  # type: ignore[attr-defined]
+    captured = install_capturing_async_client(handler)
     sync = PagerDutySync(
         integration_key=integration_key,
         escalate_severities=escalate_severities,
@@ -94,40 +93,6 @@ def _make_sync_with_transport(
         dedup_prefix=dedup_prefix,
     )
     return sync, captured
-
-
-@pytest.fixture(autouse=True)
-def _restore_httpx_async_client() -> Any:
-    """Restore ``httpx.AsyncClient`` after every test to avoid bleed-through."""
-    import bug_fab.integrations._base as delivery_base
-
-    original = delivery_base.httpx.AsyncClient
-    yield
-    delivery_base.httpx.AsyncClient = original
-
-
-def _make_report(**overrides: Any) -> dict[str, Any]:
-    """Synthetic ``BugReportDetail``-shaped dict used as test input."""
-    base: dict[str, Any] = {
-        "id": "bug-001",
-        "title": "Login button does not respond",
-        "report_type": "bug",
-        "severity": "critical",
-        "status": "open",
-        "module": "auth",
-        "created_at": "2026-05-20T12:00:00+00:00",
-        "description": "Clicking the login button does nothing on Firefox 130.",
-        "environment": "production",
-        "reporter": {"name": "Alice", "email": "", "user_id": ""},
-        "github_issue_url": None,
-    }
-    base.update(overrides)
-    return base
-
-
-def _decode_body(req: httpx.Request) -> dict[str, Any]:
-    """Read + JSON-decode a captured request's body."""
-    return json.loads(req.content.decode("utf-8"))
 
 
 def test_default_timeout_is_ten_seconds() -> None:

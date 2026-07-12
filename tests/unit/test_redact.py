@@ -65,8 +65,13 @@ def test_redact_text_empty_string_passthrough() -> None:
 
 
 def test_redact_text_none_safe() -> None:
-    """Defensive: the helper shouldn't crash on falsy non-strings either."""
-    assert redact_text("") == ""
+    """Defensive: the helper shouldn't crash on falsy non-strings either.
+
+    ``None`` short-circuits the falsy guard and comes back unchanged — the
+    previous version of this test was a verbatim copy of the empty-string
+    test above and never actually passed ``None``.
+    """
+    assert redact_text(None) is None  # type: ignore[arg-type]
 
 
 def test_redact_report_is_pure_no_mutation() -> None:

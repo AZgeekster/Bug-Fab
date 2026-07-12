@@ -12,13 +12,14 @@ coverage when the dependency is present.
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 import os
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+from tests._helpers import run_coro as _run
 
 PG_DSN = os.environ.get("BUG_FAB_TEST_POSTGRES_URL")
 
@@ -33,10 +34,6 @@ pytestmark = pytest.mark.skipif(
         "Set both to run this module."
     ),
 )
-
-
-def _run(coro):  # type: ignore[no-untyped-def]
-    return asyncio.new_event_loop().run_until_complete(coro)
 
 
 def _baseline_metadata(**overrides: Any) -> dict[str, Any]:

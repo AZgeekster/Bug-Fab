@@ -16,29 +16,18 @@ import json
 import re
 from typing import Any
 
+from tests._helpers import baseline_metadata
+
 
 def _baseline_metadata(**overrides: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "protocol_version": "0.1",
+    defaults: dict[str, Any] = {
         "title": "CSP nonce test report",
-        "client_ts": "2026-04-29T12:00:00+00:00",
-        "report_type": "bug",
         "description": "csp nonce seed",
-        "severity": "medium",
         "tags": ["csp-test"],
-        "context": {
-            "url": "/x",
-            "module": "modA",
-            "user_agent": "client-ua/1.0",
-            "viewport_width": 1024,
-            "viewport_height": 768,
-            "console_errors": [],
-            "network_log": [],
-            "environment": "dev",
-        },
+        "context": {"url": "/x", "module": "modA", "user_agent": "client-ua/1.0"},
     }
-    payload.update(overrides)
-    return payload
+    defaults.update(overrides)
+    return baseline_metadata(**defaults)
 
 
 def _seed(client, tiny_png: bytes) -> str:

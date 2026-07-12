@@ -21,6 +21,8 @@ import httpx
 import pytest
 from playwright.sync_api import Page, expect
 
+from tests._helpers import make_test_png
+
 # Five seeded reports give the filter pills, bulk actions, and pagination
 # something to act on. Severities cover both ends of the enum.
 SEEDED = [
@@ -36,12 +38,7 @@ SEEDED = [
 def seeded_reports(app_server):
     base = app_server["base_url"]
     ids: list[str] = []
-    # Tiny 1x1 PNG.
-    png = (
-        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\xdac\xf8\x0f"
-        b"\x00\x01\x05\x01\x02 \x00\x01\x18\x05\x90\x14\x00\x00\x00\x00IEND\xaeB`\x82"
-    )
+    png = make_test_png(1, 1)
     with httpx.Client(base_url=base, timeout=10) as client:
         for s in SEEDED:
             metadata = {

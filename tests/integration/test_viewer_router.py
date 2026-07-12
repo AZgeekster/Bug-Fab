@@ -14,33 +14,23 @@ intake endpoint stays at ``/bug-reports``.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import pytest
 
+from tests._helpers import baseline_metadata
+
 
 def _baseline_metadata(**overrides: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "protocol_version": "0.1",
+    defaults: dict[str, Any] = {
         "title": "Test viewer report",
-        "client_ts": "2026-04-29T12:00:00+00:00",
-        "report_type": "bug",
         "description": "viewer test seed",
-        "severity": "medium",
         "tags": ["viewer-test"],
-        "context": {
-            "url": "/x",
-            "module": "modA",
-            "user_agent": "client-ua/1.0",
-            "viewport_width": 1024,
-            "viewport_height": 768,
-            "console_errors": [],
-            "network_log": [],
-            "environment": "dev",
-        },
+        "context": {"url": "/x", "module": "modA", "user_agent": "client-ua/1.0"},
     }
-    payload.update(overrides)
-    return payload
+    defaults.update(overrides)
+    return baseline_metadata(**defaults)
 
 
 def _seed(client, tiny_png: bytes, **overrides: Any) -> str:
@@ -121,8 +111,11 @@ def test_detail_view_blocks_unsafe_url_schemes(
     # inside an HTML-escaped <span> per the safe-URL allowlist UX, but never
     # inside a clickable href="...".
     assert f'href="{context_url}"' not in body
-    # The Reproduce button is suppressed when the URL is unsafe.
-    assert ">Reproduce<" not in body and ">\n          Reproduce" not in body
+    # The Reproduce button is suppressed when the URL is unsafe. Match the
+    # element text whitespace-agnostically — the old exact-indentation match
+    # turned into a tautology on any template reindent, passing even if a
+    # live javascript: link regressed.
+    assert not re.search(r">\s*Reproduce\s*<", body)
 
 
 def test_detail_view_renders_safe_url_as_href(app_factory, tiny_png: bytes) -> None:

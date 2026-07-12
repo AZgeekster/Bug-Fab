@@ -10,7 +10,6 @@ pytest test bodies stay readable.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -18,11 +17,7 @@ from typing import Any
 import pytest
 
 from bug_fab.storage.files import _REPORT_ID_RE, FileStorage
-
-
-def _run(coro):  # type: ignore[no-untyped-def]
-    """Run a coroutine in a fresh event loop and return its value."""
-    return asyncio.new_event_loop().run_until_complete(coro)
+from tests._helpers import run_coro as _run
 
 
 def _baseline_metadata(**overrides: Any) -> dict[str, Any]:

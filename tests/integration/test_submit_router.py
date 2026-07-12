@@ -20,29 +20,15 @@ import pytest
 
 import bug_fab.routers.submit as submit_module
 from bug_fab._rate_limit import RateLimiter
+from tests._helpers import baseline_metadata
 
 
 def _baseline_metadata() -> dict[str, Any]:
-    return {
-        "protocol_version": "0.1",
-        "title": "Submit form does not clear after success",
-        "client_ts": "2026-04-29T12:00:00+00:00",
-        "report_type": "bug",
-        "description": "Steps: open page; submit; observe stale form fields.",
-        "expected_behavior": "Form clears on successful submission.",
-        "severity": "medium",
-        "tags": ["regression", "ui"],
-        "context": {
-            "url": "http://localhost/sample/path",
-            "module": "sample",
+    return baseline_metadata(
+        context={
             "user_agent": "client-supplied-ua/1.0",
-            "viewport_width": 1280,
-            "viewport_height": 720,
-            "console_errors": [],
-            "network_log": [],
-            "environment": "dev",
         },
-    }
+    )
 
 
 # -----------------------------------------------------------------------------

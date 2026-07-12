@@ -7,7 +7,6 @@ Alembic upgrade path against a fresh DB.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -20,10 +19,7 @@ from bug_fab.storage._models import (
     BugReportLifecycle,
 )
 from bug_fab.storage.sqlite import SQLiteStorage
-
-
-def _run(coro):  # type: ignore[no-untyped-def]
-    return asyncio.new_event_loop().run_until_complete(coro)
+from tests._helpers import run_coro as _run
 
 
 def _baseline_metadata(**overrides: Any) -> dict[str, Any]:
