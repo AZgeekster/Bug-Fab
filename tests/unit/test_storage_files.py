@@ -487,3 +487,89 @@ def test_ids_persist_across_storage_instances(file_storage_factory, tiny_png: by
     storage_b = file_storage_factory(subdir="persist")
     third = _run(storage_b.save_report(_baseline_metadata(), tiny_png))
     assert third == "bug-003"
+
+
+@pytest.mark.parametrize("bad_prefix", ["PROD", "P/", "../", "1", "p2"])
+def test_invalid_id_prefix_rejected_at_construction(tmp_path, bad_prefix: str) -> None:
+    """A prefix longer than one letter mints ids the shape guard rejects —
+    and a separator-bearing one escapes the flat path layout. Both must
+    fail at construction, before anything is written."""
+    with pytest.raises(ValueError, match="id_prefix"):
+        FileStorage(tmp_path, id_prefix=bad_prefix)
+
+
+# -----------------------------------------------------------------------------
+# Corrupt / missing index recovery (data-loss guard)
+# -----------------------------------------------------------------------------
+
+
+def test_corrupt_index_does_not_overwrite_live_reports(
+    file_storage_factory, tiny_png: bytes
+) -> None:
+    """A crash-truncated index.json must never cause bug-001 to be re-minted.
+
+    The old behavior silently reset the index to ``next_number: 1``; the
+    next submission then overwrote the live bug-001 files. The index is a
+    cache of the report files, so it is rebuilt from disk instead.
+    """
+    storage = file_storage_factory(subdir="corrupt")
+    first = _run(storage.save_report(_baseline_metadata(title="first"), tiny_png))
+    second = _run(storage.save_report(_baseline_metadata(title="second"), tiny_png))
+    assert (first, second) == ("bug-001", "bug-002")
+
+    (storage.storage_dir / "index.json").write_text("{ truncated", encoding="utf-8")
+
+    third = _run(storage.save_report(_baseline_metadata(title="third"), tiny_png))
+    assert third == "bug-003"
+    survivor = _run(storage.get_report("bug-001"))
+    assert survivor is not None
+    assert survivor.title == "first"
+    items, total = _run(storage.list_reports({}, page=1, page_size=50))
+    assert total == 3
+
+
+def test_deleted_index_is_rebuilt_from_disk(file_storage_factory, tiny_png: bytes) -> None:
+    """Removing index.json entirely (not just corrupting it) also recovers."""
+    storage = file_storage_factory(subdir="deleted-index")
+    _run(storage.save_report(_baseline_metadata(title="kept"), tiny_png))
+    (storage.storage_dir / "index.json").unlink()
+
+    items, total = _run(storage.list_reports({}, page=1, page_size=50))
+    assert total == 1
+    assert items[0].title == "kept"
+    new_id = _run(storage.save_report(_baseline_metadata(title="next"), tiny_png))
+    assert new_id == "bug-002"
+
+
+def test_rebuild_counts_archived_reports_toward_next_number(
+    file_storage_factory, tiny_png: bytes
+) -> None:
+    """Archived reports leave the listing but must still reserve their ids."""
+    storage = file_storage_factory(subdir="archived-rebuild")
+    first = _run(storage.save_report(_baseline_metadata(title="a"), tiny_png))
+    _run(storage.update_status(first, status="closed", by="test"))
+    assert _run(storage.bulk_archive_closed()) == 1
+    (storage.storage_dir / "index.json").write_text("not json", encoding="utf-8")
+
+    new_id = _run(storage.save_report(_baseline_metadata(title="b"), tiny_png))
+    assert new_id == "bug-002"
+
+
+def test_minting_skips_ids_whose_files_already_exist(file_storage_factory, tiny_png: bytes) -> None:
+    """Even a well-formed-but-stale index (restored backup) cannot overwrite.
+
+    The index claims next_number 1 while bug-001.json exists on disk — the
+    allocator must advance past it rather than clobber the file.
+    """
+    storage = file_storage_factory(subdir="stale-index")
+    _run(storage.save_report(_baseline_metadata(title="original"), tiny_png))
+    index_path = storage.storage_dir / "index.json"
+    stale = json.loads(index_path.read_text(encoding="utf-8"))
+    stale["next_number"] = 1
+    index_path.write_text(json.dumps(stale), encoding="utf-8")
+
+    new_id = _run(storage.save_report(_baseline_metadata(title="new"), tiny_png))
+    assert new_id == "bug-002"
+    survivor = _run(storage.get_report("bug-001"))
+    assert survivor is not None
+    assert survivor.title == "original"

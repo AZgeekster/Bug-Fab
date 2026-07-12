@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,9 +41,21 @@ from bug_fab.schemas import (
 )
 from bug_fab.storage.base import Storage
 
+logger = logging.getLogger(__name__)
+
 _REPORT_ID_RE = REPORT_ID_RE
 _INDEX_FILENAME = "index.json"
 _ARCHIVE_SUBDIR = "archive"
+
+#: Minted ids must satisfy the canonical ``REPORT_ID_RE`` shape guard
+#: (``bug-`` + optional single letter + digits), so the prefix itself is at
+#: most one ASCII letter. Anything longer — and anything containing a path
+#: separator — would mint ids the storage/viewer guards later reject, after
+#: the files were already written under an attacker-influenceable path.
+_ID_PREFIX_RE = re.compile(r"^[A-Za-z]?$")
+
+#: Numeric suffix extractor for rebuilding ``next_number`` from filenames.
+_ID_NUMBER_RE = re.compile(r"^bug-[A-Za-z]?(\d{3,12})$")
 
 
 def _now_iso() -> str:
@@ -81,6 +95,11 @@ class FileStorage(Storage):
     """
 
     def __init__(self, storage_dir: Path | str, id_prefix: str = "") -> None:
+        if not _ID_PREFIX_RE.match(id_prefix):
+            raise ValueError(
+                f"id_prefix must be a single ASCII letter or empty, got {id_prefix!r} — "
+                "longer or non-letter prefixes mint ids the canonical shape guard rejects"
+            )
         self.storage_dir = Path(storage_dir)
         self.id_prefix = id_prefix
         self.archive_dir = self.storage_dir / _ARCHIVE_SUBDIR
@@ -236,8 +255,18 @@ class FileStorage(Storage):
             return archived
 
     def _next_id(self, index: dict) -> str:
-        """Format the next sequential id, optionally with the configured prefix."""
+        """Format the next sequential id, optionally with the configured prefix.
+
+        Defense in depth against index drift (a restored backup, a manual
+        edit): never mint an id whose report or screenshot file already
+        exists on disk — advance past it instead of overwriting. The
+        adjusted number is written back to ``index`` so the caller's
+        ``next_number + 1`` bookkeeping stays consistent.
+        """
         n = int(index.get("next_number", 1))
+        while any(p.exists() for p in self._candidate_paths(f"bug-{self.id_prefix}{n:03d}")):
+            n += 1
+        index["next_number"] = n
         return f"bug-{self.id_prefix}{n:03d}"
 
     def _build_report(self, report_id: str, metadata: dict, now: str) -> dict:
@@ -328,16 +357,62 @@ class FileStorage(Storage):
         return BugReportDetail.model_validate(payload)
 
     def _read_index(self) -> dict[str, Any]:
-        """Read `index.json`, returning a fresh empty index on missing/corrupt."""
+        """Read `index.json`, rebuilding from the report files on missing/corrupt.
+
+        The index is a denormalized cache of the per-report JSON files, so a
+        missing or crash-truncated ``index.json`` is fully recoverable from
+        disk. The previous behavior — silently returning a fresh
+        ``{next_number: 1}`` — made the next submission mint ``bug-001``
+        again and overwrite the live report and screenshot.
+        """
         if not self._index_path.exists():
-            return {"reports": [], "next_number": 1}
+            return self._rebuild_index_from_disk()
         try:
             data = json.loads(self._index_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return {"reports": [], "next_number": 1}
+            logger.warning(
+                "bug_fab_index_corrupt_rebuilding",
+                extra={"index_path": str(self._index_path)},
+            )
+            return self._rebuild_index_from_disk()
         data.setdefault("reports", [])
         data.setdefault("next_number", len(data["reports"]) + 1)
         return data
+
+    def _rebuild_index_from_disk(self) -> dict[str, Any]:
+        """Reconstruct the index by scanning the report files.
+
+        Live reports (``<storage_dir>/bug-*.json``) become index entries;
+        archived reports contribute only to ``next_number`` (the index never
+        lists them — that matches ``_archive_one``, which drops the row).
+        Unreadable individual report files are skipped with a warning rather
+        than aborting the whole listing.
+        """
+        entries: list[tuple[int, dict]] = []
+        max_number = 0
+        for path in self.storage_dir.glob("bug-*.json"):
+            match = _ID_NUMBER_RE.match(path.stem)
+            if match is None:
+                continue
+            max_number = max(max_number, int(match.group(1)))
+            try:
+                report = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                logger.warning(
+                    "bug_fab_index_rebuild_skipped_report",
+                    extra={"report_path": str(path)},
+                )
+                continue
+            entries.append((int(match.group(1)), self._build_index_entry(report)))
+        for path in self.archive_dir.glob("bug-*.json"):
+            match = _ID_NUMBER_RE.match(path.stem)
+            if match is not None:
+                max_number = max(max_number, int(match.group(1)))
+        entries.sort(key=lambda pair: pair[0])
+        return {
+            "reports": [entry for _, entry in entries],
+            "next_number": max_number + 1,
+        }
 
     def _write_index(self, index: dict[str, Any]) -> None:
         """Atomically write the index — tmp+rename guards against torn writes."""

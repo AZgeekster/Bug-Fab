@@ -97,6 +97,22 @@ out explicitly in each release entry.
 
 ### Fixed
 
+- **A corrupt or missing `index.json` no longer causes the file backend to
+  overwrite live reports.** The index is a denormalized cache of the
+  per-report JSON files, but a crash-truncated (or deleted) index was
+  silently replaced with a fresh `next_number: 1` — so the next submission
+  re-minted `bug-001` and overwrote the existing report and screenshot. The
+  index is now rebuilt from the report files on disk (archived reports keep
+  reserving their numbers), and — defense in depth — the allocator refuses
+  to mint an id whose files already exist, advancing past them instead.
+
+- **`FileStorage` now rejects an invalid `id_prefix` at construction.** The
+  prefix is embedded into report ids and filesystem paths; anything longer
+  than a single ASCII letter mints ids the canonical shape guard later
+  rejects (after the files were already written), and a separator-bearing
+  prefix escapes the flat path layout. Construction now raises `ValueError`
+  for anything but `[A-Za-z]?`.
+
 - **The Vapor adapter's intake response now always carries
   `github_issue_url`.** Swift's `JSONEncoder` omits nil optionals, so the
   `201` body dropped the key whenever GitHub sync was off — the protocol
