@@ -55,6 +55,17 @@ out explicitly in each release entry.
   field on a metadata-cap `413` now reports the metadata cap on all three
   adapters — Flask and Django previously reported the screenshot cap there.
 
+- **Outbound webhook and GitHub sync now behave identically on all three
+  Python adapters.** The Flask blueprint now wires the webhook retry/DLQ
+  settings (`BUG_FAB_WEBHOOK_MAX_ATTEMPTS`, `_RETRY_BACKOFF_SECONDS`,
+  `_DLQ_DIR`) it previously ignored, and the Django adapter's own
+  `requests`-based GitHub/webhook senders are now thin wrappers over the
+  shared integration clients — Django deliveries gain retry, backoff, and
+  dead-letter persistence, and Django-created GitHub issues switch from the
+  minimal `[Bug-Fab] …` shape to the same titled + labeled issue the FastAPI
+  adapter produces. Django no longer touches the optional `requests`
+  dependency.
+
 - **The GitHub and Linear integrations now truncate long text with the `…`
   character instead of `...`.** All six built-in integrations shared six
   copies of a truncation helper that had drifted into two forms; they now

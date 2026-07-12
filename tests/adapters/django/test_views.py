@@ -452,7 +452,11 @@ def test_webhook_disabled_makes_no_outbound_call(client, metadata_json, png_byte
 
 
 def test_webhook_send_returns_false_on_non_2xx(monkeypatch):
-    """The Django sync module returns False on a 5xx response (no raise)."""
+    """The Django sync module returns False on a 5xx response (no raise).
+
+    The module delegates to the shared ``WebhookSync`` (async httpx), so
+    the mock patches ``httpx.AsyncClient``.
+    """
     monkeypatch.setenv("BUG_FAB_WEBHOOK_ENABLED", "true")
     monkeypatch.setenv("BUG_FAB_WEBHOOK_URL", "https://hook.example.test/in")
 
@@ -464,14 +468,14 @@ def test_webhook_send_returns_false_on_non_2xx(monkeypatch):
         return httpx.Response(500, text="downstream broken")
 
     transport = httpx.MockTransport(handler)
-    real_client = httpx.Client
+    real_client = httpx.AsyncClient
 
     class _MockClient(real_client):  # type: ignore[misc]
         def __init__(self, *args, **kwargs):
             kwargs["transport"] = transport
             super().__init__(*args, **kwargs)
 
-    monkeypatch.setattr(httpx, "Client", _MockClient)
+    monkeypatch.setattr(httpx, "AsyncClient", _MockClient)
     assert webhook_sync.send({"id": "bug-test"}) is False
 
 
@@ -488,15 +492,109 @@ def test_webhook_send_returns_false_on_connection_error(monkeypatch):
         raise httpx.ConnectError("connection refused")
 
     transport = httpx.MockTransport(handler)
-    real_client = httpx.Client
+    real_client = httpx.AsyncClient
 
     class _MockClient(real_client):  # type: ignore[misc]
         def __init__(self, *args, **kwargs):
             kwargs["transport"] = transport
             super().__init__(*args, **kwargs)
 
-    monkeypatch.setattr(httpx, "Client", _MockClient)
+    monkeypatch.setattr(httpx, "AsyncClient", _MockClient)
     assert webhook_sync.send({"id": "bug-test"}) is False
+
+
+def test_github_create_issue_uses_the_shared_issue_shape(monkeypatch):
+    """Q5: Django delegates to the shared GitHubSync instead of its own POST.
+
+    The old Django-only sender built a minimal '[Bug-Fab] ...' issue with
+    no labels; the shared client builds the same titled + labeled issue
+    the FastAPI adapter produces. Pin the unified shape.
+    """
+    import json as _json
+
+    monkeypatch.setenv("BUG_FAB_GITHUB_REPO", "owner/repo")
+    monkeypatch.setenv("BUG_FAB_GITHUB_PAT", "ghp_test")
+
+    import httpx
+
+    from bug_fab.adapters.django import github_sync
+
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        if request.url.path.endswith("/labels"):
+            return httpx.Response(201, json={"name": "ok"})
+        if request.url.path.endswith("/issues"):
+            return httpx.Response(
+                201,
+                json={"number": 7, "html_url": "https://github.com/owner/repo/issues/7"},
+            )
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+
+    class _MockClient(real_client):  # type: ignore[misc]
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _MockClient)
+    link = github_sync.create_issue(
+        {
+            "id": "bug-001",
+            "title": "Save button is unresponsive",
+            "severity": "high",
+            "status": "open",
+            "description": "Click does nothing.",
+            "context": {},
+        }
+    )
+    assert link is not None
+    assert link.number == 7
+    issue_posts = [r for r in captured if r.method == "POST" and r.url.path.endswith("/issues")]
+    assert len(issue_posts) == 1
+    body = _json.loads(issue_posts[0].content)
+    assert body["title"].startswith("[Bug]")  # shared shape, not '[Bug-Fab]'
+    assert "bug" in body["labels"]
+    assert "severity:high" in body["labels"]
+
+
+def test_webhook_send_retries_transient_failures_when_configured(monkeypatch):
+    """Q7: Django delivery now has the same retry semantics as FastAPI/Flask.
+
+    Two 500s followed by a 200 succeeds when BUG_FAB_WEBHOOK_MAX_ATTEMPTS
+    allows three attempts — the old Django-only sender had no retry at all.
+    """
+    monkeypatch.setenv("BUG_FAB_WEBHOOK_ENABLED", "true")
+    monkeypatch.setenv("BUG_FAB_WEBHOOK_URL", "https://hook.example.test/in")
+    monkeypatch.setenv("BUG_FAB_WEBHOOK_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("BUG_FAB_WEBHOOK_RETRY_BACKOFF_SECONDS", "0.01")
+
+    import httpx
+
+    from bug_fab.adapters.django import webhook_sync
+
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) < 3:
+            return httpx.Response(500, text="transient")
+        return httpx.Response(200)
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+
+    class _MockClient(real_client):  # type: ignore[misc]
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _MockClient)
+    assert webhook_sync.send({"id": "bug-test"}) is True
+    assert len(calls) == 3
 
 
 # ---------------------------------------------------------------------------

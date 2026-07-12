@@ -1,19 +1,23 @@
 """Best-effort generic webhook delivery for the Django adapter.
 
-Mirrors :mod:`bug_fab.integrations.webhook` but uses :class:`httpx.Client`
-(the synchronous flavor) instead of :class:`httpx.AsyncClient` because
-plain Django views are sync. Failures are logged and swallowed; an
-outage downstream MUST NOT cause the local intake response to be
-non-2xx (per ``docs/PROTOCOL.md`` § Failure modes that MUST NOT yield
-non-2xx).
+A thin synchronous wrapper over :class:`bug_fab.integrations.webhook.WebhookSync`
+— the same delivery engine the FastAPI and Flask adapters use, so retry,
+backoff, dead-letter persistence, and non-2xx classification behave
+identically across all three Python adapters. Plain Django views are sync,
+so the async ``send`` is driven with :func:`asyncio.run`. Failures are
+logged and swallowed; an outage downstream MUST NOT cause the local
+intake response to be non-2xx (per ``docs/PROTOCOL.md`` § Failure modes
+that MUST NOT yield non-2xx).
 
-Configuration via four env vars (Django settings overrides take
-precedence when present)::
+Configuration (Django settings overrides take precedence over env)::
 
-    BUG_FAB_WEBHOOK_ENABLED            # truthy literal turns the feature on
-    BUG_FAB_WEBHOOK_URL                # full destination URL
-    BUG_FAB_WEBHOOK_HEADERS            # JSON or "k=v;k2=v2" format
-    BUG_FAB_WEBHOOK_TIMEOUT_SECONDS    # default 5.0
+    BUG_FAB_WEBHOOK_ENABLED                # truthy literal turns the feature on
+    BUG_FAB_WEBHOOK_URL                    # full destination URL
+    BUG_FAB_WEBHOOK_HEADERS                # JSON or "k=v;k2=v2" format
+    BUG_FAB_WEBHOOK_TIMEOUT_SECONDS        # default 5.0
+    BUG_FAB_WEBHOOK_MAX_ATTEMPTS           # default per the shared engine
+    BUG_FAB_WEBHOOK_RETRY_BACKOFF_SECONDS  # default per the shared engine
+    BUG_FAB_WEBHOOK_DLQ_DIR                # unset disables the dead-letter queue
 
 Sync is enabled when both ``BUG_FAB_WEBHOOK_ENABLED`` is truthy and
 ``BUG_FAB_WEBHOOK_URL`` resolves to a non-empty string.
@@ -21,6 +25,7 @@ Sync is enabled when both ``BUG_FAB_WEBHOOK_ENABLED`` is truthy and
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any
@@ -56,66 +61,63 @@ def _resolve_headers() -> dict[str, str]:
     # across all three adapters (FastAPI, Flask, Django).
     from bug_fab.integrations.webhook import parse_headers_env
 
-    raw = _setting("BUG_FAB_WEBHOOK_HEADERS", "")
-    headers = parse_headers_env(raw)
-    headers.setdefault("Content-Type", "application/json")
-    return headers
+    return parse_headers_env(_setting("BUG_FAB_WEBHOOK_HEADERS", ""))
 
 
-def _resolve_timeout() -> float:
-    """Read the per-request timeout from settings/env, defaulting to 5.0s."""
-    raw = _setting("BUG_FAB_WEBHOOK_TIMEOUT_SECONDS", "")
+def _resolve_float(name: str, default: float) -> float:
+    raw = _setting(name, "")
     if not raw:
-        return 5.0
+        return default
     try:
         return float(raw)
     except ValueError:
-        return 5.0
+        return default
+
+
+def _resolve_int(name: str, default: int) -> int:
+    raw = _setting(name, "")
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 def send(report: dict[str, Any]) -> bool:
     """POST ``report`` (a JSON-mode BugReportDetail dump) to the webhook URL.
 
-    No-ops with ``False`` when the integration is disabled. On a 2xx
-    response returns ``True``; on transport errors, timeouts, or non-2xx
-    responses returns ``False`` after a structured log entry. Callers
-    MUST treat ``False`` as a soft signal — the local persistence flow
-    has already succeeded by the time this is called.
+    No-ops with ``False`` when the integration is disabled. Delegates to
+    the shared :class:`~bug_fab.integrations.webhook.WebhookSync`, so a
+    transient failure retries with backoff and — when
+    ``BUG_FAB_WEBHOOK_DLQ_DIR`` is set — exhausted envelopes land in the
+    dead-letter queue for later replay. Returns ``True`` only on a 2xx
+    delivery; callers MUST treat ``False`` as a soft signal — the local
+    persistence flow has already succeeded by the time this is called.
     """
     if not _enabled():
         return False
+    from bug_fab.integrations.webhook import (
+        DEFAULT_MAX_ATTEMPTS,
+        DEFAULT_RETRY_BACKOFF_SECONDS,
+        DEFAULT_TIMEOUT_SECONDS,
+        WebhookSync,
+    )
+
+    sync = WebhookSync(
+        _setting("BUG_FAB_WEBHOOK_URL"),
+        headers=_resolve_headers(),
+        timeout_seconds=_resolve_float("BUG_FAB_WEBHOOK_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS),
+        max_attempts=_resolve_int("BUG_FAB_WEBHOOK_MAX_ATTEMPTS", DEFAULT_MAX_ATTEMPTS),
+        retry_backoff_seconds=_resolve_float(
+            "BUG_FAB_WEBHOOK_RETRY_BACKOFF_SECONDS", DEFAULT_RETRY_BACKOFF_SECONDS
+        ),
+        dlq_dir=_setting("BUG_FAB_WEBHOOK_DLQ_DIR") or None,
+    )
     try:
-        import httpx  # imported lazily — avoids surprising the consumer
-    except ImportError:  # pragma: no cover - httpx is a hard dep
-        logger.warning("bug_fab_django_webhook_httpx_missing")
-        return False
-    url = _setting("BUG_FAB_WEBHOOK_URL")
-    headers = _resolve_headers()
-    timeout = _resolve_timeout()
-    try:
-        with httpx.Client(timeout=timeout) as client:
-            response = client.post(url, json=report, headers=headers)
-    except httpx.HTTPError as exc:
-        logger.warning(
-            "bug_fab_django_webhook_send_error",
-            extra={"report_id": report.get("id"), "url": url, "error": str(exc)},
-        )
-        return False
+        # Plain Django views run sync (WSGI, or ASGI's sync-view threadpool),
+        # so no event loop is running in this thread and asyncio.run is safe.
+        return asyncio.run(sync.send(report))
     except Exception:  # pragma: no cover - defensive
         logger.exception("bug_fab_django_webhook_send_unexpected_error")
         return False
-    if response.status_code // 100 != 2:
-        body = response.text
-        if len(body) > 200:
-            body = body[:197] + "..."
-        logger.warning(
-            "bug_fab_django_webhook_send_failed",
-            extra={
-                "report_id": report.get("id"),
-                "url": url,
-                "status_code": response.status_code,
-                "body": body,
-            },
-        )
-        return False
-    return True

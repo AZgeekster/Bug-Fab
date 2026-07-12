@@ -247,10 +247,15 @@ def make_blueprint(
     # injecting a fake or for consumers wrapping the call site with
     # custom retry logic).
     if webhook_sync is None and settings.webhook_enabled and settings.webhook_url:
+        # Full retry/DLQ wiring, mirroring the FastAPI router's configure()
+        # — the delivery guarantees must not change by host framework.
         webhook_sync = WebhookSync(
             settings.webhook_url,
             headers=settings.webhook_headers,
             timeout_seconds=settings.webhook_timeout_seconds,
+            max_attempts=settings.webhook_max_attempts,
+            retry_backoff_seconds=settings.webhook_retry_backoff_seconds,
+            dlq_dir=settings.webhook_dlq_dir or None,
         )
 
     # Per-IP rate limiter — opt-in via ``settings.rate_limit_enabled``.
