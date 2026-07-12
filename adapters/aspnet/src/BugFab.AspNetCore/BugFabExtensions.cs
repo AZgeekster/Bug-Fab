@@ -149,11 +149,19 @@ public static class BugFabExtensions
                 var bugFab = httpContext.RequestServices
                     .GetRequiredService<IOptions<BugFabOptions>>().Value;
 
-                // Honor X-Forwarded-For first hop so deployments behind a
-                // reverse proxy meter per-end-user. Falls back to the direct
-                // peer address; "unknown" is a stable last resort so the
-                // limiter still has a partition key.
-                var partitionKey = ResolveClientIp(httpContext);
+                // Partition on the connection's resolved client address.
+                // X-Forwarded-For is deliberately NOT read here: the header
+                // is client-controlled, and rotating it would mint a fresh
+                // rate-limit bucket per request, defeating the limiter.
+                // Deployments behind a reverse proxy should register ASP.NET
+                // Core's ForwardedHeadersMiddleware (UseForwardedHeaders with
+                // KnownProxies/KnownNetworks) — it rewrites RemoteIpAddress
+                // from the forwarding chain only when the direct peer is a
+                // declared proxy, which this partition key then reflects.
+                // "unknown" is a stable last resort so the limiter still has
+                // a partition key.
+                var partitionKey =
+                    httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
                 return RateLimitPartition.GetFixedWindowLimiter(
                     partitionKey: partitionKey,
@@ -168,20 +176,6 @@ public static class BugFabExtensions
                     });
             });
         });
-    }
-
-    private static string ResolveClientIp(HttpContext httpContext)
-    {
-        var forwarded = httpContext.Request.Headers["X-Forwarded-For"].ToString();
-        if (!string.IsNullOrEmpty(forwarded))
-        {
-            var firstHop = forwarded.Split(',', 2)[0].Trim();
-            if (!string.IsNullOrEmpty(firstHop))
-            {
-                return firstHop;
-            }
-        }
-        return httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
     }
 
     /// <summary>

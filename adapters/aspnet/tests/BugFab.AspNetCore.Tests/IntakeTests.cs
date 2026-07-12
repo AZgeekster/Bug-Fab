@@ -163,6 +163,48 @@ public sealed class IntakeTests
     }
 
     [Fact]
+    public async Task Submit_spoofed_forwarded_for_cannot_evade_rate_limit()
+    {
+        // X-Forwarded-For is client-controlled. If the limiter partitioned on
+        // it, rotating the header would mint a fresh bucket per request and
+        // the limit would never trip. The partition key must come from the
+        // connection's resolved address (rewritten only by the consumer's
+        // ForwardedHeadersMiddleware, never by the raw header).
+        await using var app = TestApp.BuildApp(NewStorageDir(), opts =>
+        {
+            opts.RateLimit.Enabled = true;
+            opts.RateLimit.MaxPerWindow = 2;
+            opts.RateLimit.WindowSeconds = 60;
+        });
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new Uri(app.Urls.First()) };
+
+        for (var i = 0; i < 2; i++)
+        {
+            using var form = MultipartHelper.BuildIntake(ValidMetadata, MultipartHelper.MinimalPng);
+            using var req = new HttpRequestMessage(HttpMethod.Post, "/bug-fab/bug-reports")
+            {
+                Content = form,
+            };
+            req.Headers.Add("X-Forwarded-For", $"203.0.113.{i}");
+            var ok = await client.SendAsync(req);
+            ok.StatusCode.Should().Be(HttpStatusCode.Created);
+        }
+
+        using var thirdForm = MultipartHelper.BuildIntake(ValidMetadata, MultipartHelper.MinimalPng);
+        using var thirdReq = new HttpRequestMessage(HttpMethod.Post, "/bug-fab/bug-reports")
+        {
+            Content = thirdForm,
+        };
+        thirdReq.Headers.Add("X-Forwarded-For", "203.0.113.99");
+        var rejected = await client.SendAsync(thirdReq);
+
+        rejected.StatusCode.Should().Be(HttpStatusCode.TooManyRequests);
+        var body = await rejected.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("rate_limited");
+    }
+
+    [Fact]
     public void Magic_byte_check_rejects_short_payload()
     {
         PayloadValidator.IsValidPng(new byte[] { 0x89, 0x50 }).Should().BeFalse();

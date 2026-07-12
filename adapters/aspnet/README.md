@@ -170,7 +170,7 @@ When the limiter rejects a request, the response is `429 Too Many Requests` with
 Notes:
 
 - Only the intake endpoint (`POST /bug-reports`) is rate-limited. Viewer endpoints are not.
-- The per-IP partition key honors `X-Forwarded-For` first hop, then falls back to the direct peer address, so deployments behind a reverse proxy meter per-end-user. Make sure your proxy strips/rewrites this header at the edge to prevent client spoofing.
+- The per-IP partition key is the connection's resolved client address (`HttpContext.Connection.RemoteIpAddress`). Raw `X-Forwarded-For` is deliberately not read — the header is client-controlled, and rotating it would mint a fresh bucket per request and defeat the limiter. Deployments behind a reverse proxy should register ASP.NET Core's [`ForwardedHeadersMiddleware`](https://learn.microsoft.com/aspnet/core/host-and-deploy/proxy-load-balancer) with `KnownProxies`/`KnownNetworks`; it rewrites `RemoteIpAddress` from the forwarding chain only when the direct peer is a declared proxy, and the partition key then meters per-end-user. Without it, metering is per-proxy.
 - The state is process-local. Multi-worker deployments scale the effective limit linearly with the worker count; front-door rate limiting (nginx, Cloudflare, etc.) remains the right answer for hard abuse boundaries.
 - The policy name is exposed as `BugFabExtensions.IntakeRateLimitPolicy` (`"bug-fab-intake"`) for consumers who want to compose it with their own limiter configuration.
 

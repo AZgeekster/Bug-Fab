@@ -72,6 +72,15 @@ out explicitly in each release entry.
 
 ### Fixed
 
+- **The ASP.NET adapter's rate limiter no longer keys on raw
+  `X-Forwarded-For`.** The header is client-controlled: rotating it minted a
+  fresh rate-limit bucket per request, so with the limiter enabled a client
+  could evade it entirely with a spoofed header. The partition key is now the
+  connection's resolved client address. Deployments behind a reverse proxy
+  should register ASP.NET Core's `ForwardedHeadersMiddleware` with
+  `KnownProxies`/`KnownNetworks` to meter per-end-user; without it, metering
+  is per-proxy.
+
 - **The Spring adapter now enforces its `bugfab.max-metadata-kb` cap.** The
   property (default 256 KiB) was declared, documented, and set in
   `application.yml`, but intake read the metadata part unbounded and never
