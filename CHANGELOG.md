@@ -72,6 +72,13 @@ out explicitly in each release entry.
 
 ### Fixed
 
+- **The Laravel adapter's rate limiter no longer keys on raw
+  `X-Forwarded-For`.** Same defect as the ASP.NET entry below: rotating the
+  client-controlled header minted a fresh bucket per request. The key is now
+  `$request->ip()`, which honors the forwarding chain only when the
+  consumer's TrustProxies configuration declares the peer. Behind an
+  undeclared proxy, metering is per-proxy.
+
 - **The ASP.NET adapter's rate limiter no longer keys on raw
   `X-Forwarded-For`.** The header is client-controlled: rotating it minted a
   fresh rate-limit bucket per request, so with the limiter enabled a client

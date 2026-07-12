@@ -103,4 +103,23 @@ class IntakeTest extends TestCase
         $res->assertStatus(429);
         $this->assertEquals('rate_limited', $res->json('error'));
     }
+
+    public function test_spoofed_forwarded_for_cannot_evade_rate_limit(): void
+    {
+        config(['bugfab.rate_limit.enabled' => true]);
+        config(['bugfab.rate_limit.max' => 2]);
+        config(['bugfab.rate_limit.window' => 60]);
+
+        // X-Forwarded-For is client-controlled. If the limiter keyed on it,
+        // rotating the header would mint a fresh bucket per request and the
+        // limit would never trip. The key comes from $request->ip(), which
+        // honors the header only when the consumer's TrustProxies middleware
+        // declares the peer — never in this untrusted default.
+        $xff = fn (string $ip) => ['HTTP_X_FORWARDED_FOR' => $ip];
+        $this->doIntake($this->makeMetadata(), null, $xff('203.0.113.1'))->assertStatus(201);
+        $this->doIntake($this->makeMetadata(), null, $xff('203.0.113.2'))->assertStatus(201);
+        $res = $this->doIntake($this->makeMetadata(), null, $xff('203.0.113.3'));
+        $res->assertStatus(429);
+        $this->assertEquals('rate_limited', $res->json('error'));
+    }
 }

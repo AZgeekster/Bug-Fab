@@ -90,7 +90,7 @@ abstract class TestCase extends Orchestra
     }
 
     /** Build an UploadedFile fixture + payload, return Response. */
-    protected function doIntake(array $metadata, ?string $screenshotBytes = null)
+    protected function doIntake(array $metadata, ?string $screenshotBytes = null, array $server = [])
     {
         $screenshotBytes ??= $this->makePng();
         $tmp = tempnam(sys_get_temp_dir(), 'bugfab') . '.png';
@@ -109,6 +109,7 @@ abstract class TestCase extends Orchestra
             ['metadata' => json_encode($metadata)],
             [],
             ['screenshot' => $file],
+            $server,
         );
     }
 }

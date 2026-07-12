@@ -416,11 +416,13 @@ class BugReportsController extends Controller
 
     private function clientIp(Request $request): string
     {
-        $forwarded = $request->header('x-forwarded-for');
-        if (is_string($forwarded) && $forwarded !== '') {
-            return trim(explode(',', $forwarded)[0]);
-        }
-
+        // Deliberately NOT reading X-Forwarded-For here: the header is
+        // client-controlled, and rotating it would mint a fresh rate-limit
+        // bucket per request, defeating the limiter. Laravel's own
+        // TrustProxies middleware is the trust gate — when the consumer
+        // declares their proxies (framework-level `trustProxies`),
+        // $request->ip() resolves the real client from the forwarding
+        // chain; otherwise it is the direct peer.
         return $request->ip() ?: 'unknown';
     }
 
