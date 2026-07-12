@@ -72,6 +72,27 @@ out explicitly in each release entry.
 
 ### Fixed
 
+- **The ASP.NET adapter's `GET /reports` no longer 500s on SQLite.** The list
+  query ordered by a `DateTimeOffset` column, which EF Core's SQLite provider
+  cannot translate — every list call threw `NotSupportedException` at query
+  compilation, so the endpoint had never worked against a SQLite database
+  (the InMemory-provider unit tests were green throughout). The query now
+  orders by the monotonically-minted `IdSequence`, which is received order on
+  every provider. Caught by the adapter's new cross-stack conformance
+  harness; a SQLite-backed regression test now runs in the unit suite.
+
+- **The ASP.NET adapter's screenshot endpoint no longer 500s when
+  `StorageDirectory` is a relative path.** `Results.File` treats a non-rooted
+  path as a virtual path under the web root and throws at execution time; the
+  path is now rooted before serving, so the configured `./var/bug-fab` style
+  default works.
+
+- **The ASP.NET adapter now returns `400 validation_error` for a submission
+  with no screenshot part.** A urlencoded form body (what HTTP clients send
+  when the file part is omitted) was rejected by endpoint `Accepts` metadata
+  with an empty-body `415` before the handler could apply the
+  protocol-mandated 400. Non-form bodies (e.g. JSON) still return 415.
+
 - **The Vapor adapter's rate limiter no longer trusts raw
   `X-Forwarded-For`.** Same spoofable-bucket defect as the Laravel and
   ASP.NET entries below. Vapor has no framework-level forwarded-header trust

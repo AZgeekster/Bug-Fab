@@ -143,7 +143,12 @@ public sealed class EfCoreStorage : IStorage
         var total = await query.CountAsync(ct).ConfigureAwait(false);
 
         var rows = await query
-            .OrderByDescending(x => x.ReceivedAt)
+            // IdSequence is minted monotonically at insert, so descending
+            // sequence IS received order. Ordering by ReceivedAt directly is
+            // not translatable on SQLite (EF cannot ORDER BY DateTimeOffset
+            // there) — GET /reports 500'd on the SQLite example while the
+            // InMemory-provider tests stayed green.
+            .OrderByDescending(x => x.IdSequence)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync(ct)

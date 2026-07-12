@@ -34,7 +34,12 @@ public static class ScreenshotEndpoint
                 return ErrorResults.NotFound("Screenshot not found");
             }
 
-            return Results.File(path, contentType: "image/png");
+            // Results.File treats a non-rooted path as a VIRTUAL path under
+            // the web root and throws (500) at execution time. Storage hands
+            // back whatever was configured — often a relative
+            // StorageDirectory like "./var/bug-fab" — so root it first to
+            // force the physical-file branch.
+            return Results.File(Path.GetFullPath(path), contentType: "image/png");
         }).WithName("BugFab_Screenshot");
     }
 }
