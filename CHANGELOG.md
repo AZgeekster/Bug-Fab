@@ -159,6 +159,13 @@ out explicitly in each release entry.
   each row to `{id}`, but the detail page is served at `{id}/view`, so every row
   click returned 404. The links now point at the detail route.
 
+- **The Phoenix adapter returns the correct error codes for 403 and 404.** Its
+  `403` and `404` responses carried `error: "validation_error"` instead of
+  `"forbidden"` / `"not_found"`, so clients branching on the error code
+  mis-classified a permission denial or a missing report as a validation
+  failure. The status codes were already correct; only the envelope `error`
+  field changes, matching the Rails and Laravel adapters and the reference.
+
 - **The Django adapter no longer leaks a `total` key in the JSON `stats`
   block.** `GET /reports` emitted a fifth `total` key the reference and Flask
   adapters strip; the JSON contract is the four lifecycle states only. (The

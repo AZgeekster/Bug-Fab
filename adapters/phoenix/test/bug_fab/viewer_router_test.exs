@@ -59,6 +59,7 @@ defmodule BugFab.ViewerRouterTest do
   test "GET /reports/:id with bad id shape returns 404" do
     conn = ViewerRouter.call(conn(:get, "/reports/../etc/passwd"), @opts)
     assert conn.status == 404
+    assert Jason.decode!(conn.resp_body)["error"] == "not_found"
   end
 
   test "GET /reports/:id/screenshot returns PNG bytes", %{id1: id} do
@@ -113,6 +114,7 @@ defmodule BugFab.ViewerRouterTest do
       |> ViewerRouter.call(@opts)
 
     assert conn.status == 403
+    assert Jason.decode!(conn.resp_body)["error"] == "forbidden"
   end
 
   test "DELETE /reports/:id returns 204 then 404", %{id1: id} do
@@ -121,6 +123,7 @@ defmodule BugFab.ViewerRouterTest do
 
     c2 = ViewerRouter.call(conn(:delete, "/reports/#{id}"), @opts)
     assert c2.status == 404
+    assert Jason.decode!(c2.resp_body)["error"] == "not_found"
   end
 
   test "POST /bulk-close-fixed transitions fixed to closed", %{id1: id} do
