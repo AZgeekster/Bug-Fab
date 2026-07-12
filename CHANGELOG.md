@@ -155,6 +155,10 @@ out explicitly in each release entry.
   replaces the file with a single atomic temp-plus-rename, the same primitive
   the Go and Rust adapters use. No API or behavior change on the success path.
 
+- **The Hono viewer's report rows are clickable again.** The HTML list linked
+  each row to `{id}`, but the detail page is served at `{id}/view`, so every row
+  click returned 404. The links now point at the detail route.
+
 - **The Django adapter no longer leaks a `total` key in the JSON `stats`
   block.** `GET /reports` emitted a fifth `total` key the reference and Flask
   adapters strip; the JSON contract is the four lifecycle states only. (The

@@ -89,7 +89,7 @@ export function buildViewerApp(
       pageSize,
       stats,
       bundleUrl: buildOpts.bundleUrl,
-      detailUrlBase: '.', // resolves to viewerPrefix root + report id
+      detailUrlBase: '.', // row links resolve to `${viewerPrefix}/{id}/view`
       cspNonce,
     })
     return c.html(html)
