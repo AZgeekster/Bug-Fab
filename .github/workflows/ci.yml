@@ -23,6 +23,25 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
+    # A real Postgres so the `postgres` storage backend tests actually run.
+    # They skip themselves unless BUG_FAB_TEST_POSTGRES_URL is set (below),
+    # so without this the Postgres backend shipped with zero CI coverage —
+    # the audit's T1 finding, and the class of gap the SQLite ORDER BY bug
+    # (caught only by the cross-stack conformance harness) came from.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: bugfab
+          POSTGRES_PASSWORD: bugfab
+          POSTGRES_DB: bugfab_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -56,6 +75,10 @@ jobs:
         # models, ABCs) execute pre-coverage and don't get counted —
         # which would silently undercount coverage by ~20pp.
         # Driving coverage from outside pytest avoids the ordering bug.
+        env:
+          # Unskips tests/unit/test_storage_postgres.py against the service
+          # container above. psycopg3 DSN scheme (matches the [postgres] extra).
+          BUG_FAB_TEST_POSTGRES_URL: postgresql+psycopg://bugfab:bugfab@127.0.0.1:5432/bugfab_test
         run: |
           coverage run --source=bug_fab --branch -m pytest
           coverage report --fail-under=85 --show-missing
