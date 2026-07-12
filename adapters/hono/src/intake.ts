@@ -22,6 +22,7 @@ import {
   validateSubmission,
   isValidPng,
   MAX_SCREENSHOT_BYTES,
+  MAX_TOTAL_REQUEST_BYTES,
 } from './validation.js'
 import { createGitHubIssue } from './github.js'
 
@@ -31,10 +32,19 @@ import { createGitHubIssue } from './github.js'
 // front Bug-Fab with a runtime / CDN rate limiter (Cloudflare WAF,
 // Vercel Edge Config, etc.).
 const rateLimitMap = new Map<string, number[]>()
+let rateLimitLastSweep = 0
 
 function checkRateLimit(ip: string, max: number, windowMs: number): boolean {
   const now = Date.now()
   const start = now - windowMs
+  // Evict fully-idle keys at most once per window so the map cannot grow
+  // by one entry per distinct source key forever.
+  if (now - rateLimitLastSweep >= windowMs) {
+    rateLimitLastSweep = now
+    for (const [key, times] of rateLimitMap) {
+      if (!times.some((t) => t > start)) rateLimitMap.delete(key)
+    }
+  }
   const history = (rateLimitMap.get(ip) ?? []).filter((t) => t > start)
   if (history.length >= max) {
     rateLimitMap.set(ip, history)
@@ -45,14 +55,22 @@ function checkRateLimit(ip: string, max: number, windowMs: number): boolean {
   return true
 }
 
-function clientIp(req: Request): string {
-  // Best-effort across runtimes. Cloudflare sets `cf-connecting-ip`;
-  // most CDNs set `x-forwarded-for`. Fall back to a sentinel.
-  const cf = req.headers.get('cf-connecting-ip')
-  if (cf) return cf
-  const xff = req.headers.get('x-forwarded-for')
-  if (xff) return xff.split(',')[0]?.trim() ?? 'unknown'
-  return req.headers.get('x-real-ip') ?? 'unknown'
+function clientIp(req: Request, trustedHeaders: string[]): string {
+  // Forwarding headers are client-controlled and trivially spoofed:
+  // rotating one mints a fresh bucket per request and defeats the
+  // limiter. Only headers the consumer explicitly declared trusted are
+  // read (their platform overwrites them on every request); with none
+  // configured, every request shares one bucket — not evadable, at the
+  // cost of collective throttling. Edge runtimes expose no socket peer,
+  // so there is no safe automatic fallback.
+  for (const name of trustedHeaders) {
+    const value = req.headers.get(name)
+    if (value) {
+      const first = value.split(',')[0]?.trim()
+      if (first) return first
+    }
+  }
+  return 'global'
 }
 
 export function buildIntakeApp(opts: BugFabAppOptions): Hono {
@@ -61,12 +79,24 @@ export function buildIntakeApp(opts: BugFabAppOptions): Hono {
   intake.post('/bug-reports', async (c) => {
     // Per-IP rate limiting (best-effort).
     if (opts.rateLimit?.enabled) {
-      const ip = clientIp(c.req.raw)
+      const ip = clientIp(c.req.raw, opts.rateLimit.clientIpHeaders ?? [])
       if (!checkRateLimit(ip, opts.rateLimit.maxRequests, opts.rateLimit.windowMs)) {
         return c.json(
           Errors.rateLimited(Math.ceil(opts.rateLimit.windowMs / 1000)),
           429,
         )
+      }
+    }
+
+    // Pre-parse size guard: reject by declared Content-Length before
+    // parseBody buffers the body — otherwise the size caps run too late
+    // to protect the memory they bound. Bodies without Content-Length
+    // (chunked) fall through to the per-field checks below.
+    const declaredLength = c.req.header('content-length')
+    if (declaredLength) {
+      const declared = Number(declaredLength)
+      if (Number.isFinite(declared) && declared > MAX_TOTAL_REQUEST_BYTES) {
+        return c.json(Errors.payloadTooLarge(MAX_TOTAL_REQUEST_BYTES), 413)
       }
     }
 

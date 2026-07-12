@@ -159,6 +159,18 @@ out explicitly in each release entry.
   each row to `{id}`, but the detail page is served at `{id}/view`, so every row
   click returned 404. The links now point at the detail route.
 
+- **The Hono adapter enforces its total-body cap and no longer trusts spoofable
+  forwarding headers.** Its `MAX_TOTAL_REQUEST_BYTES` constant was defined but
+  never imported — no body limit actually ran. A declared `Content-Length` over
+  the 11 MiB cap now returns `413 payload_too_large` before the body is parsed.
+  The rate limiter also keyed on raw `cf-connecting-ip` / `x-forwarded-for` /
+  `x-real-ip`; it now reads only headers the consumer names in the new
+  `rateLimit.clientIpHeaders` option (edge runtimes expose no socket peer, so
+  there is no safe automatic fallback). **Behavior change:** with none
+  configured, all requests share one bucket — spoof-proof, but collective; name
+  your platform's guaranteed header (e.g. `cf-connecting-ip` on Cloudflare) to
+  restore per-client metering. Idle rate-limit keys are also evicted now.
+
 - **The Go (gin) adapter now bounds the request body and gates
   `X-Forwarded-For` trust.** Intake had no body limit at all — the multipart
   parser buffered the whole body (32 MiB in memory, remainder spooled to temp
