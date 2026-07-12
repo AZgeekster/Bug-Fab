@@ -91,6 +91,7 @@ All eight follow `repo/docs/PROTOCOL.md` (v0.1).
 | `BUG_FAB_RATE_LIMIT_ENABLED` | `rateLimitEnabled` | `false` | Toggle the per-IP limiter. |
 | `BUG_FAB_RATE_LIMIT_MAX` | `rateLimitMax` | `30` | Requests per window per IP. |
 | `BUG_FAB_RATE_LIMIT_WINDOW_SECONDS` | `rateLimitWindowSeconds` | `60` | Sliding window. |
+| `BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES` | `rateLimitTrustedProxies` | `""` | Comma-separated direct-peer addresses allowed to supply `X-Forwarded-For` as the rate-limit key; `*` trusts all. Empty (the default) ignores the header — behind an undeclared proxy, metering is per-proxy. |
 | `BUG_FAB_ID_PREFIX` | `idPrefix` | `""` | Optional `P` / `D` style env prefix on assigned IDs. |
 | `BUG_FAB_CAN_EDIT_STATUS` | `canEditStatus` | `true` | Disables `PUT /reports/{id}/status` when false (403). |
 | `BUG_FAB_CAN_DELETE` | `canDelete` | `true` | Disables `DELETE /reports/{id}`. |

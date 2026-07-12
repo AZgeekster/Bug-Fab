@@ -72,6 +72,15 @@ out explicitly in each release entry.
 
 ### Fixed
 
+- **The Vapor adapter's rate limiter no longer trusts raw
+  `X-Forwarded-For`.** Same spoofable-bucket defect as the Laravel and
+  ASP.NET entries below. Vapor has no framework-level forwarded-header trust
+  gate, so the adapter grew the same knob as Go/Rust/Spring: a new
+  `rateLimitTrustedProxies` setting (`BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES`,
+  default empty = trust none, `"*"` = trust all) that gates the header on the
+  direct peer's address. Behind an undeclared proxy, metering is per-proxy
+  until the proxy is listed.
+
 - **The Laravel adapter's rate limiter no longer keys on raw
   `X-Forwarded-For`.** Same defect as the ASP.NET entry below: rotating the
   client-controlled header minted a fresh bucket per request. The key is now

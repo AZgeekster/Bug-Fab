@@ -19,6 +19,12 @@ public struct BugFabSettings: Sendable {
     public var rateLimitMax: Int
     public var rateLimitWindowSeconds: TimeInterval
 
+    /// Direct-peer addresses allowed to supply `X-Forwarded-For` as the
+    /// rate-limit key. Empty (the secure default) ignores the header and
+    /// meters by the direct peer; `"*"` trusts every peer. Mirrors the
+    /// Python reference's `rate_limit_trusted_proxies`.
+    public var rateLimitTrustedProxies: Set<String>
+
     /// Optional id prefix (e.g., "P" or "D") for multi-env shared collectors.
     public var idPrefix: String
 
@@ -33,6 +39,7 @@ public struct BugFabSettings: Sendable {
         rateLimitEnabled: Bool = false,
         rateLimitMax: Int = 30,
         rateLimitWindowSeconds: TimeInterval = 60,
+        rateLimitTrustedProxies: Set<String> = [],
         idPrefix: String = "",
         canEditStatus: Bool = true,
         canDelete: Bool = true,
@@ -43,6 +50,7 @@ public struct BugFabSettings: Sendable {
         self.rateLimitEnabled = rateLimitEnabled
         self.rateLimitMax = rateLimitMax
         self.rateLimitWindowSeconds = rateLimitWindowSeconds
+        self.rateLimitTrustedProxies = rateLimitTrustedProxies
         self.idPrefix = idPrefix
         self.canEditStatus = canEditStatus
         self.canDelete = canDelete
@@ -69,6 +77,13 @@ public struct BugFabSettings: Sendable {
             let n = TimeInterval(v)
         {
             s.rateLimitWindowSeconds = n
+        }
+        if let v = Environment.get("BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES") {
+            s.rateLimitTrustedProxies = Set(
+                v.split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+            )
         }
         if let v = Environment.get("BUG_FAB_ID_PREFIX") {
             s.idPrefix = v

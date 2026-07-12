@@ -1,5 +1,6 @@
 import FluentSQLiteDriver
 import Foundation
+import NIOCore
 import XCTVapor
 
 @testable import BugFab
@@ -224,6 +225,79 @@ final class BugFabRateLimitTests: XCTestCase {
             XCTAssertEqual(body.error, "rate_limited")
             XCTAssertNotNil(body.retryAfterSeconds)
         }
+    }
+
+    func testSpoofedForwardedForCannotEvadeRateLimit() async throws {
+        // X-Forwarded-For is client-controlled. If the limiter keyed on it,
+        // rotating the header would mint a fresh bucket per request and the
+        // limit (1/window here) would never trip. With the default empty
+        // trusted-proxies set the header must be ignored.
+        let app = try await makeTestAppWithRateLimit()
+        defer { Task { try? await app.asyncShutdown() } }
+        try await app.testable().test(.POST, "/api/bug-reports") { req async throws in
+            try buildMultipart(req: &req, metadata: validMetadata(), png: pngBytes())
+            req.headers.replaceOrAdd(name: "x-forwarded-for", value: "203.0.113.1")
+        } afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .created)
+        }
+        try await app.testable().test(.POST, "/api/bug-reports") { req async throws in
+            try buildMultipart(req: &req, metadata: validMetadata(), png: pngBytes())
+            req.headers.replaceOrAdd(name: "x-forwarded-for", value: "203.0.113.2")
+        } afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .tooManyRequests)
+            let body = try res.content.decode(BugFabErrorBody.self)
+            XCTAssertEqual(body.error, "rate_limited")
+        }
+    }
+}
+
+final class BugFabClientIPTests: XCTestCase {
+    private func makeRequest(
+        _ app: Application, peer: String?, xff: String?
+    ) throws -> Request {
+        var headers = HTTPHeaders()
+        if let xff { headers.add(name: "x-forwarded-for", value: xff) }
+        return Request(
+            application: app,
+            method: .POST,
+            url: URI(path: "/api/bug-reports"),
+            headers: headers,
+            remoteAddress: peer.map { try! SocketAddress(ipAddress: $0, port: 80) },
+            on: app.eventLoopGroup.next()
+        )
+    }
+
+    func testForwardedHeaderIgnoredFromUntrustedPeer() async throws {
+        let app = try await Application.make(.testing)
+        defer { Task { try? await app.asyncShutdown() } }
+        let req = try makeRequest(app, peer: "10.0.0.1", xff: "203.0.113.7")
+        XCTAssertEqual(
+            BugReportsController.clientIP(req, trustedProxies: []), "10.0.0.1")
+    }
+
+    func testForwardedHeaderHonoredFromTrustedPeer() async throws {
+        let app = try await Application.make(.testing)
+        defer { Task { try? await app.asyncShutdown() } }
+        let req = try makeRequest(app, peer: "10.0.0.1", xff: "203.0.113.7, 10.0.0.1")
+        XCTAssertEqual(
+            BugReportsController.clientIP(req, trustedProxies: ["10.0.0.1"]),
+            "203.0.113.7")
+    }
+
+    func testWildcardTrustsEveryPeer() async throws {
+        let app = try await Application.make(.testing)
+        defer { Task { try? await app.asyncShutdown() } }
+        let req = try makeRequest(app, peer: "192.0.2.5", xff: "203.0.113.7")
+        XCTAssertEqual(
+            BugReportsController.clientIP(req, trustedProxies: ["*"]), "203.0.113.7")
+    }
+
+    func testNoHeaderFallsBackToPeer() async throws {
+        let app = try await Application.make(.testing)
+        defer { Task { try? await app.asyncShutdown() } }
+        let req = try makeRequest(app, peer: "192.0.2.5", xff: nil)
+        XCTAssertEqual(
+            BugReportsController.clientIP(req, trustedProxies: ["*"]), "192.0.2.5")
     }
 }
 
