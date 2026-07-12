@@ -77,6 +77,33 @@ final class BugFabFilterTests: XCTestCase {
             XCTAssertEqual(list.items.first?.title, "production one")
         }
     }
+
+    func testWriteIndexLeavesNoTempArtifact() async throws {
+        // atomicWrite now replaces index.json via a single temp-plus-rename
+        // (Data.write .atomic), so a crash can never leave the index missing.
+        // A crash can't be unit-tested; this asserts the observable invariant
+        // that the write path round-trips and drops no stray temp file next
+        // to the index (the old remove-then-move used a deterministic .tmp
+        // sibling).
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("bugfab-\(UUID().uuidString)", isDirectory: true)
+        let storage = try BugFabFileStorage(storageDirectory: dir)
+        let png = pngBytes()
+        let first = try await storage.saveReport(
+            metadata: BugFabFluentStorage.decodeJSON(validMetadata()), screenshotBytes: png)
+        _ = try await storage.saveReport(
+            metadata: BugFabFluentStorage.decodeJSON(validMetadata()), screenshotBytes: png)
+        _ = try await storage.deleteReport(id: first)
+
+        let (items, total) = try await storage.listReports(filters: [:], page: 1, pageSize: 50)
+        XCTAssertEqual(total, 1)
+        XCTAssertEqual(items.count, 1)
+
+        let contents = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        XCTAssertFalse(
+            contents.contains { $0.hasSuffix(".tmp") },
+            "atomicWrite must not leave a .tmp artifact; found \(contents)")
+    }
 }
 
 final class BugFabValidationTests: XCTestCase {

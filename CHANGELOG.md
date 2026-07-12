@@ -148,6 +148,13 @@ out explicitly in each release entry.
   `_CAN_DELETE` / `_CAN_BULK`), and the matching route returns `403 forbidden`
   when its permission is disabled. Default behavior is unchanged.
 
+- **The Vapor adapter's file storage no longer risks losing the whole report
+  index on a crash.** Its `atomicWrite` wrote to a temp file and then did
+  remove-destination-then-move; a crash in that gap left `index.json` missing
+  with no recovery, silently dropping every report from the listing. It now
+  replaces the file with a single atomic temp-plus-rename, the same primitive
+  the Go and Rust adapters use. No API or behavior change on the success path.
+
 - **The Django adapter no longer leaks a `total` key in the JSON `stats`
   block.** `GET /reports` emitted a fifth `total` key the reference and Flask
   adapters strip; the JSON contract is the four lifecycle states only. (The

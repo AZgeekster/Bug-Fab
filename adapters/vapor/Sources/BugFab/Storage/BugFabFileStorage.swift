@@ -348,12 +348,14 @@ public final class BugFabFileStorage: BugFabStorage, @unchecked Sendable {
     }
 
     private static func atomicWrite(data: Data, to url: URL) throws {
-        let tmp = url.appendingPathExtension("tmp")
-        try data.write(to: tmp, options: [.atomic])
-        if FileManager.default.fileExists(atPath: url.path) {
-            try FileManager.default.removeItem(at: url)
-        }
-        try FileManager.default.moveItem(at: tmp, to: url)
+        // `.atomic` writes to a sibling temp file and renames it into place
+        // in a single step, which is atomic on the same filesystem: a crash
+        // leaves either the old file intact or the fully-written new one.
+        // The previous remove-then-move opened a window where a crash after
+        // removeItem but before moveItem destroyed the destination (e.g.
+        // index.json) with no recovery, silently losing the whole listing.
+        // This is the same temp-plus-rename the Go and Rust adapters use.
+        try data.write(to: url, options: [.atomic])
     }
 
     private static func nowIso() -> String {
