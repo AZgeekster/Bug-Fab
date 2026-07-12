@@ -159,6 +159,13 @@ out explicitly in each release entry.
   each row to `{id}`, but the detail page is served at `{id}/view`, so every row
   click returned 404. The links now point at the detail route.
 
+- **The ASP.NET adapter no longer 500s on wrong-typed JSON scalars.** A payload
+  like `{"title": 123}` threw an unhandled exception out of the validator
+  (`GetValue<string>()` throws on non-string nodes) and surfaced as a 500. Every
+  string field — `protocol_version`, `title`, `client_ts`, `report_type`,
+  `severity`, the `reporter` sub-fields, and the status-update body — now
+  reports a `422 schema_error` with a "must be a string" failure instead.
+
 - **The Phoenix adapter returns the correct error codes for 403 and 404.** Its
   `403` and `404` responses carried `error: "validation_error"` instead of
   `"forbidden"` / `"not_found"`, so clients branching on the error code

@@ -188,6 +188,58 @@ public sealed class IntakeTests
     }
 
     [Fact]
+    public async Task Submit_with_wrong_typed_scalar_returns_422_not_500()
+    {
+        await using var app = TestApp.BuildApp(NewStorageDir());
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new Uri(app.Urls.First()) };
+
+        // A number where a string belongs used to escape as an unhandled
+        // InvalidOperationException from GetValue<string>() -> 500.
+        var bad = ValidMetadata.Replace("\"Smoke test\"", "123");
+        using var form = MultipartHelper.BuildIntake(bad, MultipartHelper.MinimalPng);
+        var response = await client.PostAsync("/bug-fab/bug-reports", form);
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("schema_error");
+    }
+
+    [Theory]
+    [InlineData("protocol_version", "1")]
+    [InlineData("title", "123")]
+    [InlineData("client_ts", "false")]
+    [InlineData("report_type", "[]")]
+    [InlineData("severity", "{\"level\": 2}")]
+    [InlineData("reporter", "{\"name\": 42}")]
+    public void ValidateMetadata_rejects_wrong_typed_scalars_without_throwing(
+        string field, string badValue)
+    {
+        var fields = new Dictionary<string, string>
+        {
+            ["protocol_version"] = "\"0.1\"",
+            ["title"] = "\"x\"",
+            ["client_ts"] = "\"2026-05-01T12:00:00Z\"",
+        };
+        fields[field] = badValue;
+        var json = "{" + string.Join(",", fields.Select(kv => $"\"{kv.Key}\": {kv.Value}")) + "}";
+
+        var result = PayloadValidator.ValidateMetadata(json);
+        result.IsValid.Should().BeFalse();
+        result.Failures.Should().Contain(f => f.Message.Contains("must be a string"));
+    }
+
+    [Fact]
+    public void ValidateStatusUpdate_rejects_wrong_typed_status_without_throwing()
+    {
+        var body = System.Text.Json.Nodes.JsonNode.Parse(
+            """{"status": 5}""")!.AsObject();
+        var result = PayloadValidator.ValidateStatusUpdate(body);
+        result.IsValid.Should().BeFalse();
+        result.Failure!.Message.Should().Contain("must be a string");
+    }
+
+    [Fact]
     public async Task Ids_are_not_reused_after_delete()
     {
         await using var app = TestApp.BuildApp(NewStorageDir());
