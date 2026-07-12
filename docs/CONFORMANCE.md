@@ -31,75 +31,72 @@ bug-fab-conformance = "bug_fab.conformance.plugin"
 So a single install gets you both the package and the plugin:
 
 ```bash
-pip install bug-fab
+pip install bug-fab pytest
 ```
 
-If you want only the plugin without the FastAPI adapter dependencies, install the slim extra:
-
-```bash
-pip install "bug-fab[conformance]"
-```
-
-This pulls only the test runner, fixtures, and pytest itself — not FastAPI / SQLAlchemy / etc.
+`pytest` itself is not a runtime dependency of `bug-fab`, so install it alongside. (There is no slimmer install — the plugin ships inside the main package.)
 
 ---
 
 ## Running the suite
 
-The plugin adds two flags to pytest:
+The plugin adds these flags to pytest (grouped under `bug-fab` in `pytest --help`):
 
 | Flag | Required | Default | Description |
 |------|----------|---------|-------------|
 | `--bug-fab-conformance` | yes | — | Enables the conformance test suite. Without this flag, pytest skips conformance even if the plugin is installed. |
-| `--base-url=URL` | yes | — | The base URL of your adapter, including the path prefix where Bug-Fab routes are mounted. Example: `https://my-app.example.com/bug-fab`. |
-| `--auth-header=HEADER` | optional | none | Single HTTP header sent with every request, e.g. `--auth-header="Bearer eyJ..."`. Use this if your adapter requires auth. |
-| `--skip-mutating` | optional | `false` | Skip tests that perform write operations (`POST`, `PUT`, `DELETE`, bulk ops). Useful for read-only validation against a production system. |
+| `--base-url=URL` | yes | — | Base URL of your adapter's **intake** endpoint (the suite appends `/bug-reports`). Example: `https://my-app.example.com/api`. |
+| `--viewer-base-url=URL` | optional | `--base-url` | Base URL of the **viewer** endpoints (the suite appends `/reports`, `/bulk-close-fixed`, …). Set this for split-mount adapters where intake is open and the viewer is auth-gated under a different prefix — the documented best practice. |
+| `--auth-header=HEADER` | optional | none | Single HTTP header in `'Name: value'` format sent with every request, e.g. `--auth-header="Authorization: Bearer eyJ..."`. Use this if your adapter requires auth. |
+
+The suite performs write operations (`POST`, `PUT`, `DELETE`, bulk ops) — point it at a disposable environment, never at production data you care about.
 
 ### Example invocations
 
 ```bash
-# Local development against the FastAPI minimal example
-pytest --bug-fab-conformance --base-url=http://localhost:8000
-
-# Against a deployed adapter behind Bearer-token auth
+# Local development against the FastAPI minimal example (split mounts)
 pytest --bug-fab-conformance \
-       --base-url=https://my-app.example.com/bug-fab \
-       --auth-header="Bearer eyJhbGciOi..."
+       --base-url=http://localhost:8000/api \
+       --viewer-base-url=http://localhost:8000/admin/bug-reports
 
-# Read-only smoke test against production
+# Against a deployed adapter that mounts intake + viewer under one prefix,
+# behind Bearer-token auth
 pytest --bug-fab-conformance \
-       --base-url=https://my-app.example.com/bug-fab \
-       --skip-mutating
+       --base-url=https://staging.example.com/bug-fab \
+       --auth-header="Authorization: Bearer eyJhbGciOi..."
 ```
 
 ### Running in CI
 
-Drop into your existing CI pipeline. The reference Bug-Fab repo runs conformance against its own FastAPI adapter on every push:
+Drop into your existing CI pipeline. The reference Bug-Fab repo runs conformance against its own FastAPI adapter on every push (see `.github/workflows/ci.yml` for the full job, including the boot-poll):
 
 ```yaml
 - name: Run conformance tests
   run: |
     python -m pip install -e ".[dev]"
-    uvicorn examples.fastapi_minimal.main:app --host 0.0.0.0 --port 8000 &
+    (cd examples/fastapi-minimal && \
+      uvicorn main:app --host 127.0.0.1 --port 8000 &)
     sleep 2
-    pytest --bug-fab-conformance --base-url=http://localhost:8000
+    pytest --bug-fab-conformance \
+           --base-url=http://127.0.0.1:8000/api \
+           --viewer-base-url=http://127.0.0.1:8000/admin/bug-reports
 ```
+
+(The `cd` matters: the example lives in a hyphenated folder, so a dotted `examples.fastapi_minimal.main:app` import path cannot resolve.)
 
 ---
 
 ## What the suite covers
 
-The suite is organized into seven test modules. Each module maps to a section of [`PROTOCOL.md`](./PROTOCOL.md).
+The suite is organized into five test modules (in `bug_fab/conformance/tests/`). Each module maps to a section of [`PROTOCOL.md`](./PROTOCOL.md).
 
 | Module | Protocol section | What it asserts |
 |--------|------------------|-----------------|
-| `test_intake.py` | `POST /bug-reports` | Happy path; response shape; `id` format; `received_at` is a valid ISO 8601 timestamp; `stored_at` is a string. |
-| `test_validation.py` | Severity / status enums; required fields | Invalid `severity` → `422`; invalid `status` → `422`; missing `protocol_version` → `400`; missing `metadata` part → `400`; missing `screenshot` part → `400`; non-PNG screenshot → `415`. |
-| `test_deprecated_values.py` | Deprecated-values rule | `GET /reports/{id}` returns reports stored with deprecated enum values intact (the plugin pre-seeds a fixture report with `status: "resolved"` if the adapter exposes a write hook for fixture seeding, otherwise it skips this module with a documented warning). |
-| `test_viewer_list.py` | `GET /reports` | Response shape (`reports`, `total`, `page`, `page_size`, `stats`); pagination; filter by `status`; filter by `severity`; filter by `environment`. |
-| `test_viewer_detail.py` | `GET /reports/{id}` and `GET /reports/{id}/screenshot` | Detail response includes all required fields; `lifecycle` array present and non-empty (at least one `created` entry); `404` for missing IDs; screenshot endpoint returns `image/png` with non-zero `Content-Length`. |
-| `test_status_workflow.py` | `PUT /reports/{id}/status` | Status updates succeed; lifecycle log appends; `fix_commit` and `fix_description` round-trip; invalid status → `422`; missing `status` → `422`; nonexistent report → `404`. |
-| `test_bulk_ops.py` | `POST /bulk-close-fixed`, `POST /bulk-archive-closed`, `DELETE /reports/{id}` | Bulk ops return correct counts; deleted reports return `404` on subsequent fetch; archived reports excluded from `GET /reports` unless `include_archived=true`. |
+| `test_intake.py` | `POST /bug-reports` | Happy path; response shape; `id` format; `received_at` is a valid ISO 8601 timestamp; missing/invalid parts (missing `metadata` or `screenshot` → `400`/`422`; malformed JSON; invalid `severity` → `422`; oversize screenshot → `400`/`413`; wrong content type → `415`); unknown `protocol_version` → `400 unsupported_protocol_version`; every error body carries the `{error, detail}` envelope; the `201` body never echoes user-submitted free text. |
+| `test_viewer.py` | `GET /reports`, `GET /reports/{id}`, `GET /reports/{id}/screenshot` | Pagination envelope (`items`, `total`, `page`, `page_size`, `stats`); `stats` has the four lifecycle states; filter by `status` / `severity`; detail includes the documented fields; screenshot returns `image/png`; unknown ids → `404`. |
+| `test_deprecated_values.py` | Deprecated-values rule | Reports stored with deprecated enum values (e.g. `status: "resolved"`) still parse and return on read, and deprecated values are rejected on write. |
+| `test_status_workflow.py` | `PUT /reports/{id}/status`, `POST /bulk-close-fixed`, `POST /bulk-archive-closed` | Status updates succeed; lifecycle log appends; `fix_commit` / `fix_description` round-trip; invalid status → `422`; nonexistent report → `404`; bulk ops return counts and archived reports leave the default listing. |
+| `test_environment_field.py` | Environment round-trip | `metadata.environment` persists, returns on detail, and the `?environment=` list filter includes/excludes correctly. |
 
 ---
 
@@ -173,7 +170,7 @@ The plugin will skip this test if your adapter does not expose a fixture-seed ho
 ```
 GET /reports
   → 200 OK
-  → response.reports is a list
+  → response.items is a list
   → response.total is an int
   → response.page == 1
   → response.page_size == 20 (default)
@@ -226,9 +223,9 @@ POST /bug-reports with metadata.environment == "staging"
 GET /reports/{id}
   → response.environment == "staging"
 GET /reports?environment=staging
-  → response.reports includes the report
+  → response.items includes the report
 GET /reports?environment=prod
-  → response.reports excludes the report
+  → response.items excludes the report
 ```
 
 ---
@@ -238,10 +235,10 @@ GET /reports?environment=prod
 | Outcome | Meaning |
 |---------|---------|
 | **All tests pass** | Your adapter is v0.1-compliant. You can advertise this in your README. |
-| **A test in `test_validation.py` fails** | Your adapter is too permissive. Most often: it is silently coercing an invalid enum value. Fix the validation, do not loosen the test. |
-| **A test in `test_deprecated_values.py` fails or skips** | Your adapter is too strict on the read path, or you have not implemented the fixture-seed hook. Either way, manually insert a deprecated-value record and verify it returns. |
+| **A validation test in `test_intake.py` fails** | Your adapter is too permissive. Most often: it is silently coercing an invalid enum value. Fix the validation, do not loosen the test. |
+| **A test in `test_deprecated_values.py` fails** | Your adapter is too strict on the read path (deprecated values must round-trip) or too loose on the write path (they must be rejected). |
 | **A test in `test_status_workflow.py` fails** | Either your status update endpoint does not match the protocol, or your lifecycle audit log is broken. The failure message will tell you which. |
-| **A test in `test_bulk_ops.py` fails** | Bulk ops counts wrong, or archived reports leaking into default list responses. |
+| **A test in `test_viewer.py` fails** | List envelope shape, filters, `stats`, or the screenshot/detail endpoints diverge from the protocol. |
 | **All tests skip** | You forgot the `--bug-fab-conformance` flag, or your `--base-url` is wrong. |
 
 ---

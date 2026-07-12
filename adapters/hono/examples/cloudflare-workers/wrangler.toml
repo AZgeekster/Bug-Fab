@@ -8,7 +8,7 @@ binding = "BUG_FAB_R2"
 bucket_name = "bug-fab-screenshots"
 
 # KV namespace for metadata + the monotonic ID counter.
-# Replace `id` with the value `wrangler kv:namespace create BUG_FAB_KV` prints.
+# Replace `id` with the value `wrangler kv namespace create BUG_FAB_KV` prints.
 [[kv_namespaces]]
 binding = "BUG_FAB_KV"
 id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"

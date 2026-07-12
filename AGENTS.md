@@ -487,16 +487,19 @@ The conformance plugin ships with the package. It tests over HTTP, so
 the adapter under test can be in any language.
 
 ```bash
-pip install bug-fab    # or "bug-fab[conformance]" for the slim install
+pip install bug-fab pytest    # the plugin ships inside the main package
 pytest --bug-fab-conformance --base-url=https://my-app.example.com/bug-fab
 ```
 
 Optional flags:
 
 ```bash
---auth-header="Bearer eyJ..."   # if your adapter requires auth
---skip-mutating                 # skip POST/PUT/DELETE; read-only smoke test
+--viewer-base-url=URL                          # split-mount adapters: viewer prefix
+--auth-header="Authorization: Bearer eyJ..."   # 'Name: value' format
 ```
+
+The suite performs writes (POST/PUT/DELETE, bulk ops) — never point it
+at production data you care about.
 
 **Common pitfalls AIs hit:**
 - Running `pytest` without the `--bug-fab-conformance` flag. The

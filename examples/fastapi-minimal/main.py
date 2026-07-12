@@ -33,9 +33,11 @@ def _resolve_static_dir() -> Path:
     """Locate the Bug-Fab static bundle on disk.
 
     Wheel installs ship the bundle at ``<site-packages>/bug_fab/static``
-    via the package's ``shared-data`` hook. Editable installs
-    (``pip install -e``) leave it one directory up at ``<repo>/static``.
-    Probe both so the same example runs in either layout.
+    via hatchling's ``[force-include]`` mapping — NOT the ``shared-data``
+    hook, which places files outside the package and broke wheel
+    installs (see pyproject.toml). Editable installs (``pip install -e``)
+    leave it one directory up at ``<repo>/static``. Probe both so the
+    same example runs in either layout.
     """
     package_root = Path(bug_fab.__file__).resolve().parent
     candidates = [package_root / "static", package_root.parent / "static"]

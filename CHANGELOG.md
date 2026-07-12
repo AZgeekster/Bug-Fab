@@ -97,6 +97,13 @@ out explicitly in each release entry.
 
 ### Fixed
 
+- **`docker build` now succeeds on a clean clone.** The Dockerfile
+  unconditionally copied the gitignored `marketing-dist/` directory (built
+  out-of-band before deploys), so `git clone && docker build .` aborted at
+  that line. A tracked `.gitkeep` keeps the directory present; the app
+  already degrades gracefully and serves the playground at `/` when the
+  marketing site content is absent.
+
 - **`BugFab.destroy()` now restores `console.error`/`console.warn` and
   detaches the global error listeners.** It previously restored only
   `window.fetch`, so an SPA that unmounted Bug-Fab (e.g. on logout) kept

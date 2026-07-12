@@ -122,5 +122,8 @@ adapters/aspnet/.vs/
 
 # --- Co-hosted marketing site ---
 # Populated by `cp -r ../SITE-BUG-FAB/dist marketing-dist` before
-# `flyctl deploy`. Never committed — built fresh per deploy.
-marketing-dist/
+# `flyctl deploy`. Never committed — built fresh per deploy. The .gitkeep
+# stays tracked so the Dockerfile's COPY succeeds on a clean clone (the
+# runtime falls back to the playground page when index.html is absent).
+marketing-dist/*
+!marketing-dist/.gitkeep

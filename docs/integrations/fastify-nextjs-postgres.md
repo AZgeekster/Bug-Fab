@@ -744,8 +744,8 @@ pip install --pre bug-fab
 # In a separate terminal:
 pytest --bug-fab-conformance --base-url=http://localhost:3000
 
-# CI-friendly: skip mutating tests if running against shared infrastructure.
-pytest --bug-fab-conformance --base-url=http://localhost:3000 --skip-mutating
+# The suite performs writes (POST/PUT/DELETE, bulk ops) — run it against a
+# disposable database, never against shared infrastructure.
 ```
 
 The suite covers:

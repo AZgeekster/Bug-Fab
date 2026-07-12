@@ -50,8 +50,10 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 def _resolve_static_dir() -> Path:
     """Locate the Bug-Fab static bundle on disk.
 
-    Wheel installs ship the bundle at ``<site-packages>/bug_fab/static``;
-    editable installs leave it at ``<repo>/static``. Probe both.
+    Wheel installs ship the bundle at ``<site-packages>/bug_fab/static``
+    via hatchling's ``[force-include]`` mapping (NOT ``shared-data`` —
+    see pyproject.toml); editable installs leave it at ``<repo>/static``.
+    Probe both.
     """
     package_root = Path(bug_fab.__file__).resolve().parent
     for candidate in (package_root / "static", package_root.parent / "static"):

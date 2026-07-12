@@ -25,7 +25,10 @@ COPY examples /app/examples
 
 # Pre-built SITE-BUG-FAB marketing site (Astro `dist/`). Co-hosted at /,
 # playground at /playground/. Built outside the Docker context — see the
-# sibling SITE-BUG-FAB project's README for the workflow.
+# sibling SITE-BUG-FAB project's README for the workflow. On a clean
+# clone the directory contains only a tracked .gitkeep, so this COPY
+# still succeeds and the app serves the playground at / instead
+# (_resolve_marketing_dir requires an index.html).
 COPY marketing-dist /app/marketing-dist
 
 # fly.toml mounts a 1 GB volume at /data; this env var tells the example
