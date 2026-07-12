@@ -11,6 +11,8 @@ out explicitly in each release entry.
 
 ## [Unreleased]
 
+## [0.1.0a2] - 2026-07-12
+
 ### Changed (Breaking)
 
 - **The FastAPI adapter now emits the protocol's `{"error", "detail"}` error
@@ -1060,5 +1062,6 @@ the publish workflow end-to-end before the `v0.1.0` final release.
 - Wire-protocol contract is not yet locked. Do not build production
   integrations against this alpha.
 
-[Unreleased]: https://github.com/AZgeekster/Bug-Fab/compare/v0.1.0a1...HEAD
+[Unreleased]: https://github.com/AZgeekster/Bug-Fab/compare/v0.1.0a2...HEAD
+[0.1.0a2]: https://github.com/AZgeekster/Bug-Fab/compare/v0.1.0a1...v0.1.0a2
 [0.1.0a1]: https://github.com/AZgeekster/Bug-Fab/releases/tag/v0.1.0a1
