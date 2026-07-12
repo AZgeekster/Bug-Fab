@@ -355,7 +355,14 @@ def make_blueprint(
                 max_metadata_bytes=settings.max_metadata_kb * 1024,
             )
         except PayloadTooLarge as exc:
-            return _error("payload_too_large", exc.message, 413, limit_bytes=max_bytes)
+            # The exception says which cap tripped — the metadata cap and
+            # the screenshot cap differ.
+            return _error(
+                "payload_too_large",
+                exc.message,
+                413,
+                limit_bytes=exc.limit_bytes if exc.limit_bytes is not None else max_bytes,
+            )
         except UnsupportedMediaType as exc:
             return _error("unsupported_media_type", exc.message, 415)
         except IntakeValidationError as exc:

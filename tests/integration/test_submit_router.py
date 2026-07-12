@@ -207,14 +207,18 @@ def test_missing_title_returns_422(app_factory, tiny_png: bytes) -> None:
     assert response.status_code == 422
 
 
-def test_empty_screenshot_returns_400(app_factory) -> None:
+def test_empty_screenshot_returns_415(app_factory) -> None:
+    # Since the router unified onto intake.validate_payload, an empty file
+    # fails the PNG magic-byte check like any other non-PNG payload — the
+    # same 415 the Flask and Django adapters have always returned.
     client = app_factory()
     response = client.post(
         "/bug-reports",
         data={"metadata": json.dumps(_baseline_metadata())},
         files={"screenshot": ("shot.png", b"", "image/png")},
     )
-    assert response.status_code == 400
+    assert response.status_code == 415
+    assert response.json()["error"] == "unsupported_media_type"
 
 
 # -----------------------------------------------------------------------------
@@ -302,6 +306,24 @@ def test_jpeg_magic_bytes_rejected_as_415(app_factory) -> None:
     )
     assert response.status_code == 415
     assert "png" in response.text.lower()
+
+
+def test_png_bytes_with_wrong_content_type_rejected_as_415(app_factory, tiny_png: bytes) -> None:
+    """Valid PNG bytes declared as a non-PNG content type must be 415.
+
+    Enforced since the router unified onto ``intake.validate_payload`` —
+    the shared pipeline checks the declared content type before the magic
+    bytes, exactly as the Flask and Django adapters always have. The old
+    inline validation ignored the declared type entirely.
+    """
+    client = app_factory()
+    response = client.post(
+        "/bug-reports",
+        data={"metadata": json.dumps(_baseline_metadata())},
+        files={"screenshot": ("shot.png", tiny_png, "application/octet-stream")},
+    )
+    assert response.status_code == 415
+    assert response.json()["error"] == "unsupported_media_type"
 
 
 def test_json_only_post_rejected(app_factory) -> None:
@@ -491,17 +513,6 @@ def test_non_png_envelope_uses_unsupported_media_type(app_factory) -> None:
     )
     assert response.status_code == 415
     assert response.json()["error"] == "unsupported_media_type"
-
-
-def test_empty_screenshot_envelope_uses_validation_error(app_factory) -> None:
-    client = app_factory()
-    response = client.post(
-        "/bug-reports",
-        data={"metadata": json.dumps(_baseline_metadata())},
-        files={"screenshot": ("shot.png", b"", "image/png")},
-    )
-    assert response.status_code == 400
-    assert response.json()["error"] == "validation_error"
 
 
 def test_rate_limited_envelope_includes_retry_after_seconds(

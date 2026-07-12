@@ -41,6 +41,20 @@ out explicitly in each release entry.
 
 ### Changed
 
+- **The FastAPI adapter now validates intake through the same shared pipeline
+  as Flask and Django** (`bug_fab.intake.validate_payload`) instead of its own
+  inline checks, so all three Python adapters accept and reject identical
+  requests. Three observable differences on the FastAPI adapter:
+  size/content-type/magic-byte checks now run *before* JSON parsing and schema
+  validation (a request failing several checks may get a different status than
+  before — e.g. oversized screenshot + malformed JSON is now `413`, not
+  `400`); an empty screenshot file returns `415 unsupported_media_type` (was
+  `400`), matching Flask and Django; and a screenshot part whose declared
+  content type is not `image/png` is rejected with `415` even when the bytes
+  are valid PNG (it was previously accepted). Additionally, the `limit_bytes`
+  field on a metadata-cap `413` now reports the metadata cap on all three
+  adapters — Flask and Django previously reported the screenshot cap there.
+
 - **The GitHub and Linear integrations now truncate long text with the `…`
   character instead of `...`.** All six built-in integrations shared six
   copies of a truncation helper that had drifted into two forms; they now

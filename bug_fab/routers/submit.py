@@ -3,17 +3,19 @@
 This module exposes :data:`submit_router`, a FastAPI ``APIRouter`` with a
 single endpoint (``POST /bug-reports``) that:
 
-1. Validates the multipart payload (``metadata`` JSON string +
-   ``screenshot`` file).
-2. Enforces per-IP rate limits when the consumer enables them.
-3. Caps screenshot size and verifies PNG magic bytes. Per PROTOCOL.md §
-   Request, v0.1 locks the screenshot media type to ``image/png``;
-   anything else is rejected with ``415 Unsupported Media Type``.
-4. Captures the request-header ``User-Agent`` as the source-of-truth
+1. Enforces per-IP rate limits when the consumer enables them.
+2. Validates the multipart payload (``metadata`` JSON string +
+   ``screenshot`` file) through the shared
+   :func:`bug_fab.intake.validate_payload` pipeline — the same call the
+   Flask and Django adapters make, so all three accept and reject
+   identical requests: size caps, then content-type + PNG magic bytes
+   (v0.1 locks the screenshot media type to ``image/png``), then JSON
+   parse + protocol-version gate + schema validation.
+3. Captures the request-header ``User-Agent`` as the source-of-truth
    ``server_user_agent`` field, preserving any client-supplied value as
    ``client_reported_user_agent`` for diagnostics.
-5. Persists the report through the configured :class:`Storage` backend.
-6. Best-effort syncs to GitHub Issues when enabled.
+4. Persists the report through the configured :class:`Storage` backend.
+5. Best-effort syncs to GitHub Issues when enabled.
 
 Storage and configuration are resolved through dependency-injection
 helpers (:func:`get_storage`, :func:`get_settings`, :func:`get_github_sync`)
@@ -31,18 +33,27 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
-from pydantic import ValidationError
 
 from bug_fab._observability import EVENT_REPORT_RECEIVED
 from bug_fab._observability import emit as emit_event
 from bug_fab._rate_limit import RateLimiter, resolve_client_ip
 from bug_fab._redact import redact_report
 from bug_fab.config import Settings
-from bug_fab.intake import UnsupportedProtocolVersion, check_protocol_version, max_request_bytes
+from bug_fab.intake import (
+    IntakeError,
+    PayloadTooLarge,
+    UnsupportedMediaType,
+    UnsupportedProtocolVersion,
+    max_request_bytes,
+    validate_payload,
+)
+from bug_fab.intake import (
+    ValidationError as IntakeValidationError,
+)
 from bug_fab.integrations.github import GitHubSync
 from bug_fab.integrations.webhook import WebhookSync
 from bug_fab.routers._errors import protocol_error
-from bug_fab.schemas import BugReportCreate, BugReportIntakeResponse
+from bug_fab.schemas import BugReportIntakeResponse
 from bug_fab.storage.base import Storage
 
 logger = logging.getLogger(__name__)
@@ -90,12 +101,6 @@ class _ContentLengthLimitedRoute(APIRoute):
 
 
 submit_router = APIRouter(tags=["bug-fab"], route_class=_ContentLengthLimitedRoute)
-
-#: Magic-byte signature for the only image format accepted on intake.
-#: PROTOCOL.md v0.1 locks the screenshot media type to ``image/png``;
-#: ``html2canvas`` (the bundled client) only emits PNG. Adapters that
-#: want JPEG support layer it on top after a protocol bump.
-_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 #: Module-level singleton that callers replace via FastAPI dependency
 #: overrides. The router never instantiates a default storage backend
@@ -215,22 +220,15 @@ def _client_ip(request: Request, trusted_proxies: Container[str]) -> str:
     return resolve_client_ip(peer, request.headers.get("x-forwarded-for"), trusted_proxies)
 
 
-def _is_png(payload: bytes) -> bool:
-    """Return ``True`` when ``payload`` starts with the PNG magic signature."""
-    return payload.startswith(_PNG_SIGNATURE)
-
-
 @submit_router.post(
     "/bug-reports",
     response_model=BugReportIntakeResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Submit a bug report",
     responses={
-        400: {
-            "description": "Malformed metadata JSON, empty screenshot, or unknown protocol_version"
-        },
-        413: {"description": "Screenshot exceeds the configured size cap"},
-        415: {"description": "Screenshot is not a PNG"},
+        400: {"description": "Malformed metadata JSON or unknown protocol_version"},
+        413: {"description": "Screenshot or metadata exceeds its configured size cap"},
+        415: {"description": "Screenshot is not a PNG (by content-type or magic bytes)"},
         422: {"description": "Metadata parses as JSON but fails schema validation"},
         429: {"description": "Per-IP rate limit exceeded"},
         500: {"description": "Storage backend unavailable or write failed"},
@@ -266,78 +264,57 @@ async def submit_bug_report(
             retry_after_seconds=settings.rate_limit_window_seconds,
         )
 
-    # Parse and validate the metadata JSON. Pydantic validation errors
-    # surface as 422 schema_error; bad JSON is its own 400 validation_error
-    # so consumers can distinguish "not parseable" from "parseable but
-    # invalid." An unknown protocol_version is checked before schema
-    # validation, because BugReportCreate types the field as Literal["0.1"]
-    # and would otherwise swallow it into a 422.
-    # Cap the metadata string before json.loads. Only the screenshot was
-    # bounded before, so a tiny PNG plus a several-hundred-MB metadata string
-    # was parsed into memory and persisted. Measured in UTF-8 bytes.
-    max_metadata_bytes = settings.max_metadata_kb * 1024
-    metadata_bytes = len(metadata.encode("utf-8"))
-    if metadata_bytes > max_metadata_bytes:
-        return protocol_error(
-            status.HTTP_413_CONTENT_TOO_LARGE,
-            "payload_too_large",
-            f"metadata exceeds maximum size of {settings.max_metadata_kb} KiB",
-            limit_bytes=max_metadata_bytes,
-        )
-    try:
-        metadata_obj: dict[str, Any] = json.loads(metadata)
-    except json.JSONDecodeError as exc:
-        return protocol_error(
-            status.HTTP_400_BAD_REQUEST,
-            "validation_error",
-            f"metadata is not valid JSON: {exc.msg}",
-        )
-    try:
-        check_protocol_version(metadata_obj)
-    except UnsupportedProtocolVersion as exc:
-        return protocol_error(
-            status.HTTP_400_BAD_REQUEST,
-            exc.code,
-            exc.message,
-        )
-    try:
-        payload = BugReportCreate.model_validate(metadata_obj)
-    except ValidationError as exc:
-        return protocol_error(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "schema_error",
-            exc.errors(),
-        )
-
-    # Buffer the upload into memory so we can validate magic bytes and
-    # enforce the size cap before handing bytes to storage.
+    # Validate through the shared pipeline in :mod:`bug_fab.intake` — the
+    # same call Flask and Django make, so all three Python adapters accept
+    # and reject identical requests with identical error envelopes. The
+    # exception→envelope mapping below mirrors the Flask blueprint's.
+    # Buffer the upload first; the pre-parse Content-Length route guard has
+    # already bounded the whole body, and the per-field caps re-check below.
     screenshot_bytes = await screenshot.read()
-    if not screenshot_bytes:
-        return protocol_error(
-            status.HTTP_400_BAD_REQUEST,
-            "validation_error",
-            "Screenshot file is empty",
-        )
     max_bytes = settings.max_upload_mb * 1024 * 1024
-    if len(screenshot_bytes) > max_bytes:
+    try:
+        validated = validate_payload(
+            metadata_json=metadata,
+            screenshot_bytes=screenshot_bytes,
+            screenshot_content_type=(screenshot.content_type or "image/png"),
+            request_user_agent=request.headers.get("user-agent"),
+            max_screenshot_bytes=max_bytes,
+            max_metadata_bytes=settings.max_metadata_kb * 1024,
+        )
+    except PayloadTooLarge as exc:
         return protocol_error(
             status.HTTP_413_CONTENT_TOO_LARGE,
             "payload_too_large",
-            f"Screenshot exceeds maximum size of {settings.max_upload_mb} MiB",
-            limit_bytes=max_bytes,
+            exc.message,
+            limit_bytes=exc.limit_bytes if exc.limit_bytes is not None else max_bytes,
         )
-    if not _is_png(screenshot_bytes):
+    except UnsupportedMediaType as exc:
         return protocol_error(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             "unsupported_media_type",
-            "Screenshot must be a PNG image (image/png)",
+            exc.message,
         )
+    except UnsupportedProtocolVersion as exc:
+        return protocol_error(status.HTTP_400_BAD_REQUEST, exc.code, exc.message)
+    except IntakeValidationError as exc:
+        # Pydantic errors land in ``exc.detail``; JSON-decode failures
+        # leave it empty and put the message on ``exc.message``.
+        if exc.detail:
+            return protocol_error(status.HTTP_422_UNPROCESSABLE_CONTENT, "schema_error", exc.detail)
+        return protocol_error(status.HTTP_400_BAD_REQUEST, "validation_error", exc.message)
+    except IntakeError as exc:  # pragma: no cover - defensive catch-all
+        return protocol_error(exc.status_code, exc.code, exc.message)
 
     # Build the persistence payload. The server is authoritative for
     # User-Agent, environment, and the protocol-version tag — the client
     # value (if any) is preserved separately for diagnostics.
-    server_user_agent = request.headers.get("user-agent", "")
+    payload = validated.metadata
+    server_user_agent = validated.user_agent
     client_user_agent = payload.context.user_agent
+    try:
+        metadata_obj: dict[str, Any] = json.loads(metadata)
+    except json.JSONDecodeError:  # pragma: no cover - already validated
+        metadata_obj = {}
     environment = payload.context.environment or metadata_obj.get("environment") or ""
     metadata_dict = payload.model_dump(mode="json")
     metadata_dict["server_user_agent"] = server_user_agent

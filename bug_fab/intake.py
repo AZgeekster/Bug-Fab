@@ -83,11 +83,20 @@ class IntakeError(Exception):
 
 
 class PayloadTooLarge(IntakeError):
-    """Screenshot exceeds the configured size cap. Maps to HTTP 413."""
+    """Screenshot or metadata exceeds its configured size cap. Maps to HTTP 413.
+
+    ``limit_bytes`` carries the cap that tripped (the metadata cap and the
+    screenshot cap differ), so adapters can populate the protocol's
+    ``limit_bytes`` response field without guessing which check fired.
+    """
 
     status_code = 413
     code = "payload_too_large"
     message = "Screenshot exceeds the maximum allowed size"
+
+    def __init__(self, message: str = "", limit_bytes: int | None = None) -> None:
+        super().__init__(message)
+        self.limit_bytes = limit_bytes
 
 
 class UnsupportedMediaType(IntakeError):
@@ -252,10 +261,14 @@ def validate_payload(
     metadata_bytes = len(metadata_json.encode("utf-8"))
     if metadata_bytes > max_metadata_bytes:
         raise PayloadTooLarge(
-            f"metadata exceeds maximum size of {max_metadata_bytes} bytes (got {metadata_bytes})"
+            f"metadata exceeds maximum size of {max_metadata_bytes} bytes (got {metadata_bytes})",
+            limit_bytes=max_metadata_bytes,
         )
     if len(screenshot_bytes) > max_screenshot_bytes:
-        raise PayloadTooLarge(f"Screenshot exceeds maximum size of {max_screenshot_bytes} bytes")
+        raise PayloadTooLarge(
+            f"Screenshot exceeds maximum size of {max_screenshot_bytes} bytes",
+            limit_bytes=max_screenshot_bytes,
+        )
 
     # 2. Content-type enforcement. The protocol locks v0.1 to PNG; adapters
     #    that want JPEG support layer it on top after a protocol bump.

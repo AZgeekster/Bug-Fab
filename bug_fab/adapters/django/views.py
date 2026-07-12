@@ -279,7 +279,9 @@ def intake_view(request: HttpRequest) -> HttpResponse:
             max_metadata_bytes=_max_metadata_bytes(),
         )
     except PayloadTooLarge as exc:
-        return _err("payload_too_large", str(exc), 413)
+        # The exception says which cap tripped — the metadata cap and the
+        # screenshot cap differ; _err falls back to the screenshot cap.
+        return _err("payload_too_large", str(exc), 413, limit_bytes=exc.limit_bytes)
     except UnsupportedMediaType as exc:
         return _err("unsupported_media_type", str(exc), 415)
     except UnsupportedProtocolVersion as exc:
