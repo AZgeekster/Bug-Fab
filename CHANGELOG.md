@@ -72,6 +72,13 @@ out explicitly in each release entry.
 
 ### Fixed
 
+- **The Spring adapter now enforces its `bugfab.max-metadata-kb` cap.** The
+  property (default 256 KiB) was declared, documented, and set in
+  `application.yml`, but intake read the metadata part unbounded and never
+  consulted it. An oversized metadata part now returns
+  `413 payload_too_large` with `limit_bytes`, checked against the part's
+  declared size before the bytes are copied into JVM heap.
+
 - **The ASP.NET adapter no longer reuses report ids after a delete.** Its EF Core
   storage derived the next id from `MAX(IdSequence) + 1`; delete the highest report
   and the next insert recomputed that same number, colliding with (or reissuing the

@@ -71,7 +71,7 @@ No `@EnableBugFab` annotation is required — the auto-configuration class is re
 | `bugfab.storage`                        | `file`               | `BUGFAB_STORAGE`                               | `file` or `jpa`.                                                   |
 | `bugfab.storage-dir`                    | `./var/bug-fab`      | `BUGFAB_STORAGE_DIR`                           | Filesystem dir used by the file backend.                           |
 | `bugfab.max-screenshot-mb`              | `4`                  | `BUGFAB_MAX_SCREENSHOT_MB`                     | Hard cap for screenshot bytes.                                     |
-| `bugfab.max-metadata-kb`                | `256`                | `BUGFAB_MAX_METADATA_KB`                       | Cap for metadata JSON.                                             |
+| `bugfab.max-metadata-kb`                | `256`                | `BUGFAB_MAX_METADATA_KB`                       | Cap for the metadata part; oversize is `413 payload_too_large`.    |
 | `bugfab.id-prefix`                      | (empty)              | `BUGFAB_ID_PREFIX`                             | Multi-env shared collectors (`bug-P038`, `bug-D012`).              |
 | `bugfab.rate-limit.enabled`             | `false`              | `BUGFAB_RATE_LIMIT_ENABLED`                    | Bucket4j per-IP limiter on intake.                                 |
 | `bugfab.rate-limit.max-per-window`      | `30`                 | `BUGFAB_RATE_LIMIT_MAX_PER_WINDOW`             |                                                                    |
