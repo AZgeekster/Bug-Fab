@@ -97,6 +97,14 @@ out explicitly in each release entry.
 
 ### Fixed
 
+- **`BugFab.destroy()` now restores `console.error`/`console.warn` and
+  detaches the global error listeners.** It previously restored only
+  `window.fetch`, so an SPA that unmounted Bug-Fab (e.g. on logout) kept
+  capturing console output and window errors into the buffers — which a
+  later re-init could submit alongside an unrelated report. `destroy()` also
+  clears the capture buffers, and a subsequent `init()` reinstalls the
+  interceptors cleanly.
+
 - **A corrupt or missing `index.json` no longer causes the file backend to
   overwrite live reports.** The index is a denormalized cache of the
   per-report JSON files, but a crash-truncated (or deleted) index was
