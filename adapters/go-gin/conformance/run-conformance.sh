@@ -2,7 +2,7 @@
 #
 # One-command cross-stack conformance check for the Bug-Fab Go (Gin) adapter.
 #
-# Boots `examples/minimal/main.go` in a golang:1.22 container, runs the Python
+# Boots `examples/minimal/main.go` in a golang:1.23 container, runs the Python
 # bug-fab conformance plugin against it from a sibling python:3.12 container,
 # and captures the result to `conformance-results.txt`.
 #

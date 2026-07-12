@@ -12,7 +12,7 @@ process; everything is HTTP, exactly as a real consumer would integrate.
 ## Prerequisites
 
 - Docker 24+ with the `docker compose` v2 plugin (or the legacy `docker-compose` binary).
-- Roughly 800 MB of disk for the first `golang:1.22` + `python:3.12` pull.
+- Roughly 800 MB of disk for the first `golang:1.23` + `python:3.12` pull.
 
 No Go toolchain. No Python toolchain. No `pip install` on the host.
 
@@ -27,7 +27,7 @@ From this directory:
 What happens:
 
 1. `docker compose up -d adapter` builds nothing — it just `go run`s
-   `examples/minimal/main.go` inside a `golang:1.22` container, with the
+   `examples/minimal/main.go` inside a `golang:1.23` container, with the
    repo root mounted read-only. The first run pulls Go module dependencies into
    a named volume so subsequent runs are fast.
 2. A healthcheck waits up to 60 s for `GET /api/bug-fab/reports` to return a
