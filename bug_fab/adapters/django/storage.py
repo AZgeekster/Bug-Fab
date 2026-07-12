@@ -14,7 +14,6 @@ Storage responsibilities map one-to-one to the FastAPI reference:
 * :meth:`list_reports` — filtered + paginated summaries.
 * :meth:`update_status` — locked row update + ``status_changed`` lifecycle.
 * :meth:`delete_report` — hard delete (cascade to lifecycle + file unlink).
-* :meth:`archive_report` — stamp ``archived_at`` + lifecycle ``archived``.
 * :meth:`bulk_close_fixed` / :meth:`bulk_archive_closed` — batched updates.
 * :meth:`set_github_link` — best-effort GitHub Issues link persistence.
 
@@ -416,28 +415,6 @@ class DjangoORMStorage:
         if screenshot_path is not None:
             with contextlib.suppress(OSError):
                 screenshot_path.unlink(missing_ok=True)
-        return True
-
-    def archive_report(self, report_id: str) -> bool:
-        """Soft-archive — stamp ``archived_at`` and append the lifecycle entry."""
-        if not REPORT_ID_RE.match(report_id or ""):
-            return False
-        with transaction.atomic():
-            try:
-                row = BugReport.objects.select_for_update().get(pk=report_id)
-            except BugReport.DoesNotExist:
-                return False
-            if row.archived_at is not None:
-                return False
-            now = dj_timezone.now()
-            row.archived_at = now
-            row.save(update_fields=["archived_at"])
-            BugReportLifecycle.objects.create(
-                bug_report=row,
-                action="archived",
-                by="",
-                at=now,
-            )
         return True
 
     def bulk_close_fixed(self, by: str = "") -> int:

@@ -37,8 +37,6 @@ class PostgresStorage(SqlStorageBase):
         Directory where screenshot PNG files are written. Created if missing.
     """
 
-    supports_returning = True
-
     def __init__(self, dsn: str, screenshot_dir: Path | str) -> None:
         self.dsn = dsn
         engine = make_engine(dsn)

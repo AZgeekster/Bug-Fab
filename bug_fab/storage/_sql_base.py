@@ -21,7 +21,7 @@ import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 from sqlalchemy import Engine, func, select, text, update
 from sqlalchemy.orm import Session
@@ -59,11 +59,6 @@ class StorageError(Exception):
 
 def _utcnow() -> datetime:
     return datetime.now(tz=timezone.utc)
-
-
-def _utcnow_iso() -> str:
-    """ISO-8601 UTC string used for lifecycle ``at`` and timestamp fields."""
-    return _utcnow().isoformat()
 
 
 def _validate_severity_for_write(severity: str | None) -> None:
@@ -104,12 +99,6 @@ class SqlStorageBase(Storage):
     dialect-specific next-id strategy. Everything else — CRUD, lifecycle
     audit, bulk operations, status workflow — lives here.
     """
-
-    #: Whether the dialect supports ``RETURNING`` from ``INSERT`` /
-    #: ``UPDATE`` clauses. Postgres yes; SQLite >= 3.35 yes; we keep it
-    #: portable by sticking to ORM patterns and avoiding ``RETURNING`` in
-    #: hand-rolled SQL.
-    supports_returning: ClassVar[bool] = False
 
     def __init__(self, engine: Engine, screenshot_dir: Path) -> None:
         self.engine = engine

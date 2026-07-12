@@ -42,7 +42,6 @@ from django.http import (
     FileResponse,
     HttpRequest,
     HttpResponse,
-    HttpResponseNotAllowed,
     JsonResponse,
 )
 from django.shortcuts import render
@@ -611,8 +610,3 @@ def viewer_root(request: HttpRequest) -> HttpResponse:
     function-based view's import path.
     """
     return report_list_html(request)
-
-
-def _method_not_allowed(*methods: str) -> HttpResponseNotAllowed:
-    """Tiny wrapper so the URLconf can express ``HttpResponseNotAllowed`` cleanly."""
-    return HttpResponseNotAllowed(methods)
