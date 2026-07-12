@@ -159,6 +159,16 @@ out explicitly in each release entry.
   each row to `{id}`, but the detail page is served at `{id}/view`, so every row
   click returned 404. The links now point at the detail route.
 
+- **The Spring adapter's rate limiter no longer grows without bound or trusts a
+  spoofable header.** Its bucket map never evicted a key, and it keyed on the
+  raw first `X-Forwarded-For` hop — so rotating a spoofed header both defeated
+  the limit and grew the map indefinitely. Idle buckets are now swept once per
+  window, and the header is honored only when the direct peer is listed in the
+  new `bugfab.rate-limit.trusted-proxies` property (`*` trusts all).
+  **Behavior change:** the default is empty, so a deployment behind a reverse
+  proxy meters per-proxy until it lists its proxy IPs — mirroring the Python
+  reference's `rate_limit_trusted_proxies`.
+
 - **The SvelteKit file backend no longer strands archived reports.** Archiving
   dropped the report from the in-memory index and the startup loader skipped
   `archive/`, so `include_archived=true` could never return an archived report

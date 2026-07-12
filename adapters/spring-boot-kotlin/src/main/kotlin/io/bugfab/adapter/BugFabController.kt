@@ -87,7 +87,7 @@ class BugFabController(
         // every real submission with a framework-level 400.
         // 1. Rate limit (when enabled).
         if (rateLimiter != null) {
-            val clientIp = resolveClientIp(request)
+            val clientIp = resolveClientIp(request, properties.rateLimit.trustedProxies)
             if (!rateLimiter.check(clientIp)) {
                 val rl = properties.rateLimit
                 return ResponseEntity

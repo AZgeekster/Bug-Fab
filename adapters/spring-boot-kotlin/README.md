@@ -76,6 +76,7 @@ No `@EnableBugFab` annotation is required — the auto-configuration class is re
 | `bugfab.rate-limit.enabled`             | `false`              | `BUGFAB_RATE_LIMIT_ENABLED`                    | Bucket4j per-IP limiter on intake.                                 |
 | `bugfab.rate-limit.max-per-window`      | `30`                 | `BUGFAB_RATE_LIMIT_MAX_PER_WINDOW`             |                                                                    |
 | `bugfab.rate-limit.window-seconds`      | `60`                 | `BUGFAB_RATE_LIMIT_WINDOW_SECONDS`             |                                                                    |
+| `bugfab.rate-limit.trusted-proxies`     | (empty)              | `BUGFAB_RATE_LIMIT_TRUSTED_PROXIES`            | Peers allowed to supply `X-Forwarded-For`; `*` trusts all.         |
 | `bugfab.viewer-permissions.can-edit-status` | `true`           | `BUGFAB_VIEWER_PERMISSIONS_CAN_EDIT_STATUS`    | Gates `PUT /reports/{id}/status`.                                  |
 | `bugfab.viewer-permissions.can-delete`  | `true`               | `BUGFAB_VIEWER_PERMISSIONS_CAN_DELETE`         | Gates `DELETE /reports/{id}`.                                      |
 | `bugfab.viewer-permissions.can-bulk`    | `true`               | `BUGFAB_VIEWER_PERMISSIONS_CAN_BULK`           | Gates the two `/bulk-*` endpoints.                                 |
@@ -97,9 +98,11 @@ Spring Data JPA against any JDBC backend. One table (`bug_fab_reports`) with the
 
 ## Rate limiting
 
-Disabled by default. Set `bugfab.rate-limit.enabled=true` to wire the per-IP Bucket4j limiter. Honors `X-Forwarded-For` first-hop for deployments behind a reverse proxy. Rejected requests return the documented `{error: "rate_limited", retry_after_seconds}` envelope plus a `Retry-After` header.
+Disabled by default. Set `bugfab.rate-limit.enabled=true` to wire the per-IP Bucket4j limiter. Rejected requests return the documented `{error: "rate_limited", retry_after_seconds}` envelope plus a `Retry-After` header.
 
-For high-volume deployments where the unbounded `ConcurrentHashMap` of buckets is a concern, swap in Bucket4j's `BucketProxyManager` with Caffeine — see `MIGRATION_NOTES.md` § "Rate limit at scale."
+`X-Forwarded-For` is client-controlled and spoofable, so it is honored only when the direct peer is listed in `bugfab.rate-limit.trusted-proxies` (comma-separated; `*` trusts every peer). Empty — the secure default — meters by the direct peer address, so list your reverse-proxy IPs to restore per-end-user metering behind a proxy.
+
+Idle buckets are evicted by a sweep that runs at most once per window, so long-lived deployments no longer grow the bucket map without bound. For distributed rate limiting across instances, swap in Bucket4j's `BucketProxyManager` — see `MIGRATION_NOTES.md` § "Rate limit at scale."
 
 ## Auth
 
