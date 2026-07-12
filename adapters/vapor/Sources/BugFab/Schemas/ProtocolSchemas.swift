@@ -411,4 +411,16 @@ public struct BugFabIntakeResponse: Content, Sendable {
         case storedAt = "stored_at"
         case githubIssueUrl = "github_issue_url"
     }
+
+    // Custom encode so a nil githubIssueUrl serializes as an explicit
+    // `"github_issue_url": null`. JSONEncoder omits nil optionals by
+    // default, but PROTOCOL.md § Response requires the key to always be
+    // present — the conformance suite asserts it.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(receivedAt, forKey: .receivedAt)
+        try container.encode(storedAt, forKey: .storedAt)
+        try container.encode(githubIssueUrl, forKey: .githubIssueUrl)
+    }
 }

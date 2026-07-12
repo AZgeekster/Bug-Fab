@@ -28,6 +28,12 @@ final class BugFabHappyPathTests: XCTestCase {
             XCTAssertEqual(res.status, .created)
             let body = try res.content.decode(BugFabIntakeResponse.self)
             XCTAssertTrue(body.id.hasPrefix("bug-"))
+            // PROTOCOL.md § Response requires the key even when null —
+            // JSONEncoder omits nil optionals unless encoded explicitly.
+            XCTAssertTrue(
+                res.body.string.contains("\"github_issue_url\""),
+                "201 body must carry github_issue_url explicitly (got: \(res.body.string))"
+            )
         }
         try await app.testable().test(.GET, "/admin/reports") { res async throws in
             XCTAssertEqual(res.status, .ok)
