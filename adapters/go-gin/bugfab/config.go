@@ -32,6 +32,15 @@ type Config struct {
 	RateLimitEnabled bool
 	RateLimitMax     int
 	RateLimitWindow  int // seconds
+
+	// Viewer permissions gate the destructive viewer actions. Each
+	// defaults to true (all actions allowed); set one to false to make
+	// the matching route return 403 forbidden regardless of the caller.
+	// Mirrors the Python reference's viewer_permissions and the Laravel
+	// BUG_FAB_VIEWER_CAN_* env vars.
+	CanEditStatus bool // PUT /reports/{id}/status
+	CanDelete     bool // DELETE /reports/{id}
+	CanBulk       bool // POST /bulk-close-fixed, /bulk-archive-closed
 }
 
 // DefaultConfig returns the documented v0.1 defaults — safe for
@@ -44,6 +53,9 @@ func DefaultConfig() Config {
 		RateLimitEnabled:   false,
 		RateLimitMax:       30,
 		RateLimitWindow:    60,
+		CanEditStatus:      true,
+		CanDelete:          true,
+		CanBulk:            true,
 	}
 }
 
@@ -75,6 +87,9 @@ func NewConfigFromEnv() Config {
 			c.RateLimitWindow = n
 		}
 	}
+	c.CanEditStatus = envBoolDefault("BUG_FAB_VIEWER_CAN_EDIT_STATUS", true)
+	c.CanDelete = envBoolDefault("BUG_FAB_VIEWER_CAN_DELETE", true)
+	c.CanBulk = envBoolDefault("BUG_FAB_VIEWER_CAN_BULK", true)
 	return c
 }
 
@@ -85,4 +100,22 @@ func envBool(key string) bool {
 		return true
 	}
 	return false
+}
+
+// envBoolDefault reads a boolean env var that defaults to def when unset
+// or empty. Used for the viewer permissions, which are allowed unless a
+// consumer explicitly turns one off — the opposite polarity from the
+// opt-in flags envBool serves.
+func envBoolDefault(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	switch v {
+	case "1", "true", "TRUE", "True", "yes", "YES":
+		return true
+	case "0", "false", "FALSE", "False", "no", "NO":
+		return false
+	}
+	return def
 }

@@ -140,6 +140,14 @@ out explicitly in each release entry.
   reaches the per-field checks — hard transport-level limits belong at the
   reverse proxy / ASGI/WSGI server.
 
+- **The Go (gin) adapter now enforces viewer permissions.** It shipped none, so
+  `DELETE /reports/{id}`, `PUT /reports/{id}/status`, and the bulk endpoints were
+  reachable by anyone who could reach the viewer — a fail-open gap the Rust and
+  Vapor adapters already closed. `Config` gains `CanEditStatus`, `CanDelete`, and
+  `CanBulk` (all default `true`; env `BUG_FAB_VIEWER_CAN_EDIT_STATUS` /
+  `_CAN_DELETE` / `_CAN_BULK`), and the matching route returns `403 forbidden`
+  when its permission is disabled. Default behavior is unchanged.
+
 - **The Django adapter no longer leaks a `total` key in the JSON `stats`
   block.** `GET /reports` emitted a fifth `total` key the reference and Flask
   adapters strip; the JSON contract is the four lifecycle states only. (The

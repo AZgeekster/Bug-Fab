@@ -294,6 +294,10 @@ func (a *Adapter) handleGetScreenshot(c *gin.Context) {
 // schema (422 on bad enum), then storage (404 on unknown id, or 422
 // on a storage-layer rejection of an otherwise-legal value).
 func (a *Adapter) handleUpdateStatus(c *gin.Context) {
+	if !a.Config.CanEditStatus {
+		writeForbidden(c, "can_edit_status")
+		return
+	}
 	id := c.Param("id")
 	var update BugReportStatusUpdate
 	if err := c.ShouldBindJSON(&update); err != nil {
@@ -322,6 +326,10 @@ func (a *Adapter) handleUpdateStatus(c *gin.Context) {
 // body on success, 404 otherwise. No soft-delete here — that lives
 // on POST /bulk-archive-closed.
 func (a *Adapter) handleDeleteReport(c *gin.Context) {
+	if !a.Config.CanDelete {
+		writeForbidden(c, "can_delete")
+		return
+	}
 	id := c.Param("id")
 	deleted, err := a.Storage.DeleteReport(id)
 	if err != nil {
@@ -339,6 +347,10 @@ func (a *Adapter) handleDeleteReport(c *gin.Context) {
 // per-report level — reports already in `closed` aren't transitioned
 // and don't count against the response total.
 func (a *Adapter) handleBulkCloseFixed(c *gin.Context) {
+	if !a.Config.CanBulk {
+		writeForbidden(c, "can_bulk")
+		return
+	}
 	by := actorFromContext(c)
 	count, err := a.Storage.BulkCloseFixed(by)
 	if err != nil {
@@ -352,6 +364,10 @@ func (a *Adapter) handleBulkCloseFixed(c *gin.Context) {
 // — moves files into archive/, drops from the index, but doesn't
 // delete anything. Reversible with manual file moves.
 func (a *Adapter) handleBulkArchiveClosed(c *gin.Context) {
+	if !a.Config.CanBulk {
+		writeForbidden(c, "can_bulk")
+		return
+	}
 	count, err := a.Storage.BulkArchiveClosed()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorEnvelope{Error: "internal_error", Detail: err.Error()})
@@ -435,6 +451,16 @@ func stripEmpty(filters map[string]string) map[string]string {
 // identical across all six rejection sites.
 func writeValidationError(c *gin.Context, status int, code, msg string) {
 	c.JSON(status, ErrorEnvelope{Error: code, Detail: msg})
+}
+
+// writeForbidden rejects a destructive viewer action disabled by
+// configuration with 403 and the standard envelope, mirroring the Rust
+// and Vapor adapters. action is the permission key (e.g. "can_delete").
+func writeForbidden(c *gin.Context, action string) {
+	c.JSON(http.StatusForbidden, ErrorEnvelope{
+		Error:  "forbidden",
+		Detail: "viewer action '" + action + "' is disabled by configuration",
+	})
 }
 
 // ensure standard library imports are used so go vet doesn't trip

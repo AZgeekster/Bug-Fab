@@ -293,6 +293,89 @@ func TestBulkArchiveClosed_CountsAccurately(t *testing.T) {
 	}
 }
 
+// newRestrictedAdapter builds a test adapter whose config is mutated by
+// fn — used to disable a single viewer permission and assert the gate.
+func newRestrictedAdapter(t *testing.T, fn func(*Config)) (*Adapter, *gin.Engine) {
+	t.Helper()
+	cfg := DefaultConfig()
+	cfg.StorageDir = t.TempDir()
+	cfg.MaxScreenshotBytes = 256 * 1024
+	fn(&cfg)
+	adapter, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New(): %v", err)
+	}
+	r := gin.New()
+	adapter.Register(r.Group("/"))
+	return adapter, r
+}
+
+func assertForbidden(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d body=%s", w.Code, w.Body.String())
+	}
+	var env ErrorEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("403 body is not the {error, detail} envelope: %v (%s)", err, w.Body.String())
+	}
+	if env.Error != "forbidden" {
+		t.Fatalf("want error=forbidden, got %q", env.Error)
+	}
+}
+
+func TestUpdateStatus_ForbiddenWhenDisabled(t *testing.T) {
+	a, r := newRestrictedAdapter(t, func(c *Config) { c.CanEditStatus = false })
+	id, _ := a.Storage.SaveReport(sampleMetadata(), tinyPNG)
+	body := strings.NewReader(`{"status":"fixed"}`)
+	req := httptest.NewRequest(http.MethodPut, "/reports/"+id+"/status", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assertForbidden(t, w)
+}
+
+func TestDelete_ForbiddenWhenDisabled(t *testing.T) {
+	a, r := newRestrictedAdapter(t, func(c *Config) { c.CanDelete = false })
+	id, _ := a.Storage.SaveReport(sampleMetadata(), tinyPNG)
+	req := httptest.NewRequest(http.MethodDelete, "/reports/"+id, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assertForbidden(t, w)
+	// The report must survive a rejected delete — a fail-open gate would
+	// have removed it before returning.
+	if detail, _ := a.Storage.GetReport(id); detail == nil {
+		t.Fatalf("report was deleted despite can_delete=false")
+	}
+}
+
+func TestBulk_ForbiddenWhenDisabled(t *testing.T) {
+	_, r := newRestrictedAdapter(t, func(c *Config) { c.CanBulk = false })
+	for _, path := range []string{"/bulk-close-fixed", "/bulk-archive-closed"} {
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assertForbidden(t, w)
+	}
+}
+
+func TestConfigFromEnv_ViewerPermissions(t *testing.T) {
+	// Unset → all permissions default to allowed.
+	cfg := NewConfigFromEnv()
+	if !cfg.CanEditStatus || !cfg.CanDelete || !cfg.CanBulk {
+		t.Fatalf("permissions must default to true, got %+v", cfg)
+	}
+	// An explicit false disables just that one.
+	t.Setenv("BUG_FAB_VIEWER_CAN_DELETE", "false")
+	cfg = NewConfigFromEnv()
+	if cfg.CanDelete {
+		t.Fatalf("BUG_FAB_VIEWER_CAN_DELETE=false must disable can_delete")
+	}
+	if !cfg.CanEditStatus || !cfg.CanBulk {
+		t.Fatalf("only can_delete should be disabled, got %+v", cfg)
+	}
+}
+
 func TestScreenshot_ReturnsPNGBytes(t *testing.T) {
 	a, r := newTestAdapter(t)
 	id, _ := a.Storage.SaveReport(sampleMetadata(), tinyPNG)
