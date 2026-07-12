@@ -159,6 +159,15 @@ out explicitly in each release entry.
   each row to `{id}`, but the detail page is served at `{id}/view`, so every row
   click returned 404. The links now point at the detail route.
 
+- **The SvelteKit file backend no longer strands archived reports.** Archiving
+  dropped the report from the in-memory index and the startup loader skipped
+  `archive/`, so `include_archived=true` could never return an archived report
+  — and after a restart the ID counter re-seeded without them, so a new report
+  could re-mint an archived report's id and a later archive would overwrite the
+  original's files. Archived reports now stay indexed (hidden by default,
+  returned with `include_archived=true`, screenshots served from `archive/`),
+  and the counter seeds from both live and archived reports.
+
 - **The ASP.NET adapter no longer 500s on wrong-typed JSON scalars.** A payload
   like `{"title": 123}` threw an unhandled exception out of the validator
   (`GetValue<string>()` throws on non-string nodes) and surfaced as a 500. Every

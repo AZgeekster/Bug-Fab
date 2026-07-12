@@ -112,11 +112,21 @@ export class FileStorage implements IStorage {
   private async ensureLoaded(): Promise<void> {
     if (this.loaded) return;
     this.loaded = true;
+    await this.loadFrom(this.dir, 'archive');
+    // Archived reports load too: they must stay reachable via
+    // include_archived=true, and — critically — they must keep seeding the
+    // ID counter. Skipping archive/ meant a restart could re-mint an
+    // archived report's id, and a later archive of the reused id would
+    // overwrite the original's files.
+    await this.loadFrom(join(this.dir, 'archive'));
+  }
+
+  private async loadFrom(root: string, skipName?: string): Promise<void> {
     try {
-      const entries = await fs.readdir(this.dir, { withFileTypes: true });
+      const entries = await fs.readdir(root, { withFileTypes: true });
       for (const entry of entries) {
-        if (!entry.isDirectory() || entry.name === 'archive') continue;
-        const metaPath = join(this.dir, entry.name, 'metadata.json');
+        if (!entry.isDirectory() || entry.name === skipName) continue;
+        const metaPath = join(root, entry.name, 'metadata.json');
         try {
           const raw = await fs.readFile(metaPath, 'utf8');
           const r = JSON.parse(raw) as StoredReport;
@@ -144,18 +154,22 @@ export class FileStorage implements IStorage {
   private reportDir(id: string): string {
     return join(this.dir, id);
   }
+  /** Resolve a report's on-disk directory — archived reports live under archive/. */
+  private dirFor(r: StoredReport): string {
+    return r.archived_at ? join(this.dir, 'archive', r.id) : this.reportDir(r.id);
+  }
   private screenshotFile(id: string): string {
     return join(this.reportDir(id), 'screenshot.png');
   }
 
-  private async writeMeta(report: StoredReport, dir = this.reportDir(report.id)): Promise<void> {
-    const dest = join(dir, 'metadata.json');
+  private async writeMeta(report: StoredReport, dir?: string): Promise<void> {
+    const dest = join(dir ?? this.dirFor(report), 'metadata.json');
     const tmp = `${dest}.tmp-${randomUUID()}`;
     await fs.writeFile(tmp, JSON.stringify(report, null, 2), 'utf8');
     await fs.rename(tmp, dest);
-    if (dir === this.reportDir(report.id)) {
-      this.index.set(report.id, report);
-    }
+    // Archived reports stay in the index (with archived_at set) so they
+    // remain reachable via include_archived and keep seeding the counter.
+    this.index.set(report.id, report);
   }
 
   async saveReport(input: SaveReportInput): Promise<{ id: string; storedAt: string; receivedAt: string }> {
@@ -245,7 +259,8 @@ export class FileStorage implements IStorage {
 
   async getScreenshotPath(id: string): Promise<string | null> {
     await this.ensureLoaded();
-    const p = this.screenshotFile(id);
+    const r = this.index.get(id);
+    const p = r ? join(this.dirFor(r), 'screenshot.png') : this.screenshotFile(id);
     return existsSync(p) ? p : null;
   }
 
@@ -289,8 +304,9 @@ export class FileStorage implements IStorage {
 
   async deleteReport(id: string): Promise<void> {
     await this.ensureLoaded();
-    if (!this.index.has(id)) throw new Error(`Report not found: ${id}`);
-    const dir = this.reportDir(id);
+    const r = this.index.get(id);
+    if (!r) throw new Error(`Report not found: ${id}`);
+    const dir = this.dirFor(r);
     if (existsSync(dir)) await fs.rm(dir, { recursive: true, force: true });
     this.index.delete(id);
   }
@@ -299,6 +315,7 @@ export class FileStorage implements IStorage {
     await this.ensureLoaded();
     const r = this.index.get(id);
     if (!r) throw new Error(`Report not found: ${id}`);
+    if (r.archived_at) return; // already archived — idempotent
 
     const archiveDir = join(this.dir, 'archive', id);
     await fs.mkdir(archiveDir, { recursive: true });
@@ -319,10 +336,11 @@ export class FileStorage implements IStorage {
     };
     await this.writeMeta(archived, archiveDir);
 
-    // Remove the live copy.
+    // Remove the live copy. The report stays in the index with archived_at
+    // set — dropping it made archived reports unreachable even through
+    // include_archived=true.
     const liveDir = this.reportDir(id);
     if (existsSync(liveDir)) await fs.rm(liveDir, { recursive: true, force: true });
-    this.index.delete(id);
   }
 
   async bulkCloseFixed(): Promise<number> {
