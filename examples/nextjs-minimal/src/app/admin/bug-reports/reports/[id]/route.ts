@@ -14,19 +14,21 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 interface RouteContext {
-  params: { id: string }
+  // Next.js 15 made dynamic route params a Promise — await before use.
+  params: Promise<{ id: string }>
 }
 
 export async function GET(req: Request, { params }: RouteContext): Promise<NextResponse> {
   const authError = checkAdminToken(req)
   if (authError !== null) return authError
 
-  if (!isValidReportId(params.id)) {
-    return NextResponse.json(Errors.notFound(params.id), { status: 404 })
+  const { id } = await params
+  if (!isValidReportId(id)) {
+    return NextResponse.json(Errors.notFound(id), { status: 404 })
   }
-  const report = await storage.getReport(params.id)
+  const report = await storage.getReport(id)
   if (report === null) {
-    return NextResponse.json(Errors.notFound(params.id), { status: 404 })
+    return NextResponse.json(Errors.notFound(id), { status: 404 })
   }
   return NextResponse.json(report)
 }
@@ -35,12 +37,13 @@ export async function DELETE(req: Request, { params }: RouteContext): Promise<Ne
   const authError = checkAdminToken(req)
   if (authError !== null) return authError
 
-  if (!isValidReportId(params.id)) {
-    return NextResponse.json(Errors.notFound(params.id), { status: 404 })
+  const { id } = await params
+  if (!isValidReportId(id)) {
+    return NextResponse.json(Errors.notFound(id), { status: 404 })
   }
-  const removed = await storage.deleteReport(params.id)
+  const removed = await storage.deleteReport(id)
   if (!removed) {
-    return NextResponse.json(Errors.notFound(params.id), { status: 404 })
+    return NextResponse.json(Errors.notFound(id), { status: 404 })
   }
   // 204 — no body, per the protocol.
   return new NextResponse(null, { status: 204 })

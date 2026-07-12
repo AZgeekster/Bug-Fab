@@ -1,6 +1,6 @@
 # Bug-Fab — Next.js minimal example
 
-A complete Next.js 14 App Router POC implementing **all eight Bug-Fab
+A complete Next.js 15 App Router POC implementing **all eight Bug-Fab
 wire-protocol endpoints** as Route Handlers. Proves that Next.js can be
 its own Bug-Fab adapter — no separate backend process required.
 

@@ -18,17 +18,19 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 interface RouteContext {
-  params: { id: string }
+  // Next.js 15 made dynamic route params a Promise — await before use.
+  params: Promise<{ id: string }>
 }
 
 export async function GET(req: Request, { params }: RouteContext): Promise<NextResponse> {
   const authError = checkAdminToken(req)
   if (authError !== null) return authError
 
-  if (!isValidReportId(params.id)) {
+  const { id } = await params
+  if (!isValidReportId(id)) {
     return new NextResponse(null, { status: 404 })
   }
-  const filePath = await storage.getScreenshotPath(params.id)
+  const filePath = await storage.getScreenshotPath(id)
   if (filePath === null) {
     return new NextResponse(null, { status: 404 })
   }

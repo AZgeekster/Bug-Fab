@@ -1017,6 +1017,16 @@ out explicitly in each release entry.
   security backport — advisories still open against the 14 line have no
   patch short of a Next 15/16 migration.
 
+- **Migrate the `examples/nextjs-minimal` POC from Next 14 (EOL) to Next
+  15.5.20 + React 19.** Next 14 was end-of-life, so its remaining
+  advisories had no fix short of this migration; `npm audit` in the
+  example drops from 14 advisories to 2 moderate (both transitive
+  `postcss`-via-`next`, not the example's to fix). The only breaking
+  change that touched the example was Next 15's Promise-wrapped dynamic
+  route `params` — the three `[id]` route handlers now `await` them.
+  Example app only; the shipped `bug_fab` package has no Next.js
+  dependency.
+
 ## [0.1.0a1] - 2026-04-27
 
 Initial alpha release. Reserves the `bug-fab` name on PyPI and validates

@@ -16,15 +16,17 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 interface RouteContext {
-  params: { id: string }
+  // Next.js 15 made dynamic route params a Promise — await before use.
+  params: Promise<{ id: string }>
 }
 
 export async function PUT(req: Request, { params }: RouteContext): Promise<NextResponse> {
   const authError = checkAdminToken(req)
   if (authError !== null) return authError
 
-  if (!isValidReportId(params.id)) {
-    return NextResponse.json(Errors.notFound(params.id), { status: 404 })
+  const { id } = await params
+  if (!isValidReportId(id)) {
+    return NextResponse.json(Errors.notFound(id), { status: 404 })
   }
 
   let body: unknown
@@ -42,13 +44,13 @@ export async function PUT(req: Request, { params }: RouteContext): Promise<NextR
   }
 
   const updated = await storage.updateStatus(
-    params.id,
+    id,
     result.value.status,
     result.value.fix_commit ?? '',
     result.value.fix_description ?? '',
   )
   if (updated === null) {
-    return NextResponse.json(Errors.notFound(params.id), { status: 404 })
+    return NextResponse.json(Errors.notFound(id), { status: 404 })
   }
 
   // GitHub sync would propagate fixed/closed here. Best-effort, never fail.
