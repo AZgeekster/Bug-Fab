@@ -3,6 +3,7 @@ package bugfab
 import (
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config captures the runtime knobs Bug-Fab consumers may tune. Build
@@ -25,6 +26,12 @@ type Config struct {
 	// high-DPI captures.
 	MaxScreenshotBytes int64
 
+	// MaxMetadataBytes caps the metadata JSON string. Default 256 KiB —
+	// far above any legitimate report, but closing the amplification
+	// where a tiny PNG plus a huge metadata string is parsed into
+	// memory. Mirrors the Python reference's max_metadata_kb.
+	MaxMetadataBytes int64
+
 	// RateLimitEnabled toggles the per-IP limiter. Off by default
 	// because most Bug-Fab consumers are behind auth and an internal
 	// abuse vector is unlikely; the toggle exists so public POCs can
@@ -32,6 +39,14 @@ type Config struct {
 	RateLimitEnabled bool
 	RateLimitMax     int
 	RateLimitWindow  int // seconds
+
+	// RateLimitTrustedProxies lists direct-peer addresses allowed to
+	// supply X-Forwarded-For as the rate-limit key. The header is
+	// client-controlled and spoofable, so it is honored only when the
+	// connecting peer is in this list; empty (the secure default)
+	// meters by the direct peer address. "*" trusts every peer.
+	// Mirrors the Python reference's rate_limit_trusted_proxies.
+	RateLimitTrustedProxies []string
 
 	// Viewer permissions gate the destructive viewer actions. Each
 	// defaults to true (all actions allowed); set one to false to make
@@ -50,6 +65,7 @@ func DefaultConfig() Config {
 		StorageDir:         "./var/bug-fab",
 		IDPrefix:           "",
 		MaxScreenshotBytes: 4 * 1024 * 1024,
+		MaxMetadataBytes:   256 * 1024,
 		RateLimitEnabled:   false,
 		RateLimitMax:       30,
 		RateLimitWindow:    60,
@@ -74,6 +90,18 @@ func NewConfigFromEnv() Config {
 	if v := os.Getenv("BUG_FAB_MAX_UPLOAD_MB"); v != "" {
 		if mb, err := strconv.Atoi(v); err == nil && mb > 0 {
 			c.MaxScreenshotBytes = int64(mb) * 1024 * 1024
+		}
+	}
+	if v := os.Getenv("BUG_FAB_MAX_METADATA_KB"); v != "" {
+		if kb, err := strconv.Atoi(v); err == nil && kb > 0 {
+			c.MaxMetadataBytes = int64(kb) * 1024
+		}
+	}
+	if v := os.Getenv("BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES"); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			if p := strings.TrimSpace(part); p != "" {
+				c.RateLimitTrustedProxies = append(c.RateLimitTrustedProxies, p)
+			}
 		}
 	}
 	c.RateLimitEnabled = envBool("BUG_FAB_RATE_LIMIT_ENABLED")

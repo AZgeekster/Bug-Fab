@@ -17,6 +17,14 @@ import (
 // client-trusted and easy to spoof.
 var pngSignature = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
 
+// multipartOverheadBytes is the fixed allowance added to the sum of the
+// field caps when computing the pre-parse Content-Length bound. Covers
+// the multipart boundary lines and per-part headers so a request sized
+// at exactly the field caps is not rejected by the coarse guard before
+// the precise per-field checks can run. Mirrors the Python reference's
+// intake.MULTIPART_OVERHEAD_BYTES.
+const multipartOverheadBytes = 16 * 1024
+
 // Adapter glues the eight Bug-Fab endpoints together. Build one with
 // New(); mount its handlers on any Gin engine with Register().
 type Adapter struct {
@@ -70,7 +78,7 @@ func (a *Adapter) Register(group *gin.RouterGroup) {
 // observed error code and breaks conformance tests.
 func (a *Adapter) handleSubmit(c *gin.Context) {
 	if a.Limiter != nil {
-		ip := clientIP(c)
+		ip := clientIP(c, a.Config.RateLimitTrustedProxies)
 		if !a.Limiter.Check(ip) {
 			retry := a.Limiter.WindowSeconds()
 			c.JSON(http.StatusTooManyRequests, ErrorEnvelope{
@@ -82,10 +90,36 @@ func (a *Adapter) handleSubmit(c *gin.Context) {
 		}
 	}
 
+	// Pre-parse size guard: reject by declared Content-Length before
+	// c.PostForm/c.FormFile trigger ParseMultipartForm, which buffers the
+	// whole body (32 MiB in memory, remainder spooled to temp files) —
+	// without this the caps ran too late to protect the resource they
+	// bound. The MaxBytesReader backstop bounds bodies sent without a
+	// Content-Length (chunked) by aborting the read at the cap.
+	maxRequest := a.Config.MaxScreenshotBytes + a.Config.MaxMetadataBytes + multipartOverheadBytes
+	if c.Request.ContentLength > maxRequest {
+		c.JSON(http.StatusRequestEntityTooLarge, ErrorEnvelope{
+			Error:      "payload_too_large",
+			Detail:     "request body exceeds configured maximum size",
+			LimitBytes: &maxRequest,
+		})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequest)
+
 	metadataStr := c.PostForm("metadata")
 	if metadataStr == "" {
 		writeValidationError(c, http.StatusBadRequest, "validation_error",
 			"missing required multipart field: metadata")
+		return
+	}
+	if int64(len(metadataStr)) > a.Config.MaxMetadataBytes {
+		limit := a.Config.MaxMetadataBytes
+		c.JSON(http.StatusRequestEntityTooLarge, ErrorEnvelope{
+			Error:      "payload_too_large",
+			Detail:     "metadata exceeds configured maximum size",
+			LimitBytes: &limit,
+		})
 		return
 	}
 
@@ -376,18 +410,36 @@ func (a *Adapter) handleBulkArchiveClosed(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"archived": count})
 }
 
-// clientIP honors X-Forwarded-For (first hop) so deployments behind a
-// reverse proxy still meter per-end-user. Falls back to the direct
-// peer address, then "unknown" so the limiter never sees an empty key.
-func clientIP(c *gin.Context) string {
-	if fwd := c.GetHeader("X-Forwarded-For"); fwd != "" {
-		if i := strings.Index(fwd, ","); i > 0 {
-			return strings.TrimSpace(fwd[:i])
+// clientIP resolves the rate-limit key. X-Forwarded-For is
+// client-controlled and spoofable — rotating it per request would mint a
+// fresh bucket each time and defeat the limiter — so the header is
+// honored only when the direct peer is in trustedProxies (or the list
+// contains "*"). The fallback is c.RemoteIP(), the network peer, NOT
+// c.ClientIP(): Gin's ClientIP is itself forwarded-header-aware and
+// trusts all proxies unless the engine is configured otherwise, which
+// would reopen the hole through the back door.
+func clientIP(c *gin.Context, trustedProxies []string) string {
+	peer := c.RemoteIP()
+	trusted := false
+	for _, p := range trustedProxies {
+		if p == "*" || (peer != "" && p == peer) {
+			trusted = true
+			break
 		}
-		return strings.TrimSpace(fwd)
 	}
-	if ip := c.ClientIP(); ip != "" {
-		return ip
+	if trusted {
+		if fwd := c.GetHeader("X-Forwarded-For"); fwd != "" {
+			first := fwd
+			if i := strings.Index(fwd, ","); i > 0 {
+				first = fwd[:i]
+			}
+			if s := strings.TrimSpace(first); s != "" {
+				return s
+			}
+		}
+	}
+	if peer != "" {
+		return peer
 	}
 	return "unknown"
 }

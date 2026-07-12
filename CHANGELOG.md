@@ -159,6 +159,19 @@ out explicitly in each release entry.
   each row to `{id}`, but the detail page is served at `{id}/view`, so every row
   click returned 404. The links now point at the detail route.
 
+- **The Go (gin) adapter now bounds the request body and gates
+  `X-Forwarded-For` trust.** Intake had no body limit at all — the multipart
+  parser buffered the whole body (32 MiB in memory, remainder spooled to temp
+  files) before any size check, and the `metadata` field was uncapped. A
+  request whose declared `Content-Length` exceeds the combined caps now
+  returns `413 payload_too_large` before the body is read, an
+  `http.MaxBytesReader` backstop bounds chunked bodies, and `metadata` is
+  capped (`BUG_FAB_MAX_METADATA_KB`, default 256 KiB). The rate limiter also
+  trusted the raw first `X-Forwarded-For` hop; the header is now honored only
+  when the direct peer is listed in `BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES`
+  (`*` trusts all; default empty meters by direct peer — the same behavior
+  change as the other adapters).
+
 - **The Rust adapter's rate limiter no longer trusts a spoofable header or
   grows without bound.** It preferred the raw first `X-Forwarded-For` hop as
   the rate-limit key — and it is the only adapter that ships the limiter

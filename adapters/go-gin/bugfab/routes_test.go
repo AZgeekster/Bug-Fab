@@ -424,3 +424,98 @@ func TestRateLimit_GatesIntake(t *testing.T) {
 		t.Fatalf("req 3 want 429, got %d", got)
 	}
 }
+
+// -- S3f/S5/S4 intake hardening ---------------------------------------------
+
+func ginCtxWithRequest(remoteAddr, xff string) *gin.Context {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = remoteAddr
+	if xff != "" {
+		req.Header.Set("X-Forwarded-For", xff)
+	}
+	c.Request = req
+	return c
+}
+
+func TestClientIP_UntrustedPeerHeaderIgnored(t *testing.T) {
+	// Secure default: empty trust list keys on the direct peer, so a
+	// rotating spoofed header cannot mint a fresh bucket per request.
+	c := ginCtxWithRequest("203.0.113.5:44321", "9.9.9.9")
+	if got := clientIP(c, nil); got != "203.0.113.5" {
+		t.Fatalf("want direct peer, got %q", got)
+	}
+}
+
+func TestClientIP_TrustedPeerHeaderHonored(t *testing.T) {
+	c := ginCtxWithRequest("10.0.0.1:44321", "9.9.9.9, 7.7.7.7")
+	if got := clientIP(c, []string{"10.0.0.1"}); got != "9.9.9.9" {
+		t.Fatalf("want first forwarded hop, got %q", got)
+	}
+}
+
+func TestClientIP_WildcardTrustsEveryPeer(t *testing.T) {
+	c := ginCtxWithRequest("203.0.113.5:44321", "9.9.9.9")
+	if got := clientIP(c, []string{"*"}); got != "9.9.9.9" {
+		t.Fatalf("want forwarded hop under wildcard, got %q", got)
+	}
+}
+
+func TestSubmit_SpoofedForwardedForCannotEvadeRateLimit(t *testing.T) {
+	a, r := newRestrictedAdapter(t, func(c *Config) {
+		c.RateLimitEnabled = true
+		c.RateLimitMax = 1
+		c.RateLimitWindow = 60
+	})
+	_ = a
+	send := func(xff string) int {
+		body, ct := buildMultipart(t, sampleMetadataJSON("high"), tinyPNG)
+		req := httptest.NewRequest(http.MethodPost, "/bug-reports", body)
+		req.Header.Set("Content-Type", ct)
+		req.Header.Set("X-Forwarded-For", xff)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+	if code := send("10.0.0.1"); code != http.StatusCreated {
+		t.Fatalf("first submit: want 201, got %d", code)
+	}
+	// A different spoofed header from the same (untrusted) peer must
+	// still land in the peer-keyed bucket and get throttled.
+	if code := send("10.0.0.2"); code != http.StatusTooManyRequests {
+		t.Fatalf("second submit with rotated header: want 429, got %d", code)
+	}
+}
+
+func TestSubmit_OversizedContentLengthRejectedBeforeParse(t *testing.T) {
+	// The body is NOT valid multipart, so only the pre-parse guard can
+	// yield 413 here — without it the body parses to no fields and the
+	// handler returns the 400 missing-metadata error.
+	_, r := newTestAdapter(t) // 256 KiB screenshot cap -> ~528 KiB total
+	junk := bytes.Repeat([]byte("x"), 1024*1024)
+	req := httptest.NewRequest(http.MethodPost, "/bug-reports", bytes.NewReader(junk))
+	req.Header.Set("Content-Type", "multipart/form-data; boundary=zzz")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("want 413, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "payload_too_large") {
+		t.Fatalf("want payload_too_large envelope, got %s", w.Body.String())
+	}
+}
+
+func TestSubmit_OversizedMetadataRejected(t *testing.T) {
+	_, r := newRestrictedAdapter(t, func(c *Config) { c.MaxMetadataBytes = 1024 })
+	big := `{"protocol_version":"0.1","title":"x","client_ts":"2026-04-27T00:00:00Z","description":"` +
+		strings.Repeat("a", 4096) + `"}`
+	body, ct := buildMultipart(t, big, tinyPNG)
+	req := httptest.NewRequest(http.MethodPost, "/bug-reports", body)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("want 413, got %d body=%s", w.Code, w.Body.String())
+	}
+}
