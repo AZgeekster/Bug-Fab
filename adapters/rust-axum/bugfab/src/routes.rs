@@ -90,14 +90,27 @@ fn forwarded_ip(headers: &HeaderMap) -> Option<String> {
     Some(xff.split(',').next()?.trim().to_string())
 }
 
-fn ip_for(headers: &HeaderMap, peer: Option<&ConnectInfo<std::net::SocketAddr>>) -> String {
-    if let Some(s) = forwarded_ip(headers) {
-        return s;
+/// Resolve the rate-limit key. `X-Forwarded-For` is client-controlled and
+/// spoofable — rotating it per request would mint a fresh bucket each time
+/// and defeat the limiter — so it is honored only when the direct peer is
+/// in `trusted_proxies` (or the set contains `"*"`). Otherwise the direct
+/// peer address is used.
+fn ip_for(
+    headers: &HeaderMap,
+    peer: Option<&ConnectInfo<std::net::SocketAddr>>,
+    trusted_proxies: &std::collections::HashSet<String>,
+) -> String {
+    let peer_ip = peer.map(|ConnectInfo(addr)| addr.ip().to_string());
+    let peer_trusted = trusted_proxies.contains("*")
+        || peer_ip
+            .as_deref()
+            .is_some_and(|p| trusted_proxies.contains(p));
+    if peer_trusted {
+        if let Some(s) = forwarded_ip(headers) {
+            return s;
+        }
     }
-    if let Some(ConnectInfo(addr)) = peer {
-        return addr.ip().to_string();
-    }
-    "unknown".to_string()
+    peer_ip.unwrap_or_else(|| "unknown".to_string())
 }
 
 /// POST /bug-reports
@@ -110,7 +123,11 @@ pub async fn submit(
     // Rate-limit per IP — only if enabled. (The middleware variant is
     // optional; the handler-level check is the always-on default.)
     if let Some(limiter) = &state.rate_limiter {
-        let ip_str = ip_for(&headers, peer.as_ref());
+        let ip_str = ip_for(
+            &headers,
+            peer.as_ref(),
+            &state.settings.rate_limit_trusted_proxies,
+        );
         let ip: std::net::IpAddr = ip_str
             .parse()
             .unwrap_or_else(|_| std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
@@ -513,4 +530,53 @@ fn internal<E: std::fmt::Display>(e: E) -> ApiError {
 
 fn not_found() -> ApiError {
     ApiError::new(StatusCode::NOT_FOUND, "not_found", "Bug report not found")
+}
+
+#[cfg(test)]
+mod ip_for_tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::net::SocketAddr;
+
+    fn peer(addr: &str) -> ConnectInfo<SocketAddr> {
+        ConnectInfo(addr.parse().unwrap())
+    }
+
+    fn xff(value: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", value.parse().unwrap());
+        h
+    }
+
+    #[test]
+    fn untrusted_peer_forwarded_header_is_ignored() {
+        // Secure default: empty trust set keys on the direct peer, so a
+        // rotating spoofed header cannot mint a fresh bucket per request.
+        let trusted = HashSet::new();
+        let p = peer("203.0.113.5:44321");
+        assert_eq!(ip_for(&xff("9.9.9.9"), Some(&p), &trusted), "203.0.113.5");
+    }
+
+    #[test]
+    fn trusted_peer_forwarded_header_is_honored() {
+        let trusted: HashSet<String> = ["10.0.0.1".to_string()].into();
+        let p = peer("10.0.0.1:44321");
+        assert_eq!(
+            ip_for(&xff("9.9.9.9, 7.7.7.7"), Some(&p), &trusted),
+            "9.9.9.9"
+        );
+    }
+
+    #[test]
+    fn wildcard_trusts_every_peer() {
+        let trusted: HashSet<String> = ["*".to_string()].into();
+        let p = peer("203.0.113.5:44321");
+        assert_eq!(ip_for(&xff("9.9.9.9"), Some(&p), &trusted), "9.9.9.9");
+    }
+
+    #[test]
+    fn no_peer_and_untrusted_yields_unknown() {
+        let trusted = HashSet::new();
+        assert_eq!(ip_for(&xff("9.9.9.9"), None, &trusted), "unknown");
+    }
 }

@@ -54,6 +54,13 @@ pub struct Settings {
     pub rate_limit_max_per_window: Option<u32>,
     /// Rate-limit window in seconds.
     pub rate_limit_window_seconds: u64,
+    /// Direct-peer addresses allowed to supply `X-Forwarded-For` as the
+    /// rate-limit key. The header is client-controlled and spoofable, so
+    /// it is honored only when the connecting peer is in this set; empty
+    /// (the secure default) meters by the direct peer address. `"*"`
+    /// trusts every peer. Mirrors the Python reference's
+    /// `rate_limit_trusted_proxies`.
+    pub rate_limit_trusted_proxies: std::collections::HashSet<String>,
     /// Viewer permissions — mirror the Python adapter's flags.
     pub can_edit_status: bool,
     pub can_delete: bool,
@@ -68,6 +75,7 @@ impl Default for Settings {
             viewer_page_size: 20,
             rate_limit_max_per_window: Some(60),
             rate_limit_window_seconds: 60,
+            rate_limit_trusted_proxies: std::collections::HashSet::new(),
             can_edit_status: true,
             can_delete: true,
             can_bulk: true,

@@ -63,8 +63,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `into_make_service_with_connect_info::<SocketAddr>()` is mandatory if
 you want the per-IP rate limiter to see the peer address. Without it,
-`ConnectInfo` won't be available and the limiter falls back to the
-`X-Forwarded-For` header when present, "unknown" otherwise.
+`ConnectInfo` won't be available and the limiter keys on "unknown".
+
+`X-Forwarded-For` is client-controlled and spoofable, so the limiter
+honors it only when the direct peer is listed in
+`Settings.rate_limit_trusted_proxies` (`"*"` trusts every peer). Empty —
+the secure default — meters by the direct peer address, so list your
+reverse-proxy IPs to restore per-end-user metering behind a proxy. Idle
+buckets are evicted once per window, so the bucket map stays bounded.
 
 ## Feature flags
 

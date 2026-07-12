@@ -159,6 +159,16 @@ out explicitly in each release entry.
   each row to `{id}`, but the detail page is served at `{id}/view`, so every row
   click returned 404. The links now point at the detail route.
 
+- **The Rust adapter's rate limiter no longer trusts a spoofable header or
+  grows without bound.** It preferred the raw first `X-Forwarded-For` hop as
+  the rate-limit key — and it is the only adapter that ships the limiter
+  enabled by default, so a rotating spoofed header defeated an on-by-default
+  control. The header is now honored only when the direct peer is listed in
+  the new `Settings.rate_limit_trusted_proxies` field (`"*"` trusts all;
+  default empty), and idle buckets are evicted by a once-per-window sweep.
+  **Behavior change:** behind a reverse proxy, metering is per-proxy until the
+  consumer lists its proxy IPs.
+
 - **The Spring adapter's rate limiter no longer grows without bound or trusts a
   spoofable header.** Its bucket map never evicted a key, and it keyed on the
   raw first `X-Forwarded-For` hop — so rotating a spoofed header both defeated
