@@ -4,3 +4,5 @@ Packages/
 *.xcodeproj/
 .vscode/
 .DS_Store
+# Runtime data written by the example server (swift run BugFabExample).
+bug-fab-data/

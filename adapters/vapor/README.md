@@ -1,6 +1,6 @@
 # Bug-Fab Vapor adapter
 
-> **Status:** First-party adapter — promoted 2026-05-21. Verified 9/9 tests passing under `swift:6.0` (Vapor 4.92+). See `MIGRATION_NOTES.md` for the Swift 6 strict-concurrency migration story.
+> **Status:** First-party adapter — promoted 2026-05-21. Unit suite verified under `swift:6.0` (Vapor 4.92+); the upstream `pytest --bug-fab-conformance` suite passes 32/32 as of 2026-07-12 via [`conformance/run-conformance.sh`](./conformance/). See `MIGRATION_NOTES.md` for the Swift 6 strict-concurrency migration story.
 
 A Swift / Vapor 4 adapter for the [Bug-Fab](https://github.com/AZgeekster/Bug-Fab) wire protocol (v0.1).
 

@@ -86,6 +86,12 @@ out explicitly in each release entry.
 
 ### Fixed
 
+- **The Vapor adapter's intake response now always carries
+  `github_issue_url`.** Swift's `JSONEncoder` omits nil optionals, so the
+  `201` body dropped the key whenever GitHub sync was off — the protocol
+  requires the key present with an explicit `null`. Caught by the adapter's
+  new cross-stack conformance harness.
+
 - **The ASP.NET adapter's `GET /reports` no longer 500s on SQLite.** The list
   query ordered by a `DateTimeOffset` column, which EF Core's SQLite provider
   cannot translate — every list call threw `NotSupportedException` at query

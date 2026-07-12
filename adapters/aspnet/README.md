@@ -2,7 +2,7 @@
 
 ASP.NET Core 8 adapter for the [Bug-Fab](https://github.com/AZgeekster/Bug-Fab) wire protocol v0.1.
 
-> Status: **draft / sketch**. Not yet conformance-tested. Tracks Bug-Fab v0.1.
+> Status: **draft**. Conformance-verified 2026-07-12 — the upstream `pytest --bug-fab-conformance` suite passes 32/32 against `examples/MinimalApi` via [`conformance/run-conformance.sh`](./conformance/). Tracks Bug-Fab v0.1.
 
 This package wires the eight Bug-Fab endpoints into an ASP.NET Core 8 application as Minimal API endpoints, with a default Entity Framework Core storage backend supporting SQL Server and PostgreSQL.
 
@@ -247,7 +247,12 @@ If you fork the Razor views and add new links, **do not hard-code `~/bug-fab/...
 
 ## Conformance
 
-Run the upstream Python conformance suite against your running app:
+**Passing 32/32** as of 2026-07-12 — `./conformance/run-conformance.sh` boots
+`examples/MinimalApi` in a `dotnet/sdk:8.0` container and runs
+`pytest --bug-fab-conformance` from a sibling `python:3.12` container. See
+[`conformance/README.md`](./conformance/README.md).
+
+To run the suite by hand against your own running app:
 
 ```sh
 pip install --pre bug-fab
