@@ -75,6 +75,9 @@ submit_module.configure(storage=storage)
 # Mount the routers. submit_router defines POST /bug-reports internally,
 # so mount it at the parent prefix (NOT at /api/bug-reports — that double-segments).
 app.include_router(bug_fab.submit_router, prefix="/api")
+# The viewer lists, edits, deletes, and bulk-archives every report and
+# ships NO auth of its own — put your auth middleware in front of it.
+# See the security note below.
 app.include_router(bug_fab.viewer_router, prefix="/admin/bug-reports")
 
 # Serve the frontend bundle. Use importlib.resources so this works in
@@ -90,7 +93,18 @@ Add one line to your base template:
 ```
 
 That's it — a FAB now appears on every page, and submitted reports
-land in `./bug_reports/`. The bundle defaults its `submitUrl` to
+land in `./bug_reports/`.
+
+> ⚠️ **Secure the viewer yourself.** Bug-Fab v0.1 has no auth abstraction
+> (it lands in v0.2). The viewer router is unauthenticated and, by default,
+> lets any caller edit, delete, and bulk-archive every report. Mount it
+> behind your own auth middleware — the `/admin/…` prefix above is only a
+> convention, not a control. The `viewer_permissions` flags
+> (`can_edit_status` / `can_delete` / `can_bulk`, all default `true`) are a
+> coarse feature-flag on top of your auth, not a replacement for it. See
+> [Auth — mount-point delegation](https://github.com/AZgeekster/Bug-Fab/blob/main/docs/PROTOCOL.md#auth--mount-point-delegation).
+
+The bundle defaults its `submitUrl` to
 `/api/bug-reports`, matching the canonical mount above. If you mount
 the submit router under a different prefix, point the bundle at it
 with one of:
