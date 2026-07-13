@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.http.MediaType
 import org.springframework.mock.web.MockMultipartFile
 import org.springframework.test.context.TestPropertySource
 import org.springframework.test.web.servlet.MockMvc
@@ -81,19 +80,17 @@ class BugFabRateLimitTest @Autowired constructor(
 
     private fun submitWithForwardedFor(spoofed: String) = mockMvc.perform(
         multipart("/bug-fab/bug-reports")
-            .file(
-                MockMultipartFile(
-                    "metadata", "metadata", MediaType.APPLICATION_JSON_VALUE,
-                    mapper.writeValueAsBytes(
-                        mapOf(
-                            "protocol_version" to "0.1",
-                            "title" to "RL spoof test",
-                            "client_ts" to "2026-04-27T00:00:00Z",
-                        )
-                    )
-                )
-            )
             .file(MockMultipartFile("screenshot", "s.png", "image/png", pngSig.copyOf(64)))
+            .param(
+                "metadata",
+                mapper.writeValueAsString(
+                    mapOf(
+                        "protocol_version" to "0.1",
+                        "title" to "RL spoof test",
+                        "client_ts" to "2026-04-27T00:00:00Z",
+                    )
+                ),
+            )
             .header("X-Forwarded-For", spoofed)
             .with { req ->
                 req.remoteAddr = "198.51.100.7"
