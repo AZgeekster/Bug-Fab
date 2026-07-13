@@ -43,7 +43,14 @@ ENV["RAILS_ENV"] ||= "test"
 # initialize!, then initialize (mirrors what environment.rb does).
 dummy_app = File.expand_path("../test/dummy/config/application.rb", __dir__)
 require dummy_app
+# Two runtime overrides applied before initialize!, both because the dummy
+# app's dir sits on the read-only /src mount:
+#   - logger -> stdout, so Rails never opens log/<env>.log.
+#   - a fixed secret_key_base, so Rails does not lazily generate one and
+#     write tmp/local_secret.txt (dev/test generate_local_secret path). The
+#     value is irrelevant for a throwaway conformance run.
 Rails.application.config.logger = ActiveSupport::Logger.new($stdout)
+Rails.application.config.secret_key_base = "bug-fab-conformance-not-a-secret"
 Rails.application.initialize!
 
 # --- 4) Apply storage_root override AFTER Rails boots so we win over any -----
