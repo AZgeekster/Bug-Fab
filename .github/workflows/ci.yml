@@ -108,11 +108,13 @@ jobs:
       - name: Install package and dev dependencies
         # uvicorn is required to boot the example server below — `[dev]`
         # alone ships no ASGI server, so the boot step would fail with the
-        # example never coming up. The example uses the default file
-        # storage, so no storage extra is needed.
+        # example never coming up. The example server itself uses the default
+        # file storage, but the conformance pytest runs from the repo root and
+        # so collects `tests/conftest.py`, which imports SQLiteStorage — the
+        # `sqlite` extra (SQLAlchemy) is required for collection to succeed.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]" "uvicorn[standard]"
+          pip install -e ".[dev,sqlite]" "uvicorn[standard]"
 
       - name: Boot the reference adapter
         # Mirrors tests/e2e/conftest.py: ephemeral-free port, poll until the

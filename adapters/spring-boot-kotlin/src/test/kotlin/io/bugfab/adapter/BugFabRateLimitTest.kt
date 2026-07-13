@@ -43,19 +43,17 @@ class BugFabRateLimitTest @Autowired constructor(
 
     private fun submit() = mockMvc.perform(
         multipart("/bug-fab/bug-reports")
-            .file(
-                MockMultipartFile(
-                    "metadata", "metadata", MediaType.APPLICATION_JSON_VALUE,
-                    mapper.writeValueAsBytes(
-                        mapOf(
-                            "protocol_version" to "0.1",
-                            "title" to "RL test",
-                            "client_ts" to "2026-04-27T00:00:00Z",
-                        )
-                    )
-                )
-            )
             .file(MockMultipartFile("screenshot", "s.png", "image/png", pngSig.copyOf(64)))
+            .param(
+                "metadata",
+                mapper.writeValueAsString(
+                    mapOf(
+                        "protocol_version" to "0.1",
+                        "title" to "RL test",
+                        "client_ts" to "2026-04-27T00:00:00Z",
+                    )
+                ),
+            )
     )
 
     @Test

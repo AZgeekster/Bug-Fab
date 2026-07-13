@@ -72,16 +72,16 @@ class BugFabController(
      */
     @PostMapping("/bug-reports", consumes = [MediaType.MULTIPART_FORM_DATA_VALUE])
     fun submit(
-        @RequestParam("metadata") metadataPart: MultipartFile,
+        @RequestParam("metadata") metadata: String,
         @RequestParam("screenshot") screenshot: MultipartFile,
         request: HttpServletRequest,
     ): ResponseEntity<Any> {
-        // The metadata part is uploaded as a JSON-content multipart file
-        // (Content-Type: application/json) per the wire protocol — it is
-        // NOT a plain text form field. Binding it as `MultipartFile`
-        // covers both the file-style upload (which the conformance suite
-        // and real consumers use) and lets us read the bytes ourselves.
-        val metadata: String = metadataPart.bytes.toString(Charsets.UTF_8)
+        // `metadata` is a plain multipart form FIELD carrying the JSON
+        // string — the Bug-Fab JS bundle sends it as
+        // `formData.append("metadata", json)` and the FastAPI reference
+        // binds it with `Form(...)`, so it arrives with no filename.
+        // Binding it as `MultipartFile` (the previous shape) rejected
+        // every real submission with a framework-level 400.
         // 1. Rate limit (when enabled).
         if (rateLimiter != null) {
             val clientIp = resolveClientIp(request)

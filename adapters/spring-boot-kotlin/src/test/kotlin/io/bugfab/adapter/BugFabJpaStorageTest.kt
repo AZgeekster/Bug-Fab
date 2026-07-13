@@ -60,8 +60,8 @@ class BugFabJpaStorageTest @Autowired constructor(
         )
         val response = mockMvc.perform(
             multipart("/bug-fab/bug-reports")
-                .file(MockMultipartFile("metadata", "metadata", MediaType.APPLICATION_JSON_VALUE, mapper.writeValueAsBytes(metadata)))
                 .file(MockMultipartFile("screenshot", "s.png", "image/png", pngSig.copyOf(64)))
+                .param("metadata", mapper.writeValueAsString(metadata))
         )
             .andExpect(status().isCreated)
             .andReturn()
