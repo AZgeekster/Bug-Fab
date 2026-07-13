@@ -44,13 +44,11 @@ services:
       - ./:/src/adapters/rails/conformance:rw
       - bundle-cache:/usr/local/bundle
     # The dummy app boots from the read-only repo mount, but Rails opens a
-    # file logger (log/test.log) and writes tmp/ during initialize! — in
-    # the `test` env RAILS_LOG_TO_STDOUT is not honored, so boot raised
-    # "Unable to access log file" on the :ro mount. Overlay writable tmpfs
-    # over just those two dirs.
-    tmpfs:
-      - /src/adapters/rails/test/dummy/log
-      - /src/adapters/rails/test/dummy/tmp
+    # file logger (log/test.log) during initialize! — which would raise
+    # "Unable to access log file" on the :ro mount. conformance_boot.rb
+    # redirects the logger to stdout before initialize!, so no writable
+    # log/ or tmp/ dir is needed (a tmpfs overlay can't be used here:
+    # Docker cannot create the mountpoint under the read-only /src bind).
     environment:
       BUNDLE_GEMFILE: "/src/adapters/rails/conformance/Gemfile"
       # Force bundler off "deployment" / "frozen" mode so a missing Gemfile.lock
