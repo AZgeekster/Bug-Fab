@@ -166,8 +166,10 @@ def test_status_update(page: Page, app_server: dict, seeded_reports) -> None:
     status_select.select_option("investigating")
 
     with page.expect_response(
-        lambda r: re.search(rf"/reports/{re.escape(report_id)}/status$", r.url)
-        and r.request.method == "PUT"
+        lambda r: (
+            re.search(rf"/reports/{re.escape(report_id)}/status$", r.url)
+            and r.request.method == "PUT"
+        )
     ) as info:
         page.locator("#bug-fab-status-form button[type='submit']").click()
     assert info.value.status == 200, info.value.text()
@@ -434,8 +436,7 @@ def test_annotation_rect_tool_differs_from_freedraw(page: Page, app_server: dict
     # The rectangle tool draws four straight strokes for the perimeter,
     # not a single mid-segment line; the rendered pixels MUST differ.
     assert rect_data_url != free_draw_data_url, (
-        "rectangle tool produced the same PNG as free-draw — "
-        "active-tool branch likely never fired"
+        "rectangle tool produced the same PNG as free-draw — active-tool branch likely never fired"
     )
 
     # Sanity: keyboard shortcut switches back to draw without console errors.

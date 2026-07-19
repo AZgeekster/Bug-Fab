@@ -50,9 +50,13 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from pydantic import ValidationError as PydanticValidationError
 
+from bug_fab._redact import redact_report
+from bug_fab.config import Settings
 from bug_fab.intake import (
+    IntakeError,
     PayloadTooLarge,
     UnsupportedMediaType,
+    UnsupportedProtocolVersion,
     validate_payload,
 )
 from bug_fab.intake import (
@@ -102,6 +106,19 @@ def _max_upload_bytes() -> int:
     except ValueError:
         return DEFAULT_MAX_SCREENSHOT_BYTES
     return max(value, 1)
+
+
+def _redact_pii_enabled() -> bool:
+    """Resolve ``BUG_FAB_REDACT_PII`` from the environment.
+
+    This view never constructs a :class:`~bug_fab.config.Settings` — it reads
+    env directly, like :func:`_max_upload_bytes`. Delegating to
+    ``Settings.from_env()`` rather than re-parsing the variable here keeps the
+    truthy-literal set (``1``/``true``/``yes``/``on``) identical across the
+    FastAPI, Flask, and Django adapters. A control that fires on one adapter
+    and not another is worse than one that never fires at all.
+    """
+    return Settings.from_env().redact_pii
 
 
 def _err(code: str, detail: Any, http_status: int) -> JsonResponse:
@@ -218,6 +235,8 @@ def intake_view(request: HttpRequest) -> HttpResponse:
         return _err("payload_too_large", str(exc), 413)
     except UnsupportedMediaType as exc:
         return _err("unsupported_media_type", str(exc), 415)
+    except UnsupportedProtocolVersion as exc:
+        return _err("unsupported_protocol_version", str(exc), 400)
     except IntakeValidationError as exc:
         # JSON-decode failures carry an empty detail list; surface as 400
         # with the message. Schema failures carry the Pydantic error list
@@ -225,6 +244,11 @@ def intake_view(request: HttpRequest) -> HttpResponse:
         if exc.detail:
             return _err("schema_error", exc.detail, 422)
         return _err("validation_error", str(exc), 400)
+    except IntakeError as exc:  # pragma: no cover - defensive catch-all
+        # Mirrors the Flask adapter. Without this, a future IntakeError
+        # subclass added to bug_fab.intake would escape as a 500 here while
+        # Flask kept returning the correct protocol envelope.
+        return _err(exc.code, exc.message, exc.status_code)
 
     # Build the persistence payload. Server-captured User-Agent wins over
     # the client value per ``docs/PROTOCOL.md`` § User-Agent trust boundary.
@@ -235,6 +259,11 @@ def intake_view(request: HttpRequest) -> HttpResponse:
     metadata_dict["environment"] = (
         payload.context.environment or metadata_dict.get("environment", "") or ""
     )
+
+    # Opt-in PII redaction runs before persistence so masked values are what
+    # land on disk — there is no second copy of the raw text to leak later.
+    if _redact_pii_enabled():
+        metadata_dict = redact_report(metadata_dict)
 
     storage = _get_storage()
     try:

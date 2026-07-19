@@ -11,7 +11,127 @@ out explicitly in each release entry.
 
 ## [Unreleased]
 
+### Changed (Breaking)
+
+- **The FastAPI adapter now emits the protocol's `{"error", "detail"}` error
+  envelope on every error response.** It previously raised bare
+  `HTTPException`, which serializes to `{"detail": ...}` with no
+  machine-readable `error` code — non-conformant with `docs/PROTOCOL.md`
+  § Error response shape, and inconsistent with the Flask and Django
+  adapters, which have always been correct. Clients that branch on the
+  response body must now read `body["error"]`. Status codes are unchanged
+  except where noted below. A `413` now carries `limit_bytes` and a `429`
+  now carries `retry_after_seconds`, as the protocol requires.
+
+  One documented deviation remains: a `500` raised by the `get_storage`
+  dependency (the consumer never called `configure()`) still emits
+  `{"detail": ...}`. FastAPI discards a dependency's return value, so a
+  dependency can only short-circuit by raising, and a raised
+  `HTTPException` cannot carry the envelope.
+
+- **An unknown `protocol_version` on intake now returns `400
+  unsupported_protocol_version` instead of `422 schema_error`.**
+  `docs/PROTOCOL.md` § Versioning has always required this; the reference
+  adapter typed the field as `Literal["0.1"]`, so Pydantic rejected an
+  unknown version as a generic schema error before any version check could
+  run. Clients could not distinguish "I do not speak your version" (fix by
+  upgrading) from "your payload is malformed" (do not retry). Affects the
+  FastAPI, Flask, and Django adapters. A *missing* `protocol_version` is
+  unchanged and still surfaces as `422 schema_error`.
+
+### Added
+
+- **The conformance suite now checks the error envelope and the
+  `protocol_version` gate.** `pytest --bug-fab-conformance` asserts that
+  every error body carries a string `error` key, and that an unknown
+  `protocol_version` yields `400 unsupported_protocol_version`. Adapter
+  authors should expect two new tests. The suite deliberately does not
+  assert behavior for a *missing* version — the protocol pins the error
+  code only for an unrecognized value.
+
+- **CI runs the conformance suite against the reference adapter**, and
+  `publish` now depends on it. Nothing previously ran the protocol contract
+  against the implementation that defines it.
+
+- **CI runs every non-Python adapter's conformance harness.** A matrix job
+  runs the nine adapters that ship `conformance/run-conformance.sh` on each
+  push. The root pipeline previously ran only the Python suite, so all
+  fourteen adapters could drift with a green build. Three adapters carried
+  `.github/workflows/` files nested under `adapters/*/` that GitHub Actions
+  never executes; those are removed — they read as coverage without providing
+  any.
+
 ### Fixed
+
+- **The SvelteKit adapter builds and typechecks again.** `svelte.config.js`
+  imported `vitePreprocess` from the moved `@sveltejs/kit/vite` and set a
+  `package` config key that `@sveltejs/package` v2 removed, so `npm run build`
+  failed outright; three source files also had type errors, so
+  `tsc --noEmit` never passed. All fixed — the package was unpublishable. The
+  conformance harness now runs the real `npm run build` instead of a
+  `tsc --noCheck` workaround.
+
+- **`multer` bumped to 2.x in the Express adapter**, clearing the 1.x
+  advisory chain (the vulnerable path is the intake handler). **`sqlx` bumped
+  to 0.8** in the rust-axum adapter, dropping the `=0.7.4` pin that blocked
+  the fix. **`golang.org/x/net` bumped to 0.38** in the go-gin adapter. Each
+  adapter's own suite passes on the new version.
+
+- **The `fastapi-jinja-docker` example no longer 500s on a fresh install.**
+  It used the name-first `TemplateResponse(name, context)` signature, removed
+  in Starlette 1.0. Switched to the request-first form. The package also now
+  declares `starlette>=0.48`, which the routers require for the RFC-9110
+  status-code aliases.
+
+### Security
+
+- **`BUG_FAB_REDACT_PII` now actually redacts on the Flask and Django
+  adapters.** The redactor was only ever called from the FastAPI intake
+  router. An operator who enabled the flag on Flask or Django got a control
+  that reported success and did nothing, and the unmasked tokens and email
+  addresses were written to storage. If you ran either adapter with
+  `BUG_FAB_REDACT_PII=true`, assume previously-stored reports are unredacted.
+
+- **Outbound webhook URLs are no longer written to logs.** The Slack, Discord,
+  Teams, and generic webhook integrations logged the full target URL at `WARN`
+  on every delivery failure. For all four, the URL *is* the credential —
+  anyone holding `hooks.slack.com/services/T…/B…/<secret>` can post as the
+  integration. Log lines now carry only `scheme://host`. Rotate any webhook
+  URL that may have been captured by a log sink.
+
+- **Path-traversal guard added to the Express and SvelteKit viewer routes.**
+  Neither adapter validated the report-id path parameter before passing it to
+  a storage lookup or a filesystem join. The guard is the same
+  `^bug-[A-Za-z]?\d{1,12}$` shape check the reference and Hono adapters use,
+  and it now runs on all four `:id` routes in each adapter, not only the
+  screenshot route.
+
+### Fixed
+
+- **The Phoenix adapter no longer loses reports after a delete.**
+  `EctoStorage.save_report/3` derived the next report id from
+  `COUNT(*) + 1`, beneath a comment claiming the enclosing transaction
+  prevented collisions. Counting is not allocation: delete `bug-001` from
+  three reports and the next insert computes `3`, colliding with the live
+  `bug-003` on the unique index. Ids now come from a single-row counter
+  incremented with an atomic `UPDATE`, matching the Python reference and the
+  Rails adapter. **Adds a migration** — run `mix ecto.migrate` before
+  upgrading. Report ids remain `bug-NNN` and are never reused; the exact
+  sequence after a delete is not, and never was, guaranteed to be gapless.
+
+- **The Rails adapter's GitHub sync no longer creates blank issues.**
+  `BugFab::GitHub` read string keys (`detail['title']`) from the
+  symbol-keyed hash `BugReport#to_detail` returns, so every field resolved
+  to nil: issues arrived titled `[Bug-Fab] ` with an empty body and only the
+  generic `bug-fab` label. The POST returned 201, so it failed silently. It
+  also read `module` from `context`, where it does not live. The test suite
+  sets `github_enabled = false`, which is why nothing caught it.
+
+- **The published repository was missing two entire adapters.** An unanchored
+  `lib/` in `.gitignore` excluded `adapters/rails/lib/` and
+  `adapters/phoenix/lib/`, and an unanchored `bug-reports/` excluded the
+  Next.js example's route handlers. A clone got a Rails gem with no `lib/`
+  and a Phoenix package with no modules.
 
 - **SvelteKit conformance — 27/30 → 30/30.** Two changes in the
   `bug-fab-sveltekit` adapter + its example route tree:
@@ -576,6 +696,20 @@ out explicitly in each release entry.
   ([`docs/CSP.md`](docs/CSP.md)) so consumers running strict CSP have
   a first-class hook into the viewer's inline scripts instead of
   needing to whitelist `'unsafe-inline'` or fork templates.
+
+- **Bump `next` to 14.2.35 in the `examples/nextjs-minimal` POC.**
+  Clears CVE-2025-29927 (critical — middleware authorization bypass via
+  a forged `x-middleware-subrequest` header) plus eight further
+  advisories; nine cleared, none introduced. **This is an example app
+  only — the shipped `bug_fab` package has no Next.js dependency.** The
+  CVE was never reachable in the example itself, which has no
+  `middleware.ts` and gates its admin routes per-handler. It mattered
+  because `src/lib/bug-fab/auth.ts` points production consumers at a
+  `middleware.ts` path matcher, so anyone following that advice on the
+  old pin would have landed on the exploitable pattern. Note that Next
+  14 reached end of life on 2025-10-26 and 14.2.35 is its final
+  security backport — advisories still open against the 14 line have no
+  patch short of a Next 15/16 migration.
 
 ## [0.1.0a1] - 2026-04-27
 

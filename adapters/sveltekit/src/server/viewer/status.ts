@@ -7,15 +7,17 @@
 import { json } from '@sveltejs/kit';
 import type { RequestEvent, RequestHandler } from '@sveltejs/kit';
 import { Errors, jsonError } from '../errors.js';
-import { validateStatusUpdate } from '../validation.js';
+import { isValidReportId, validateStatusUpdate } from '../validation.js';
 import { syncStatusToGitHub } from '../github.js';
 import type { BugFabAdapterOptions, StatusUpdateRequest } from '../types.js';
 
 export function createStatusHandler(opts: BugFabAdapterOptions): RequestHandler {
   return async (event: RequestEvent): Promise<Response> => {
     const id = event.params.id;
-    if (!id) {
-      return jsonError(Errors.validationError('id parameter is required'), 400);
+    if (!isValidReportId(id)) {
+      // 404, not 400: a malformed id is indistinguishable from a missing
+      // report to a caller, and the shape guard must run before storage.
+      return jsonError(Errors.notFound(String(id ?? '')), 404);
     }
 
     let parsed: unknown;

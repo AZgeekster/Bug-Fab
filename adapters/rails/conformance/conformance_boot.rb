@@ -35,10 +35,23 @@ File.delete(db_path) if File.exist?(db_path) && ENV["BUG_FAB_CONFORMANCE_RESET_D
 ENV["RAILS_ENV"] ||= "test"
 
 # --- 3) Boot the dummy Rails app ---------------------------------------------
-# Resolve test/dummy/config/environment relative to THIS file's parent dir
-# (i.e. /src/adapters/rails/conformance/ -> /src/adapters/rails/test/dummy/).
-dummy_env = File.expand_path("../test/dummy/config/environment.rb", __dir__)
-require dummy_env
+# Load application.rb (defines Dummy::Application, runs Bundler.require) but
+# stop short of initialize! — Rails opens log/<env>.log during initialize!,
+# and the dummy app's log/ dir sits on the read-only /src mount, so the boot
+# would raise "Unable to access log file". The test env does not honor
+# RAILS_LOG_TO_STDOUT, so redirect the logger to stdout HERE, before
+# initialize!, then initialize (mirrors what environment.rb does).
+dummy_app = File.expand_path("../test/dummy/config/application.rb", __dir__)
+require dummy_app
+# Two runtime overrides applied before initialize!, both because the dummy
+# app's dir sits on the read-only /src mount:
+#   - logger -> stdout, so Rails never opens log/<env>.log.
+#   - a fixed secret_key_base, so Rails does not lazily generate one and
+#     write tmp/local_secret.txt (dev/test generate_local_secret path). The
+#     value is irrelevant for a throwaway conformance run.
+Rails.application.config.logger = ActiveSupport::Logger.new($stdout)
+Rails.application.config.secret_key_base = "bug-fab-conformance-not-a-secret"
+Rails.application.initialize!
 
 # --- 4) Apply storage_root override AFTER Rails boots so we win over any -----
 #       no-op initializer the dummy app might add later.

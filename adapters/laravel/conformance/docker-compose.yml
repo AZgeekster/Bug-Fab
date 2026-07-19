@@ -60,6 +60,17 @@ services:
             --install-dir=/usr/local/bin --filename=composer >/dev/null
         fi
 
+        # Composer 2.9+ refuses to resolve dependency sets that contain a
+        # package with an open security advisory, which the maintained
+        # Laravel 11 line always does — so `create-project`/`require` abort
+        # before anything installs. This harness pins Laravel 11 by design
+        # (it is the adapter's declared framework version), so disable the
+        # advisory block globally in the throwaway container. Both keys are
+        # set because the config name changed across Composer versions
+        # (`audit.block-insecure` → `policy.advisories.block`).
+        composer config --global --no-plugins audit.block-insecure false 2>/dev/null || true
+        composer config --global --no-plugins policy.advisories.block false 2>/dev/null || true
+
         # --- Synthesize a minimal Laravel app on first boot -------------
         if [ ! -f /workspace/app/artisan ]; then
           echo "[laravel-adapter] creating Laravel skeleton via composer create-project ..."

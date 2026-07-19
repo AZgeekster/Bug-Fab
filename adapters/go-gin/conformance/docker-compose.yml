@@ -1,7 +1,7 @@
 # Cross-stack conformance harness for the Bug-Fab Go (Gin) adapter.
 #
 # Two services on a shared bridge network:
-#   - adapter:   golang:1.22, boots `go run ./examples/minimal` from the repo root,
+#   - adapter:   golang:1.23, boots `go run ./examples/minimal` from the repo root,
 #                exposes the eight Bug-Fab endpoints under /api/bug-fab on :8080.
 #   - runner:    python:3.12, pip-installs the bug-fab wheel from the repo root,
 #                runs `pytest --bug-fab-conformance` against the adapter container.
@@ -10,7 +10,7 @@
 #   - Keeps the harness "one command from cold clone" — no Python install on host.
 #   - Pins the pytest/httpx versions to whatever the repo ships, removing host drift.
 #
-# WHY golang:1.22 (not -alpine):
+# WHY golang:1.23 (not -alpine):
 #   - The adapter has no cgo, but `go run` from the repo's module path needs the
 #     full toolchain. Alpine works but slows the first boot considerably; Debian
 #     slim is the standard go test runner image.
@@ -20,7 +20,7 @@
 
 services:
   adapter:
-    image: golang:1.22
+    image: golang:1.23
     container_name: bug-fab-go-conformance-adapter
     working_dir: /src/adapters/go-gin
     volumes:

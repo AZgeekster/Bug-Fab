@@ -97,24 +97,13 @@ services:
         cd /adapter
         npm install --legacy-peer-deps --no-audit --no-fund
         npm install --legacy-peer-deps --no-audit --no-fund --no-save vite@^5
-        # NOTE: we do NOT run the adapter's full `npm run build` because
-        # its svelte-package step imports `vitePreprocess` from
-        # `@sveltejs/kit/vite`, which moved to
-        # `@sveltejs/vite-plugin-svelte` in newer vite-plugin-svelte
-        # versions. Conformance only exercises the server-side handlers,
-        # so we build the server (and static assets) directly.
-        #
-        # WHY `--noCheck`: the adapter's tsconfig is strict, but several
-        # source files have type errors against TS 5.9 + @types/node 24
-        # (the versions installed in this clean image — they're peer
-        # deps, not pinned). Examples: `screenshot instanceof File` on a
-        # FormData value, `new Response(uint8array)` lib mismatch. These
-        # are real-but-already-known maintenance debt and not in scope
-        # for the conformance harness. `--noCheck` emits JS without type
-        # checking; the conformance suite verifies the runtime behavior,
-        # which is what matters here.
-        npx tsc -p tsconfig.json --noCheck
-        npm run build:static
+        # Full build, including svelte-package and a strict `tsc`. This used
+        # to be skipped: svelte-package failed on a removed `config.package`
+        # key and imported `vitePreprocess` from the moved
+        # `@sveltejs/kit/vite`, and `tsc` had three type errors. All are
+        # fixed, so the harness now exercises the same build path a publish
+        # would — a build regression fails conformance instead of hiding.
+        npm run build
         echo "[sveltekit-adapter] installing conformance app deps ..."
         cd /conformance
         # `file:..` in package.json resolves to "two levels up from

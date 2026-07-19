@@ -95,13 +95,15 @@ def test_intake_rejects_invalid_severity(client, png_bytes):
 
 
 def test_intake_rejects_unknown_protocol_version(client, png_bytes):
+    """PROTOCOL.md § Versioning: an unknown version is 400, not a schema error."""
     payload = {
         "protocol_version": "9.9",
         "title": "x",
         "client_ts": "2026-04-27T00:00:00Z",
     }
     response = _post_intake(client, json.dumps(payload), png_bytes)
-    assert response.status_code == 422
+    assert response.status_code == 400
+    assert response.json()["error"] == "unsupported_protocol_version"
 
 
 def test_intake_rejects_overlong_reporter(client, png_bytes):
@@ -436,3 +438,69 @@ def test_webhook_send_returns_false_on_connection_error(monkeypatch):
 
     monkeypatch.setattr(httpx, "Client", _MockClient)
     assert webhook_sync.send({"id": "bug-test"}) is False
+
+
+# ---------------------------------------------------------------------------
+# PII redaction (BUG_FAB_REDACT_PII)
+#
+# `redact_report` shipped implemented, documented, and wired into exactly one
+# adapter -- FastAPI. An operator who enabled it here got a control that
+# reported success and did nothing. The raw tokens still landed in the
+# database. Asserting the *persisted row*, not the response, is what makes
+# this test able to detect that.
+# ---------------------------------------------------------------------------
+
+_LEAKED_JWT = (
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+)
+
+
+def _secret_bearing_metadata() -> str:
+    return json.dumps(
+        {
+            "protocol_version": "0.1",
+            "title": "Login broke for victim@example.com",
+            "client_ts": "2026-07-10T12:00:00+00:00",
+            "description": f"Authorization: Bearer {_LEAKED_JWT}",
+            "severity": "high",
+            "context": {
+                "url": "http://localhost/login",
+                "module": "auth",
+                "console_errors": [
+                    {"message": "Unauthorized", "stack": f"at auth.js token={_LEAKED_JWT}"}
+                ],
+                "network_log": [],
+            },
+        }
+    )
+
+
+def _persisted_row_text() -> str:
+    """Every text-bearing column of the single stored report, concatenated.
+
+    `metadata_json` is included deliberately: it holds the verbatim blob, so
+    a redactor that scrubbed only the denormalized columns would still leak.
+    """
+    from bug_fab.adapters.django.models import BugReport
+
+    report = BugReport.objects.get()
+    return "\n".join([report.title, report.description, report.metadata_json])
+
+
+def test_intake_redacts_pii_when_enabled(client, png_bytes, monkeypatch):
+    monkeypatch.setenv("BUG_FAB_REDACT_PII", "true")
+    response = _post_intake(client, _secret_bearing_metadata(), png_bytes)
+    assert response.status_code == 201, response.content
+
+    stored = _persisted_row_text()
+    assert _LEAKED_JWT not in stored, "raw JWT persisted despite BUG_FAB_REDACT_PII=true"
+    assert "victim@example.com" not in stored, "raw email persisted despite BUG_FAB_REDACT_PII=true"
+    assert "<redacted" in stored, "nothing was redacted — did the redactor run at all?"
+
+
+def test_intake_preserves_raw_text_when_redaction_disabled(client, png_bytes, monkeypatch):
+    """Redaction is opt-in; unset means the raw text is stored verbatim."""
+    monkeypatch.delenv("BUG_FAB_REDACT_PII", raising=False)
+    response = _post_intake(client, _secret_bearing_metadata(), png_bytes)
+    assert response.status_code == 201, response.content
+    assert _LEAKED_JWT in _persisted_row_text()

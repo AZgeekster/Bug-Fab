@@ -324,3 +324,63 @@ describe('viewer — mount-path templating (Drift C regression)', () => {
     }
   })
 })
+
+// Path-traversal guard.
+//
+// Every `:id` route fed `req.params.id` straight into a storage lookup and,
+// for the screenshot route, into a filesystem join. There was no shape guard
+// anywhere in this adapter -- `grep isValidReportId src/` returned nothing.
+//
+// The storage backend is booby-trapped rather than merely asserting 404:
+// a real FileStorage simply returns null for `bug-nonsense`, so the route
+// 404s either way and the test would pass with the guard deleted.
+describe('viewer — report id shape guard', () => {
+  const MALFORMED = [
+    'bug-traversal-attempt',
+    'not-a-bug-id',
+    'bug-',
+    'bug-001.png',
+    'bug-1234567890123', // 13 digits, one past the bound
+  ]
+
+  function trapHarness(): TestHarness {
+    // Any read is a guard failure. Proxy so every method name traps.
+    const trap = new Proxy({}, {
+      get: (_t, name: string) => async () => {
+        throw new Error(`storage.${name} called with an unvalidated report id`)
+      },
+    })
+    const app = express()
+    app.use('/admin/bug-reports', createBugFabRouter({
+      storage: trap as unknown as FileStorage,
+      viewerPermissions: { canEditStatus: true, canDelete: true, canBulk: true },
+    }))
+    return { app, storage: trap as unknown as FileStorage, storageDir: '', cleanup: () => {} }
+  }
+
+  for (const bad of MALFORMED) {
+    it(`rejects ${bad} before storage is touched`, async () => {
+      const h = trapHarness()
+      const base = '/admin/bug-reports'
+
+      expect((await request(h.app).get(`${base}/reports/${bad}`)).status).toBe(404)
+      expect((await request(h.app).get(`${base}/reports/${bad}/screenshot`)).status).toBe(404)
+      expect((await request(h.app).delete(`${base}/reports/${bad}`)).status).toBe(404)
+      expect(
+        (await request(h.app).put(`${base}/reports/${bad}/status`).send({ status: 'fixed' })).status,
+      ).toBe(404)
+    })
+  }
+
+  it('still serves a well-formed id', async () => {
+    const h = buildHarness()
+    try {
+      const id = await submit(h)
+      expect(/^bug-[A-Za-z]?\d{1,12}$/.test(id)).toBe(true)
+      const res = await request(h.app).get(`/admin/bug-reports/reports/${id}`)
+      expect(res.status).toBe(200)
+    } finally {
+      h.cleanup()
+    }
+  })
+})

@@ -281,3 +281,73 @@ def test_response_does_not_echo_metadata_at_top_level(
             f"stored_at/github_issue_url; consider returning the full report "
             f"under a `report:` key instead."
         )
+
+
+# ---------------------------------------------------------------------------
+# Protocol versioning — PROTOCOL.md § Versioning, § Standard error codes
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_protocol_version_returns_400_unsupported_protocol_version(
+    conformance_client: httpx.Client,
+) -> None:
+    """An unrecognized `protocol_version` MUST return `400 unsupported_protocol_version`.
+
+    PROTOCOL.md § Versioning. Adapters that type the field as a closed
+    enum (Pydantic `Literal`, a Go string check after unmarshal, etc.)
+    tend to surface this as a generic schema error instead, which gives a
+    client no way to distinguish "you are speaking a version I do not
+    know" from "your payload is malformed" — the former is actionable by
+    upgrading, the latter is not.
+
+    Deliberately tests an *unknown* version rather than a *missing* one:
+    the protocol pins this error code only for an unrecognized value, and
+    first-party adapters legitimately differ on the missing case.
+    """
+    response = _post_multipart(
+        conformance_client,
+        metadata=make_test_metadata(protocol_version="9.9"),
+        screenshot=make_test_png(),
+    )
+    if response.status_code != 400:
+        pytest.fail(
+            f"An unknown protocol_version MUST return 400; got "
+            f"{response.status_code}. Body: {response.text[:500]}"
+        )
+    body = response.json()
+    if body.get("error") != "unsupported_protocol_version":
+        pytest.fail(
+            f"A 400 for an unknown protocol_version MUST carry "
+            f'`error: "unsupported_protocol_version"`; got '
+            f"`error: {body.get('error')!r}`. Body: {response.text[:500]}"
+        )
+
+
+def test_error_responses_use_the_protocol_envelope(
+    conformance_client: httpx.Client,
+) -> None:
+    """Every non-2xx JSON body MUST be `{"error": <code>, "detail": ...}`.
+
+    PROTOCOL.md § Error response shape. A missing `error` key is the
+    signature of an adapter that leans on its framework's default error
+    body — FastAPI's bare `{"detail": ...}`, Rails' `{"status", "error"}`,
+    Spring's `{"timestamp", "path", ...}`. Clients branch on `error`, so
+    its absence breaks them even though the status code looks right.
+    """
+    response = _post_multipart(
+        conformance_client,
+        metadata=make_invalid_severity_metadata(),
+        screenshot=make_test_png(),
+    )
+    if response.status_code == 201:
+        pytest.fail("Setup failed — an invalid severity MUST NOT be accepted.")
+    body = response.json()
+    missing = [key for key in ("error", "detail") if key not in body]
+    if missing:
+        pytest.fail(
+            f"Error responses MUST use the `{{error, detail}}` envelope; "
+            f"missing {missing}. Got keys {sorted(body)}. "
+            f"Body: {response.text[:500]}"
+        )
+    if not isinstance(body["error"], str):
+        pytest.fail(f"`error` MUST be a machine-readable string; got {type(body['error'])}.")

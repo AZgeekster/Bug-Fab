@@ -84,9 +84,13 @@ def create_app() -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     async def home(request: Request) -> HTMLResponse:
         """Render the home page with the Bug-Fab FAB embedded."""
+        # Request-first signature. The name-first form
+        # `TemplateResponse(name, context)` was deprecated in Starlette 0.29
+        # and removed in 1.0, where it raises on a fresh install.
         return templates.TemplateResponse(
+            request,
             "home.html",
-            {"request": request, "app_name": "MyApp", "page_title": "Welcome"},
+            {"app_name": "MyApp", "page_title": "Welcome"},
         )
 
     return app

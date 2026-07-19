@@ -28,6 +28,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from bug_fab._observability import EVENT_REPORT_RECEIVED
@@ -35,8 +36,10 @@ from bug_fab._observability import emit as emit_event
 from bug_fab._rate_limit import RateLimiter
 from bug_fab._redact import redact_report
 from bug_fab.config import Settings
+from bug_fab.intake import UnsupportedProtocolVersion, check_protocol_version
 from bug_fab.integrations.github import GitHubSync
 from bug_fab.integrations.webhook import WebhookSync
+from bug_fab.routers._errors import protocol_error
 from bug_fab.schemas import BugReportCreate, BugReportIntakeResponse
 from bug_fab.storage.base import Storage
 
@@ -113,6 +116,12 @@ def get_storage() -> Storage:
 
     Raises a 500 if :func:`configure` has not been called — the consumer
     forgot to wire the router during startup.
+
+    This is the one path that cannot emit the protocol's ``{"error",
+    "detail"}`` envelope: FastAPI discards a dependency's return value, so
+    a dependency can only short-circuit by raising, and a raised
+    ``HTTPException`` always serializes to ``{"detail": ...}``. Documented
+    as a known 5xx deviation in ``docs/PROTOCOL.md``.
     """
     if _STORAGE is None:
         raise HTTPException(
@@ -176,6 +185,16 @@ def _is_png(payload: bytes) -> bool:
     response_model=BugReportIntakeResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Submit a bug report",
+    responses={
+        400: {
+            "description": "Malformed metadata JSON, empty screenshot, or unknown protocol_version"
+        },
+        413: {"description": "Screenshot exceeds the configured size cap"},
+        415: {"description": "Screenshot is not a PNG"},
+        422: {"description": "Metadata parses as JSON but fails schema validation"},
+        429: {"description": "Per-IP rate limit exceeded"},
+        500: {"description": "Storage backend unavailable or write failed"},
+    },
 )
 async def submit_bug_report(
     request: Request,
@@ -186,54 +205,78 @@ async def submit_bug_report(
     github_sync: GitHubSync | None = Depends(get_github_sync),
     webhook_sync: WebhookSync | None = Depends(get_webhook_sync),
     limiter: RateLimiter | None = Depends(get_rate_limiter),
-) -> BugReportIntakeResponse:
-    """Persist a new bug report and return its full detail payload."""
+) -> BugReportIntakeResponse | JSONResponse:
+    """Persist a new bug report and return its full detail payload.
+
+    Error paths ``return`` the protocol envelope rather than raising
+    ``HTTPException`` — FastAPI bypasses ``response_model`` when a handler
+    returns a ``Response``, and the response's own status wins over the
+    decorator's ``status_code=201``. See :mod:`bug_fab.routers._errors`.
+    """
     if limiter is not None and not limiter.check(_client_ip(request)):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=(
+        return protocol_error(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "rate_limited",
+            (
                 f"Rate limit exceeded: max {settings.rate_limit_max} reports "
                 f"per {settings.rate_limit_window_seconds} seconds"
             ),
+            retry_after_seconds=settings.rate_limit_window_seconds,
         )
 
     # Parse and validate the metadata JSON. Pydantic validation errors
-    # bubble up as 422 with the standard FastAPI error envelope; bad JSON
-    # is its own 400 so consumers can distinguish "not parseable" from
-    # "parseable but invalid."
+    # surface as 422 schema_error; bad JSON is its own 400 validation_error
+    # so consumers can distinguish "not parseable" from "parseable but
+    # invalid." An unknown protocol_version is checked before schema
+    # validation, because BugReportCreate types the field as Literal["0.1"]
+    # and would otherwise swallow it into a 422.
     try:
         metadata_obj: dict[str, Any] = json.loads(metadata)
     except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"metadata is not valid JSON: {exc.msg}",
-        ) from exc
+        return protocol_error(
+            status.HTTP_400_BAD_REQUEST,
+            "validation_error",
+            f"metadata is not valid JSON: {exc.msg}",
+        )
+    try:
+        check_protocol_version(metadata_obj)
+    except UnsupportedProtocolVersion as exc:
+        return protocol_error(
+            status.HTTP_400_BAD_REQUEST,
+            exc.code,
+            exc.message,
+        )
     try:
         payload = BugReportCreate.model_validate(metadata_obj)
     except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=exc.errors(),
-        ) from exc
+        return protocol_error(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "schema_error",
+            exc.errors(),
+        )
 
     # Buffer the upload into memory so we can validate magic bytes and
     # enforce the size cap before handing bytes to storage.
     screenshot_bytes = await screenshot.read()
     if not screenshot_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Screenshot file is empty",
+        return protocol_error(
+            status.HTTP_400_BAD_REQUEST,
+            "validation_error",
+            "Screenshot file is empty",
         )
     max_bytes = settings.max_upload_mb * 1024 * 1024
     if len(screenshot_bytes) > max_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            detail=f"Screenshot exceeds maximum size of {settings.max_upload_mb} MiB",
+        return protocol_error(
+            status.HTTP_413_CONTENT_TOO_LARGE,
+            "payload_too_large",
+            f"Screenshot exceeds maximum size of {settings.max_upload_mb} MiB",
+            limit_bytes=max_bytes,
         )
     if not _is_png(screenshot_bytes):
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Screenshot must be a PNG image (image/png)",
+        return protocol_error(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            "unsupported_media_type",
+            "Screenshot must be a PNG image (image/png)",
         )
 
     # Build the persistence payload. The server is authoritative for
@@ -256,22 +299,24 @@ async def submit_bug_report(
     try:
         report_id = await storage.save_report(metadata_dict, screenshot_bytes)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except Exception as exc:  # pragma: no cover - defensive
+        return protocol_error(status.HTTP_400_BAD_REQUEST, "validation_error", str(exc))
+    except Exception:  # pragma: no cover - defensive
         logger.exception(
             "bug_fab_storage_save_failed",
             extra={"event": "storage_save_failed"},
         )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to persist bug report",
-        ) from exc
+        return protocol_error(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "Failed to persist bug report",
+        )
 
     detail = await storage.get_report(report_id)
     if detail is None:  # pragma: no cover - storage contract violation
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Stored report could not be read back",
+        return protocol_error(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "Stored report could not be read back",
         )
 
     # Structured lifecycle event — consumers wiring a JSON log handler

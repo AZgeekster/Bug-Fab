@@ -42,6 +42,7 @@ from bug_fab._observability import (
 from bug_fab._observability import emit as emit_event
 from bug_fab.config import Settings
 from bug_fab.integrations.github import GitHubSync
+from bug_fab.routers._errors import protocol_error
 from bug_fab.routers.submit import (
     get_github_sync,
     get_settings,
@@ -64,19 +65,56 @@ _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
 
 
-def _validate_report_id(report_id: str) -> str:
-    """Reject IDs that fail the ``bug-NNN`` shape guard with a 404."""
+def _report_id_error(report_id: str) -> JSONResponse | None:
+    """Return a 404 envelope when ``report_id`` fails the shape guard, else ``None``.
+
+    Named ``_report_id_error`` rather than ``_validate_report_id`` on
+    purpose. This is a path-traversal guard, and its predecessor *raised*
+    while every call site invoked it as a bare statement. A guard that
+    returns its rejection is only effective if each caller checks the
+    result, so the rename makes a forgotten call site a ``NameError`` at
+    import time instead of a silently-disabled security control.
+
+    Call it as::
+
+        if (resp := _report_id_error(report_id)) is not None:
+            return resp
+    """
     if not _REPORT_ID_RE.match(report_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bug report not found")
-    return report_id
+        return protocol_error(status.HTTP_404_NOT_FOUND, "not_found", "Bug report not found")
+    return None
+
+
+def _permission_error(settings: Settings, flag: str) -> JSONResponse | None:
+    """Return a 403 envelope when ``viewer_permissions[flag]`` is false, else ``None``.
+
+    Checked inside each handler body rather than through the
+    ``dependencies=[Depends(...)]`` hook below. **FastAPI discards a
+    dependency's return value**, so a dependency can veto a request only by
+    raising — and a raised ``HTTPException`` cannot carry the protocol's
+    ``{"error", "detail"}`` envelope. Wiring these as dependencies while
+    returning a response would leave every gated route ungated.
+    """
+    if not settings.viewer_permissions.get(flag, False):
+        return protocol_error(
+            status.HTTP_403_FORBIDDEN,
+            "forbidden",
+            f"viewer action '{flag}' is disabled by configuration",
+        )
+    return None
 
 
 def _permission_dep(flag: str) -> Callable[[Settings], None]:
     """Build a FastAPI dependency that gates a route on a permission flag.
 
     Returns a coroutine-friendly callable that raises 403 when the named
-    flag is false in :class:`Settings.viewer_permissions`. The flag name
-    is captured by closure so each route gets its own dedicated dependency.
+    flag is false in :class:`Settings.viewer_permissions`.
+
+    Retained as public API for adapter authors who mount our handlers
+    behind their own routes and want a declarative gate. The bundled
+    viewer routes use :func:`_permission_error` instead, because a
+    dependency cannot emit the protocol error envelope — see that
+    function's docstring.
     """
 
     def _dep(settings: Settings = Depends(get_settings)) -> None:
@@ -218,31 +256,38 @@ async def list_reports_json(
 async def get_report_json(
     report_id: str,
     storage: Storage = Depends(get_storage),
-) -> BugReportDetail:
+) -> BugReportDetail | JSONResponse:
     """Return the full JSON detail payload for a single report."""
-    _validate_report_id(report_id)
+    if (resp := _report_id_error(report_id)) is not None:
+        return resp
     report = await storage.get_report(report_id)
     if report is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bug report not found")
+        return protocol_error(status.HTTP_404_NOT_FOUND, "not_found", "Bug report not found")
     return report
 
 
 @viewer_router.get(
     "/{report_id}",
     response_class=HTMLResponse,
+    # The handler returns HTMLResponse on success and a JSON error envelope
+    # on 404. FastAPI would otherwise try to build a response model from
+    # that union and reject it as an invalid Pydantic field type.
+    response_model=None,
     summary="HTML detail view for a single bug report",
+    responses={404: {"description": "Report does not exist"}},
 )
 async def get_report_html(
     request: Request,
     report_id: str,
     storage: Storage = Depends(get_storage),
     settings: Settings = Depends(get_settings),
-) -> HTMLResponse:
+) -> HTMLResponse | JSONResponse:
     """Render the HTML detail page (screenshot + metadata + lifecycle)."""
-    _validate_report_id(report_id)
+    if (resp := _report_id_error(report_id)) is not None:
+        return resp
     report = await storage.get_report(report_id)
     if report is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bug report not found")
+        return protocol_error(status.HTTP_404_NOT_FOUND, "not_found", "Bug report not found")
     context = {
         "report": report,
         "permissions": settings.viewer_permissions,
@@ -268,28 +313,37 @@ async def get_screenshot(
     are served as ``image/png`` for back-compat — the magic-byte sniff
     on intake means stored bytes are always PNG.
     """
-    _validate_report_id(report_id)
+    if (resp := _report_id_error(report_id)) is not None:
+        return resp
     path = await storage.get_screenshot_path(report_id)
     if path is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Screenshot not found")
+        return protocol_error(status.HTTP_404_NOT_FOUND, "not_found", "Screenshot not found")
     return FileResponse(path, media_type="image/png")
 
 
 @viewer_router.put(
     "/reports/{report_id}/status",
     response_model=BugReportDetail,
-    dependencies=[Depends(require_can_edit_status)],
     summary="Update a bug report's lifecycle status",
+    responses={
+        403: {"description": "viewer_permissions.can_edit_status is false"},
+        404: {"description": "Report does not exist"},
+        422: {"description": "Status is missing or invalid"},
+    },
 )
 async def update_report_status(
     report_id: str,
     payload: BugReportStatusUpdate,
     request: Request,
     storage: Storage = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
     github_sync: GitHubSync | None = Depends(get_github_sync),
-) -> BugReportDetail:
+) -> BugReportDetail | JSONResponse:
     """Apply a status change, append a lifecycle entry, sync to GitHub."""
-    _validate_report_id(report_id)
+    if (resp := _permission_error(settings, "can_edit_status")) is not None:
+        return resp
+    if (resp := _report_id_error(report_id)) is not None:
+        return resp
     actor = _viewer_actor(request)
     try:
         updated = await storage.update_status(
@@ -304,11 +358,9 @@ async def update_report_status(
         # here means the storage layer rejected the transition for some
         # other reason (e.g., unknown id race). Surface as 422 to keep
         # the contract aligned with severity-style enum errors.
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
-        ) from exc
+        return protocol_error(status.HTTP_422_UNPROCESSABLE_CONTENT, "schema_error", str(exc))
     if updated is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bug report not found")
+        return protocol_error(status.HTTP_404_NOT_FOUND, "not_found", "Bug report not found")
 
     if github_sync is not None and updated.github_issue_number:
         try:
@@ -329,32 +381,42 @@ async def update_report_status(
 @viewer_router.delete(
     "/reports/{report_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_can_delete)],
     summary="Permanently delete a bug report",
+    responses={
+        403: {"description": "viewer_permissions.can_delete is false"},
+        404: {"description": "Report does not exist"},
+    },
 )
 async def delete_report(
     report_id: str,
     storage: Storage = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
 ) -> Response:
     """Hard-delete the metadata + screenshot for a single report."""
-    _validate_report_id(report_id)
+    if (resp := _permission_error(settings, "can_delete")) is not None:
+        return resp
+    if (resp := _report_id_error(report_id)) is not None:
+        return resp
     deleted = await storage.delete_report(report_id)
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bug report not found")
+        return protocol_error(status.HTTP_404_NOT_FOUND, "not_found", "Bug report not found")
     emit_event(EVENT_REPORT_DELETED, report_id=report_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @viewer_router.post(
     "/bulk-close-fixed",
-    dependencies=[Depends(require_can_bulk)],
     summary="Close every report currently in 'fixed' state",
+    responses={403: {"description": "viewer_permissions.can_bulk is false"}},
 )
 async def bulk_close_fixed(
     request: Request,
     storage: Storage = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
 ) -> JSONResponse:
     """Transition every ``fixed`` report to ``closed``."""
+    if (resp := _permission_error(settings, "can_bulk")) is not None:
+        return resp
     actor = _viewer_actor(request)
     closed = await storage.bulk_close_fixed(by=actor)
     emit_event(EVENT_BULK_CLOSE_FIXED, count=closed, by=actor)
@@ -363,13 +425,16 @@ async def bulk_close_fixed(
 
 @viewer_router.post(
     "/bulk-archive-closed",
-    dependencies=[Depends(require_can_bulk)],
     summary="Archive every report currently in 'closed' state",
+    responses={403: {"description": "viewer_permissions.can_bulk is false"}},
 )
 async def bulk_archive_closed(
     storage: Storage = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
 ) -> JSONResponse:
     """Move every ``closed`` report into the storage backend's archive area."""
+    if (resp := _permission_error(settings, "can_bulk")) is not None:
+        return resp
     archived = await storage.bulk_archive_closed()
     emit_event(EVENT_BULK_ARCHIVE_CLOSED, count=archived)
     return JSONResponse({"archived": archived})

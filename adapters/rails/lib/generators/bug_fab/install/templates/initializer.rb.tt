@@ -1,0 +1,63 @@
+# frozen_string_literal: true
+
+# Bug-Fab Rails Engine — host configuration.
+#
+# Every option below shows its default. Uncomment and edit the lines you
+# want to override. See https://github.com/AZgeekster/Bug-Fab for the
+# wire-protocol spec the engine implements.
+
+BugFab.configure do |config|
+  # ---------------------------------------------------------------------
+  # Storage
+  # ---------------------------------------------------------------------
+
+  # Where screenshot bytes are written. Bug-Fab's hard rule: screenshots
+  # live on disk, NEVER in the database / Active Storage. Defaults to
+  # Rails.root/storage/bug-fab.
+  # config.storage_root = Rails.root.join("storage", "bug-fab")
+
+  # Maximum allowed screenshot size, in MiB. Above this, intake responds
+  # with `413 payload_too_large`.
+  # config.max_upload_mb = 10
+
+  # ---------------------------------------------------------------------
+  # Viewer
+  # ---------------------------------------------------------------------
+
+  # Default page size for `GET /reports`. Capped at 200 even when the
+  # request asks for more.
+  # config.viewer_page_size = 20
+
+  # Per-route gates. Disabling a flag returns 403 with the protocol error
+  # envelope when consumers hit the corresponding mutation endpoint.
+  # Mount-point auth still wraps the routes — these flags are an
+  # additional in-band veto for read-only deployments.
+  # config.viewer_permissions = {
+  #   can_edit_status: true,
+  #   can_delete: true,
+  #   can_bulk: true
+  # }
+
+  # Optional environment-aware ID prefix. When set, intake assigns
+  # `bug-{prefix-letter}NNN` IDs (e.g., bug-P038 for prod, bug-D012 for
+  # dev). Useful when multiple environments write to a shared collector.
+  # config.id_prefix = ENV["BUG_FAB_ID_PREFIX"] # "P" / "D" / nil
+
+  # Optional callable returning the actor identifier ("by" field) for
+  # lifecycle log entries. Receives the request, returns a string or nil.
+  # Bug-Fab v0.1 has no built-in AuthAdapter, so this is the integration
+  # point for surfacing the host's authenticated user.
+  # config.actor_resolver = ->(request) { request.env["warden"]&.user&.email }
+
+  # ---------------------------------------------------------------------
+  # GitHub Issues sync (optional)
+  # ---------------------------------------------------------------------
+  # When enabled, intake POSTs an issue per report; status updates close
+  # / reopen the linked issue. Failures are logged via Rails.logger.warn
+  # and never raised — a GitHub outage MUST NOT break bug submission.
+
+  # config.github_enabled  = ENV["BUG_FAB_GITHUB_ENABLED"] == "true"
+  # config.github_pat      = ENV["BUG_FAB_GITHUB_PAT"]
+  # config.github_repo     = ENV["BUG_FAB_GITHUB_REPO"] # "owner/repo"
+  # config.github_api_base = "https://api.github.com"
+end

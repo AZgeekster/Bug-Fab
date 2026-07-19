@@ -180,9 +180,9 @@ def test_throw_uncaught_lands_in_console_errors(page: Page, playground_server) -
     report_id = _submit_via_fab(page, title="e2e: caught uncaught throw")
     saved = _read_report(storage_dir, report_id)
     errors = saved.get("context", {}).get("console_errors") or []
-    assert any(
-        "Demo: synchronous throw" in (e.get("message") or "") for e in errors
-    ), f"console_errors did not contain demo throw: {errors}"
+    assert any("Demo: synchronous throw" in (e.get("message") or "") for e in errors), (
+        f"console_errors did not contain demo throw: {errors}"
+    )
 
 
 @pytest.mark.e2e
@@ -200,9 +200,9 @@ def test_console_error_lands_in_console_errors(page: Page, playground_server) ->
     report_id = _submit_via_fab(page, title="e2e: console.error captured")
     saved = _read_report(storage_dir, report_id)
     errors = saved.get("context", {}).get("console_errors") or []
-    assert any(
-        "Demo console.error" in (e.get("message") or "") for e in errors
-    ), f"console_errors did not contain console.error message: {errors}"
+    assert any("Demo console.error" in (e.get("message") or "") for e in errors), (
+        f"console_errors did not contain console.error message: {errors}"
+    )
 
 
 @pytest.mark.e2e
@@ -222,9 +222,9 @@ def test_unhandled_rejection_lands_in_console_errors(page: Page, playground_serv
     report_id = _submit_via_fab(page, title="e2e: promise rejection captured")
     saved = _read_report(storage_dir, report_id)
     errors = saved.get("context", {}).get("console_errors") or []
-    assert any(
-        "Demo: promise rejected" in (e.get("message") or "") for e in errors
-    ), f"console_errors did not contain rejection: {errors}"
+    assert any("Demo: promise rejected" in (e.get("message") or "") for e in errors), (
+        f"console_errors did not contain rejection: {errors}"
+    )
 
 
 @pytest.mark.e2e

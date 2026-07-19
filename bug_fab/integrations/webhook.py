@@ -34,6 +34,8 @@ from typing import Any
 
 import httpx
 
+from bug_fab._redact import safe_url
+
 logger = logging.getLogger(__name__)
 
 #: Default per-request timeout in seconds. Webhook receivers (Slack,
@@ -238,7 +240,7 @@ class WebhookSync:
                 "bug_fab_webhook_send_error",
                 extra={
                     "report_id": report.get("id"),
-                    "url": self._url,
+                    "url": safe_url(self._url),
                     "attempt": attempt,
                     "max_attempts": self._max_attempts,
                     "error": str(exc),
@@ -250,7 +252,7 @@ class WebhookSync:
                 "bug_fab_webhook_send_unexpected_error",
                 extra={
                     "report_id": report.get("id"),
-                    "url": self._url,
+                    "url": safe_url(self._url),
                     "attempt": attempt,
                     "error": str(exc),
                 },
@@ -265,7 +267,7 @@ class WebhookSync:
             "bug_fab_webhook_send_failed",
             extra={
                 "report_id": report.get("id"),
-                "url": self._url,
+                "url": safe_url(self._url),
                 "attempt": attempt,
                 "max_attempts": self._max_attempts,
                 "status_code": resp.status_code,

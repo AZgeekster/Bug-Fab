@@ -36,7 +36,7 @@ import org.springframework.web.multipart.MultipartFile
  *   1. Rate-limit check (cheap; reject early)
  *   2. Metadata JSON parse (`400 validation_error` on malformed JSON)
  *   3. Bean Validation on `BugReportCreate` (`422 schema_error`)
- *   4. Screenshot size check (`413 payload_too_large`)
+ *   4. Screenshot presence + size check (`400` / `413 payload_too_large`)
  *   5. PNG magic-byte sniff (`415 unsupported_media_type`)
  *   6. Save → respond
  */
@@ -70,18 +70,21 @@ class BugFabController(
      * `application.yml` to match `bugfab.maxScreenshotMb`; consumers
      * who override one MUST override both.
      */
-    @PostMapping("/bug-reports", consumes = [MediaType.MULTIPART_FORM_DATA_VALUE])
+    @PostMapping(
+        "/bug-reports",
+        consumes = [MediaType.MULTIPART_FORM_DATA_VALUE, MediaType.APPLICATION_FORM_URLENCODED_VALUE],
+    )
     fun submit(
-        @RequestParam("metadata") metadataPart: MultipartFile,
-        @RequestParam("screenshot") screenshot: MultipartFile,
+        @RequestParam("metadata") metadata: String,
+        @RequestParam(value = "screenshot", required = false) screenshot: MultipartFile?,
         request: HttpServletRequest,
     ): ResponseEntity<Any> {
-        // The metadata part is uploaded as a JSON-content multipart file
-        // (Content-Type: application/json) per the wire protocol — it is
-        // NOT a plain text form field. Binding it as `MultipartFile`
-        // covers both the file-style upload (which the conformance suite
-        // and real consumers use) and lets us read the bytes ourselves.
-        val metadata: String = metadataPart.bytes.toString(Charsets.UTF_8)
+        // `metadata` is a plain multipart form FIELD carrying the JSON
+        // string — the Bug-Fab JS bundle sends it as
+        // `formData.append("metadata", json)` and the FastAPI reference
+        // binds it with `Form(...)`, so it arrives with no filename.
+        // Binding it as `MultipartFile` (the previous shape) rejected
+        // every real submission with a framework-level 400.
         // 1. Rate limit (when enabled).
         if (rateLimiter != null) {
             val clientIp = resolveClientIp(request)
@@ -140,7 +143,14 @@ class BugFabController(
             )
         }
 
-        // 5. Screenshot size + magic-byte check.
+        // 5. Screenshot presence + size + magic-byte check. A submission
+        //    with no screenshot part arrives as
+        //    application/x-www-form-urlencoded (hence the extra `consumes`
+        //    type and the nullable bind above); a missing screenshot is a
+        //    400 validation_error, not a framework-level 415.
+        if (screenshot == null) {
+            return badRequest("Screenshot file is required")
+        }
         val maxBytes = properties.maxScreenshotMb.toLong() * 1024 * 1024
         if (screenshot.size > maxBytes) {
             return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
@@ -332,7 +342,12 @@ class BugFabController(
         .status(HttpStatus.UNPROCESSABLE_ENTITY)
         .body<Any>(ErrorEnvelope("schema_error", detail))
 
+    // Content-Type is pinned to JSON so the error envelope serializes even
+    // when the caller endpoint declares `produces = image/png` (the
+    // screenshot route) — without it Spring finds no converter for the
+    // envelope and 500s instead of 404ing.
     private fun notFound() = ResponseEntity
         .status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_JSON)
         .body<Any>(ErrorEnvelope("not_found", "Bug report not found"))
 }

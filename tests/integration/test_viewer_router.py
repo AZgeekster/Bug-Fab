@@ -490,3 +490,163 @@ def test_read_endpoints_remain_open_when_destructive_disabled(
     assert client.get(f"{vp}/reports").status_code == 200
     assert client.get(f"{vp}/reports/{bid}").status_code == 200
     assert client.get(f"{vp}/reports/{bid}/screenshot").status_code == 200
+
+
+# -----------------------------------------------------------------------------
+# Guard regression tests
+#
+# The permission gate and the path-traversal guard used to short-circuit by
+# *raising* from a dependency (403) and from a bare-statement call (404).
+# Both were converted to return a response. FastAPI discards a dependency's
+# return value, so a careless conversion leaves both controls unenforced with
+# every other test still green. These pin the enforcement itself.
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "bug-001%00.png",
+        "bug-traversal-attempt",
+        "bug-",
+        "not-a-bug-id",
+        "bug-1234567890123",  # 13 digits — one past the {1,12} bound
+    ],
+)
+def test_traversal_guard_rejects_malformed_ids_on_every_id_route(
+    app_factory, tiny_png: bytes, bad_id: str
+) -> None:
+    """Every ``{report_id}`` route rejects a malformed id with 404 before touching storage.
+
+    Asserting the ``not_found`` envelope — not merely the status — is what
+    makes this a guard test. A bare ``{"detail": "Not Found"}`` would mean
+    Starlette's router rejected the path and the guard never ran, so the
+    assertion would hold even with the guard deleted.
+    """
+    client = app_factory()
+    vp = _vp(client)
+    _seed(client, tiny_png)
+
+    def assert_guarded(response) -> None:
+        assert response.status_code == 404
+        assert response.json()["error"] == "not_found"
+
+    assert_guarded(client.get(f"{vp}/reports/{bad_id}"))
+    assert_guarded(client.get(f"{vp}/reports/{bad_id}/screenshot"))
+    assert_guarded(client.get(f"{vp}/{bad_id}"))
+    assert_guarded(client.delete(f"{vp}/reports/{bad_id}"))
+    assert_guarded(client.put(f"{vp}/reports/{bad_id}/status", json={"status": "fixed"}))
+
+
+def test_malformed_id_never_reaches_the_storage_backend(
+    app_factory, file_storage, settings_factory
+) -> None:
+    """The guard's contract is that a malformed id is rejected *before* storage sees it.
+
+    Status alone cannot prove this: a backend asked for ``bug-nonsense``
+    simply returns ``None``, so the route 404s either way and the assertion
+    holds even with the guard deleted (verified by mutation). Booby-trapping
+    the backend is what makes the guard's removal observable — an
+    unguarded id reaches storage and raises instead of returning 404.
+    """
+
+    class TrapStorage:
+        """Every read path explodes; only the guard can prevent that."""
+
+        def __getattr__(self, name: str):
+            async def _trap(*args, **kwargs):
+                raise AssertionError(f"storage.{name} was called with an unvalidated report_id")
+
+            return _trap
+
+    settings = settings_factory(
+        viewer_permissions={"can_edit_status": True, "can_delete": True, "can_bulk": True}
+    )
+    client = app_factory(storage=TrapStorage(), settings=settings)
+    vp = _vp(client)
+
+    for path in (
+        f"{vp}/reports/bug-traversal-attempt",
+        f"{vp}/reports/bug-traversal-attempt/screenshot",
+        f"{vp}/bug-traversal-attempt",
+    ):
+        assert client.get(path).status_code == 404, f"{path} reached storage"
+    assert client.delete(f"{vp}/reports/bug-traversal-attempt").status_code == 404
+    assert (
+        client.put(
+            f"{vp}/reports/bug-traversal-attempt/status", json={"status": "fixed"}
+        ).status_code
+        == 404
+    )
+
+
+@pytest.mark.parametrize("bad_id", ["..%2f..%2fetc%2fpasswd", "../../etc/passwd"])
+def test_slash_bearing_ids_are_rejected_before_the_guard(app_factory, bad_id: str) -> None:
+    """Path-separator payloads never reach the handler — Starlette's router 404s them.
+
+    Kept as defense-in-depth. Deliberately does *not* assert the protocol
+    envelope: these responses come from the router, not from
+    ``_report_id_error``, so they carry FastAPI's bare ``{"detail"}`` body.
+    """
+    client = app_factory()
+    vp = _vp(client)
+    assert client.get(f"{vp}/reports/{bad_id}/screenshot").status_code == 404
+
+
+def test_permission_denied_returns_forbidden_envelope(
+    app_factory, settings_factory, tiny_png: bytes
+) -> None:
+    """A 403 carries the protocol envelope, not FastAPI's bare ``{"detail"}``."""
+    settings = settings_factory(
+        viewer_permissions={"can_edit_status": False, "can_delete": False, "can_bulk": False}
+    )
+    client = app_factory(settings=settings)
+    vp = _vp(client)
+    bid = _seed(client, tiny_png)
+
+    response = client.delete(f"{vp}/reports/{bid}")
+    assert response.status_code == 403
+    assert response.json()["error"] == "forbidden"
+
+    response = client.put(f"{vp}/reports/{bid}/status", json={"status": "fixed"})
+    assert response.status_code == 403
+    assert response.json()["error"] == "forbidden"
+
+    for suffix in ("/bulk-close-fixed", "/bulk-archive-closed"):
+        response = client.post(f"{vp}{suffix}")
+        assert response.status_code == 403
+        assert response.json()["error"] == "forbidden"
+
+
+def test_permission_gate_precedes_existence_check(
+    app_factory, settings_factory, tiny_png: bytes
+) -> None:
+    """A forbidden action on a non-existent report is 403, not 404 — no existence oracle."""
+    settings = settings_factory(
+        viewer_permissions={"can_edit_status": False, "can_delete": False, "can_bulk": False}
+    )
+    client = app_factory(settings=settings)
+    vp = _vp(client)
+    assert client.delete(f"{vp}/reports/bug-999").status_code == 403
+
+
+def test_delete_still_succeeds_when_permitted(
+    app_factory, settings_factory, tiny_png: bytes
+) -> None:
+    """The converted gate must not fail closed on the permitted path."""
+    settings = settings_factory(
+        viewer_permissions={"can_edit_status": True, "can_delete": True, "can_bulk": True}
+    )
+    client = app_factory(settings=settings)
+    vp = _vp(client)
+    bid = _seed(client, tiny_png)
+    assert client.delete(f"{vp}/reports/{bid}").status_code == 204
+    assert client.get(f"{vp}/reports/{bid}").status_code == 404
+
+
+def test_missing_report_returns_not_found_envelope(app_factory) -> None:
+    client = app_factory()
+    vp = _vp(client)
+    response = client.get(f"{vp}/reports/bug-999")
+    assert response.status_code == 404
+    assert response.json()["error"] == "not_found"

@@ -35,9 +35,13 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install package and dev dependencies
+        # `flask` is required: without it the Flask-adapter tests skip and
+        # coverage drops below the 85% gate. All first-party Python adapter
+        # extras (sqlite/postgres/flask/django) must be installed so their
+        # suites run and count toward coverage.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,sqlite,postgres,django]"
+          pip install -e ".[dev,sqlite,postgres,flask,django]"
 
       - name: Lint with ruff
         run: ruff check .
@@ -81,6 +85,113 @@ jobs:
           path: coverage.xml
           retention-days: 14
 
+  conformance:
+    # The bundled conformance suite is the wire-protocol contract every
+    # adapter is measured against. Until this job existed, nothing ran it
+    # against the reference implementation — and the reference was less
+    # conformant than most of its own adapters (it never emitted the
+    # `{error, detail}` envelope and had no protocol_version gate).
+    name: conformance (reference adapter)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and dev dependencies
+        # uvicorn is required to boot the example server below — `[dev]`
+        # alone ships no ASGI server, so the boot step would fail with the
+        # example never coming up. The example server itself uses the default
+        # file storage, but the conformance pytest runs from the repo root and
+        # so collects `tests/conftest.py`, which imports SQLiteStorage — the
+        # `sqlite` extra (SQLAlchemy) is required for collection to succeed.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,sqlite]" "uvicorn[standard]"
+
+      - name: Boot the reference adapter
+        # Mirrors tests/e2e/conftest.py: ephemeral-free port, poll until the
+        # viewer answers, 20s deadline, dump the server log on failure so a
+        # boot error is visible instead of a bare connection-refused.
+        working-directory: examples/fastapi-minimal
+        run: |
+          python -m uvicorn main:app --host 127.0.0.1 --port 8931 --log-level warning \
+            > "${RUNNER_TEMP}/conformance-server.log" 2>&1 &
+          echo $! > "${RUNNER_TEMP}/conformance-server.pid"
+          deadline=$((SECONDS + 20))
+          until curl -fsS -o /dev/null "http://127.0.0.1:8931/admin/bug-reports/reports"; do
+            if [ "${SECONDS}" -ge "${deadline}" ]; then
+              echo "::error::reference adapter failed to boot within 20s"
+              cat "${RUNNER_TEMP}/conformance-server.log"
+              exit 1
+            fi
+            sleep 0.5
+          done
+
+      - name: Run the conformance suite against the reference
+        # Two base URLs because the example splits its mounts:
+        # submit_router at /api, viewer_router at /admin/bug-reports.
+        run: |
+          pytest --bug-fab-conformance \
+                 --base-url=http://127.0.0.1:8931/api \
+                 --viewer-base-url=http://127.0.0.1:8931/admin/bug-reports
+
+      - name: Stop the reference adapter
+        if: always()
+        run: |
+          if [ -f "${RUNNER_TEMP}/conformance-server.pid" ]; then
+            kill "$(cat "${RUNNER_TEMP}/conformance-server.pid")" || true
+          fi
+
+      - name: Dump server log on failure
+        if: failure()
+        run: cat "${RUNNER_TEMP}/conformance-server.log" || true
+
+  adapter-conformance:
+    # Runs each non-Python adapter's own Docker conformance harness against
+    # the bundled protocol suite. Until this existed, the root CI ran only
+    # the Python suite -- 14 adapters could drift with a green build. Three
+    # adapters even shipped .github/workflows/ files nested under adapters/*/
+    # that GitHub Actions never executes; those are deleted in the same change
+    # that adds this job.
+    name: conformance (${{ matrix.adapter }})
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter:
+          - express
+          - go-gin
+          - hono
+          - laravel
+          - phoenix
+          - rails
+          - rust-axum
+          - spring-boot-kotlin
+          - sveltekit
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Run the adapter conformance harness
+        # Each harness is self-contained (docker compose up + the python
+        # conformance plugin from a sibling container) and exit-code-faithful:
+        # 0 pass, 1 non-conformant, 2 harness failure. ubuntu-latest ships
+        # Docker + compose, so no setup step is needed.
+        shell: bash
+        working-directory: adapters/${{ matrix.adapter }}/conformance
+        run: |
+          chmod +x run-conformance.sh
+          ./run-conformance.sh
+
   e2e:
     name: e2e (browser smoke)
     runs-on: ubuntu-latest
@@ -97,9 +208,12 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install package + e2e extras
+        # `[sqlite]` is required: tests/conftest.py imports SQLiteStorage
+        # (which needs sqlalchemy) at collection time, so the whole e2e run
+        # errors out on `No module named 'sqlalchemy'` without it.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[e2e]"
+          pip install -e ".[e2e,sqlite]"
 
       - name: Cache Playwright browsers
         uses: actions/cache@v4
@@ -148,7 +262,10 @@ jobs:
   publish:
     name: publish to PyPI
     runs-on: ubuntu-latest
-    needs: build
+    # `conformance` is listed explicitly: the chain is publish -> build -> test,
+    # so a job added only as a sibling of `e2e` would never gate a release.
+    # A non-conformant reference implementation must not reach PyPI.
+    needs: [build, conformance]
     if: startsWith(github.ref, 'refs/tags/v')
     environment:
       name: pypi

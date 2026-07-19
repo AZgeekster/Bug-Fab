@@ -478,6 +478,29 @@ All non-2xx responses (except `204` and the binary `image/png` 404) use the same
 | `500 Internal Server Error` | `internal_error` | Unhandled server exception. |
 | `503 Service Unavailable` | `storage_unavailable` | Configured storage backend cannot be reached. |
 
+Codes used by the viewer endpoints:
+
+| HTTP Status | `error` code | When |
+|-------------|-------------|------|
+| `403 Forbidden` | `forbidden` | The action is disabled by the adapter's viewer-permission configuration. |
+| `404 Not Found` | `not_found` | Report (or screenshot) does not exist, or the report id fails the id-shape guard. |
+
+### Known deviation — `5xx` raised before the handler runs
+
+An adapter MAY emit its framework's native error body, rather than this
+envelope, for a `5xx` raised *before* the request reaches the handler —
+typically a misconfiguration such as "no storage backend was wired."
+
+This is carved out because it is not always expressible. In the FastAPI
+reference adapter the storage backend is resolved by a dependency, and
+FastAPI **discards a dependency's return value**: a dependency can only
+short-circuit by raising, and a raised `HTTPException` always serializes to
+`{"detail": ...}`. Every other error path in that adapter returns the
+envelope.
+
+Clients MUST NOT rely on `error` being present on a `5xx`. Every `4xx`
+carries it.
+
 ### Failure modes that MUST NOT yield non-2xx
 
 - **GitHub sync failure** during intake or status update — log and return success with `github_issue_url: null`.

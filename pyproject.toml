@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bug-fab"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "Framework-agnostic bug-reporting tool that overlays on web frontends to capture screenshots, annotations, and contextual data."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,6 +34,11 @@ classifiers = [
 ]
 dependencies = [
     "fastapi>=0.110",
+    # The routers use the RFC-9110 status aliases HTTP_422_UNPROCESSABLE_CONTENT
+    # and HTTP_413_CONTENT_TOO_LARGE, added in Starlette 0.48. fastapi>=0.110
+    # permits older Starlette, so pin it directly rather than raising the
+    # fastapi floor (which would also drag in unrelated FastAPI changes).
+    "starlette>=0.48",
     "pydantic>=2.0",
     "python-multipart",
     "httpx",
@@ -59,7 +64,11 @@ django = [
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "ruff>=0.5",
+    # Pin the minor series. `ruff format` output is not stable across minors,
+    # and the version here must agree with the `ruff-pre-commit` rev in
+    # `.pre-commit-config.yaml` — otherwise the hook reformats a file one way
+    # and CI's `ruff format --check` rejects it the other way.
+    "ruff>=0.15,<0.16",
     "pre-commit>=3.0",
     "build",
     "twine",

@@ -1,0 +1,15 @@
+Description:
+    Install the Bug-Fab Rails Engine into the host application.
+
+    Creates `config/initializers/bug_fab.rb` showing every configurable
+    option and a sane default. The engine's migrations are picked up by
+    the host's `db:migrate` automatically — no separate copy step is
+    required.
+
+Example:
+    bin/rails generate bug_fab:install
+
+    Then:
+        bin/rails db:migrate
+        # And add to config/routes.rb:
+        #   mount BugFab::Engine, at: "/bug-fab"

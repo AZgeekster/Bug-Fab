@@ -308,6 +308,142 @@ def test_rate_limit_returns_429_when_exceeded(
     assert "rate limit" in response.text.lower()
 
 
+# -----------------------------------------------------------------------------
+# Protocol error envelope (PROTOCOL.md § Error response shape)
+#
+# Every non-2xx body carries {"error": <code>, "detail": ...}. The reference
+# adapter used to raise bare HTTPException, emitting {"detail": ...} with no
+# machine-readable code — non-conformant while Flask and Django were correct.
+# Nothing asserted the body shape, so nothing caught it.
+# -----------------------------------------------------------------------------
+
+
+def test_unknown_protocol_version_returns_400_unsupported_protocol_version(
+    app_factory, tiny_png: bytes
+) -> None:
+    """An unknown version is 400 `unsupported_protocol_version`, never a 422 schema error.
+
+    `BugReportCreate.protocol_version` is `Literal["0.1"]`, so the version
+    must be checked before Pydantic validation or it surfaces as a 422.
+    """
+    md = _baseline_metadata()
+    md["protocol_version"] = "9.9"
+    client = app_factory()
+    response = client.post(
+        "/bug-reports",
+        data={"metadata": json.dumps(md)},
+        files={"screenshot": ("shot.png", tiny_png, "image/png")},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "unsupported_protocol_version"
+
+
+def test_bad_json_metadata_uses_validation_error_envelope(app_factory, tiny_png: bytes) -> None:
+    client = app_factory()
+    response = client.post(
+        "/bug-reports",
+        data={"metadata": "{not valid json,,,"},
+        files={"screenshot": ("shot.png", tiny_png, "image/png")},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "validation_error"
+
+
+def test_schema_failure_uses_schema_error_envelope_with_field_list(
+    app_factory, tiny_png: bytes
+) -> None:
+    """`detail` carries Pydantic's per-field error list, not a flat string."""
+    md = _baseline_metadata()
+    md["severity"] = "urgent"
+    client = app_factory()
+    response = client.post(
+        "/bug-reports",
+        data={"metadata": json.dumps(md)},
+        files={"screenshot": ("shot.png", tiny_png, "image/png")},
+    )
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"] == "schema_error"
+    assert isinstance(body["detail"], list)
+
+
+def test_oversize_screenshot_envelope_includes_limit_bytes(app_factory, settings_factory) -> None:
+    """PROTOCOL.md § Standard error codes: a 413 body MUST include `limit_bytes`."""
+    settings = settings_factory(max_upload_mb=1)
+    too_big = b"\x89PNG\r\n\x1a\n" + (b"\x00" * 1_300_000)
+    client = app_factory(settings=settings)
+    response = client.post(
+        "/bug-reports",
+        data={"metadata": json.dumps(_baseline_metadata())},
+        files={"screenshot": ("shot.png", too_big, "image/png")},
+    )
+    assert response.status_code == 413
+    body = response.json()
+    assert body["error"] == "payload_too_large"
+    assert body["limit_bytes"] == 1 * 1024 * 1024
+
+
+def test_non_png_envelope_uses_unsupported_media_type(app_factory) -> None:
+    client = app_factory()
+    response = client.post(
+        "/bug-reports",
+        data={"metadata": json.dumps(_baseline_metadata())},
+        files={"screenshot": ("shot.png", b"NOT-AN-IMAGE-FILE-BYTES", "image/png")},
+    )
+    assert response.status_code == 415
+    assert response.json()["error"] == "unsupported_media_type"
+
+
+def test_empty_screenshot_envelope_uses_validation_error(app_factory) -> None:
+    client = app_factory()
+    response = client.post(
+        "/bug-reports",
+        data={"metadata": json.dumps(_baseline_metadata())},
+        files={"screenshot": ("shot.png", b"", "image/png")},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "validation_error"
+
+
+def test_rate_limited_envelope_includes_retry_after_seconds(
+    app_factory, settings_factory, tiny_png: bytes
+) -> None:
+    """PROTOCOL.md § Standard error codes: a 429 body SHOULD include `retry_after_seconds`."""
+    settings = settings_factory(
+        rate_limit_enabled=True,
+        rate_limit_max=1,
+        rate_limit_window_seconds=60,
+    )
+    limiter = RateLimiter(max_per_window=1, window_seconds=60)
+    client = app_factory(settings=settings, rate_limiter=limiter)
+    payload = json.dumps(_baseline_metadata())
+    files = {"screenshot": ("shot.png", tiny_png, "image/png")}
+    assert client.post("/bug-reports", data={"metadata": payload}, files=files).status_code == 201
+    response = client.post("/bug-reports", data={"metadata": payload}, files=files)
+    assert response.status_code == 429
+    body = response.json()
+    assert body["error"] == "rate_limited"
+    assert body["retry_after_seconds"] == 60
+
+
+def test_successful_submit_still_returns_201_intake_envelope(app_factory, tiny_png: bytes) -> None:
+    """Returning `JSONResponse` on error paths must not disturb the 201 success path.
+
+    FastAPI bypasses `response_model` when a handler returns a `Response`;
+    this pins that the happy path still goes through the model.
+    """
+    client = app_factory()
+    response = client.post(
+        "/bug-reports",
+        data={"metadata": json.dumps(_baseline_metadata())},
+        files={"screenshot": ("shot.png", tiny_png, "image/png")},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert "error" not in body
+    assert set(body) == {"id", "received_at", "stored_at", "github_issue_url"}
+
+
 def test_rate_limit_disabled_by_default(app_factory, tiny_png: bytes) -> None:
     """Without configuring a limiter, every request is allowed."""
     client = app_factory()
