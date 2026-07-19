@@ -15,7 +15,6 @@ dependency required). The tests verify that:
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any
 
@@ -31,10 +30,12 @@ from bug_fab.integrations.github import (
     _build_issue_labels,
     _build_issue_title,
 )
-
-
-def _run(coro):  # type: ignore[no-untyped-def]
-    return asyncio.new_event_loop().run_until_complete(coro)
+from tests._helpers import (
+    install_capturing_async_client,
+)
+from tests._helpers import (
+    run_coro as _run,
+)
 
 
 def _sample_report() -> dict[str, Any]:
@@ -74,38 +75,9 @@ def _make_sync_with_transport(
     decides the response shape; the captured list is appended to in-order
     for post-hoc assertions.
     """
-    captured: list[httpx.Request] = []
-
-    def _wrapped(request: httpx.Request) -> httpx.Response:
-        captured.append(request)
-        return handler(request)
-
-    transport = httpx.MockTransport(_wrapped)
+    captured = install_capturing_async_client(handler)
     sync = GitHubSync(pat=pat, repo=repo, api_base=api_base)
-
-    # Monkey-patch ``httpx.AsyncClient`` *inside* the github module so the
-    # synchronously-constructed clients pick up the mock transport.
-    import bug_fab.integrations.github as github_module
-
-    real_client = httpx.AsyncClient
-
-    class _MockClient(real_client):  # type: ignore[misc, valid-type]
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            kwargs["transport"] = transport
-            super().__init__(*args, **kwargs)
-
-    github_module.httpx.AsyncClient = _MockClient  # type: ignore[attr-defined]
     return sync, captured
-
-
-@pytest.fixture(autouse=True)
-def _restore_httpx_async_client():  # type: ignore[no-untyped-def]
-    """Restore ``httpx.AsyncClient`` after every test (defensive)."""
-    import bug_fab.integrations.github as github_module
-
-    original = github_module.httpx.AsyncClient
-    yield
-    github_module.httpx.AsyncClient = original
 
 
 # -----------------------------------------------------------------------------

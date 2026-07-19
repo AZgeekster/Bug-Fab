@@ -229,6 +229,7 @@ func (f *FileStorage) buildIndexEntry(report map[string]interface{}) map[string]
 		"created_at":       report["created_at"],
 		"has_screenshot":   report["has_screenshot"],
 		"github_issue_url": report["github_issue_url"],
+		"environment":      report["environment"],
 	}
 }
 

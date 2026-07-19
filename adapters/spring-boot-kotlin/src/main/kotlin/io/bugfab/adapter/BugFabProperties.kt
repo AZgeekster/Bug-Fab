@@ -65,6 +65,13 @@ data class RateLimitProperties(
     val enabled: Boolean = false,
     val maxPerWindow: Int = 30,
     val windowSeconds: Int = 60,
+    /**
+     * Direct-peer addresses allowed to supply `X-Forwarded-For` as the
+     * rate-limit key. Empty (the secure default) ignores the header and
+     * meters by the direct peer; `"*"` trusts every peer. Mirrors the
+     * Python reference's `rate_limit_trusted_proxies`.
+     */
+    val trustedProxies: Set<String> = emptySet(),
 )
 
 data class ViewerPermissionsProperties(

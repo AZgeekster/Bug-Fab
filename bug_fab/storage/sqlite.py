@@ -28,8 +28,6 @@ class SQLiteStorage(SqlStorageBase):
         Directory where screenshot PNG files are written. Created if missing.
     """
 
-    supports_returning = True  # SQLite >= 3.35
-
     def __init__(self, db_path: Path | str, screenshot_dir: Path | str) -> None:
         db_path = Path(db_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)

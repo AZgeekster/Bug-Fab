@@ -83,6 +83,41 @@ public struct CreateBugFabReport: AsyncMigration {
     }
 }
 
+/// Single-row allocator for sequential `bug-NNN` ids. Incremented by an
+/// atomic `UPDATE ... SET last_value = last_value + 1` so a delete cannot
+/// rewind it (see `CreateBugFabIdCounter` for the rationale).
+public final class BugFabIdCounter: Model, @unchecked Sendable {
+    public static let schema = "bug_fab_id_counter"
+
+    @ID(custom: "id", generatedBy: .user)
+    public var id: Int?
+
+    @Field(key: "last_value")
+    public var lastValue: Int
+
+    public init() {}
+}
+
+public struct CreateBugFabIdCounter: AsyncMigration {
+    public init() {}
+    public func prepare(on database: Database) async throws {
+        try await database.schema(BugFabIdCounter.schema)
+            .field("id", .int, .identifier(auto: false))
+            .field("last_value", .int, .required)
+            .create()
+        // Seed the single row the allocator increments. `saveReport` assumes
+        // it exists; without it the first UPDATE would touch zero rows and the
+        // read-back would be empty.
+        let counter = BugFabIdCounter()
+        counter.id = 1
+        counter.lastValue = 0
+        try await counter.create(on: database)
+    }
+    public func revert(on database: Database) async throws {
+        try await database.schema(BugFabIdCounter.schema).delete()
+    }
+}
+
 public final class BugFabFluentStorage: BugFabStorage, @unchecked Sendable {
     let app: Application
     let idPrefix: String
@@ -98,31 +133,61 @@ public final class BugFabFluentStorage: BugFabStorage, @unchecked Sendable {
         async throws -> String
     {
         let now = Self.nowIso()
-        // Compute next id by counting existing rows + 1. For high-write
-        // production deployments swap this for a sequence/serial column.
-        let existing = try await BugFabReport.query(on: db).count()
-        let n = existing + 1
-        let id = String(format: "bug-\(idPrefix)%03d", n)
+        // Allocate the id and insert the row in one transaction: the id comes
+        // from an atomic counter, not COUNT(*)+1 (a delete would make the next
+        // id collide with a live row), and doing both under one transaction
+        // means a rolled-back insert cannot leave a live report holding a
+        // skipped number.
+        return try await db.transaction { tx in
+            let n = try await self.nextNumber(on: tx)
+            let id = String(format: "bug-\(self.idPrefix)%03d", n)
 
-        let fullReport = BugFabFileStorage.buildReport(id: id, metadata: metadata, now: now)
-        let json = try Self.encodeJSON(fullReport)
-        let row = BugFabReport()
-        row.id = id
-        row.metadataJson = json
-        row.screenshot = screenshotBytes
-        row.status = "open"
-        row.severity = stringFor(fullReport["severity"]) ?? "medium"
-        row.module = stringFor(fullReport["module"]) ?? ""
-        row.reportType = stringFor(fullReport["report_type"]) ?? "bug"
-        row.environment = stringFor(fullReport["environment"]) ?? ""
-        row.title = stringFor(fullReport["title"]) ?? ""
-        row.githubIssueUrl = nil
-        row.githubIssueNumber = nil
-        row.createdAt = now
-        row.updatedAt = now
-        row.archivedAt = nil
-        try await row.create(on: db)
-        return id
+            let fullReport = BugFabFileStorage.buildReport(id: id, metadata: metadata, now: now)
+            let json = try Self.encodeJSON(fullReport)
+            let row = BugFabReport()
+            row.id = id
+            row.metadataJson = json
+            row.screenshot = screenshotBytes
+            row.status = "open"
+            row.severity = self.stringFor(fullReport["severity"]) ?? "medium"
+            row.module = self.stringFor(fullReport["module"]) ?? ""
+            row.reportType = self.stringFor(fullReport["report_type"]) ?? "bug"
+            row.environment = self.stringFor(fullReport["environment"]) ?? ""
+            row.title = self.stringFor(fullReport["title"]) ?? ""
+            row.githubIssueUrl = nil
+            row.githubIssueNumber = nil
+            row.createdAt = now
+            row.updatedAt = now
+            row.archivedAt = nil
+            try await row.create(on: tx)
+            return id
+        }
+    }
+
+    private struct CounterValue: Decodable {
+        let lastValue: Int
+        enum CodingKeys: String, CodingKey { case lastValue = "last_value" }
+    }
+
+    /// Allocate the next report number by incrementing the single counter row.
+    ///
+    /// A single atomic `UPDATE ... SET last_value = last_value + 1` — never a
+    /// `SELECT ... FOR UPDATE`, which is a syntax error on the SQLite driver
+    /// this adapter ships for tests. SQLite serializes writers so the increment
+    /// cannot be lost; Postgres holds a row lock for the statement's duration.
+    /// The read-back is read-your-own-write within the enclosing transaction.
+    private func nextNumber(on database: Database) async throws -> Int {
+        guard let sql = database as? any SQLDatabase else {
+            throw Abort(.internalServerError, reason: "Fluent database is not SQL-capable")
+        }
+        try await sql.raw("UPDATE bug_fab_id_counter SET last_value = last_value + 1 WHERE id = 1")
+            .run()
+        let rows = try await sql.raw("SELECT last_value FROM bug_fab_id_counter WHERE id = 1")
+            .all(decoding: CounterValue.self)
+        guard let value = rows.first?.lastValue else {
+            throw Abort(.internalServerError, reason: "bug_fab_id_counter row missing")
+        }
+        return value
     }
 
     public func getReport(id: String) async throws -> BugFabBugReportDetail? {

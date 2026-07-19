@@ -36,6 +36,30 @@ _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 #: ``400 unsupported_protocol_version``.
 PROTOCOL_VERSION = "0.1"
 
+#: Fixed allowance added to the sum of the field caps when computing the
+#: pre-parse ``Content-Length`` bound. Covers multipart framing — the
+#: boundary lines and per-part headers that ride alongside the two fields —
+#: so a request sized at exactly the field caps is not rejected by the
+#: coarse guard before the precise per-field checks can run.
+MULTIPART_OVERHEAD_BYTES = 16 * 1024
+
+
+def max_request_bytes(max_screenshot_bytes: int, max_metadata_bytes: int) -> int:
+    """Coarse total-body bound for the pre-parse ``Content-Length`` guard.
+
+    Adapters check the request's declared ``Content-Length`` against this
+    value *before* the framework buffers the body, so an absurdly large
+    upload is rejected without being read into memory or spooled to disk.
+    It is deliberately loose — the sum of the screenshot and metadata caps
+    plus :data:`MULTIPART_OVERHEAD_BYTES` — because the precise per-field
+    ``413`` responses still fire after parsing and produce the exact error.
+    A body with no ``Content-Length`` (chunked transfer) bypasses this
+    guard and is bounded only by the post-parse field checks; front-door
+    limits (nginx ``client_max_body_size``, the ASGI/WSGI server) remain
+    the right answer for hard transport-level enforcement.
+    """
+    return max_screenshot_bytes + max_metadata_bytes + MULTIPART_OVERHEAD_BYTES
+
 
 class IntakeError(Exception):
     """Base class for protocol intake validation failures.
@@ -59,11 +83,20 @@ class IntakeError(Exception):
 
 
 class PayloadTooLarge(IntakeError):
-    """Screenshot exceeds the configured size cap. Maps to HTTP 413."""
+    """Screenshot or metadata exceeds its configured size cap. Maps to HTTP 413.
+
+    ``limit_bytes`` carries the cap that tripped (the metadata cap and the
+    screenshot cap differ), so adapters can populate the protocol's
+    ``limit_bytes`` response field without guessing which check fired.
+    """
 
     status_code = 413
     code = "payload_too_large"
     message = "Screenshot exceeds the maximum allowed size"
+
+    def __init__(self, message: str = "", limit_bytes: int | None = None) -> None:
+        super().__init__(message)
+        self.limit_bytes = limit_bytes
 
 
 class UnsupportedMediaType(IntakeError):
@@ -176,6 +209,7 @@ def validate_payload(
     screenshot_content_type: str | None,
     request_user_agent: str | None,
     max_screenshot_bytes: int = 5 * 1024 * 1024,
+    max_metadata_bytes: int = 256 * 1024,
 ) -> ValidatedPayload:
     """Validate a multipart bug-report submission per the v0.1 protocol.
 
@@ -218,10 +252,23 @@ def validate_payload(
     ValidationError
         Metadata JSON is unparseable or fails the schema (HTTP 422).
     """
-    # 1. Size check first — it's the cheapest test and rejects DoS-shaped
-    #    uploads before we look at any bytes.
+    # 1. Size checks first — the cheapest tests, and they reject DoS-shaped
+    #    uploads before we look at any bytes or parse any JSON. The metadata
+    #    cap matters as much as the screenshot cap: `metadata` feeds
+    #    `json.loads` with `BugReportContext(extra="allow")` and unbounded
+    #    `list[dict]` buffers, so an unbounded string is parsed into memory
+    #    and persisted. Measured in UTF-8 bytes, not characters.
+    metadata_bytes = len(metadata_json.encode("utf-8"))
+    if metadata_bytes > max_metadata_bytes:
+        raise PayloadTooLarge(
+            f"metadata exceeds maximum size of {max_metadata_bytes} bytes (got {metadata_bytes})",
+            limit_bytes=max_metadata_bytes,
+        )
     if len(screenshot_bytes) > max_screenshot_bytes:
-        raise PayloadTooLarge(f"Screenshot exceeds maximum size of {max_screenshot_bytes} bytes")
+        raise PayloadTooLarge(
+            f"Screenshot exceeds maximum size of {max_screenshot_bytes} bytes",
+            limit_bytes=max_screenshot_bytes,
+        )
 
     # 2. Content-type enforcement. The protocol locks v0.1 to PNG; adapters
     #    that want JPEG support layer it on top after a protocol bump.

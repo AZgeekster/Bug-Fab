@@ -7,7 +7,6 @@ Alembic upgrade path against a fresh DB.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -20,10 +19,7 @@ from bug_fab.storage._models import (
     BugReportLifecycle,
 )
 from bug_fab.storage.sqlite import SQLiteStorage
-
-
-def _run(coro):  # type: ignore[no-untyped-def]
-    return asyncio.new_event_loop().run_until_complete(coro)
+from tests._helpers import run_coro as _run
 
 
 def _baseline_metadata(**overrides: Any) -> dict[str, Any]:
@@ -132,6 +128,17 @@ def test_list_filter_module(sqlite_storage: SQLiteStorage, tiny_png: bytes) -> N
     _run(sqlite_storage.save_report(_baseline_metadata(module="alpha"), tiny_png))
     _run(sqlite_storage.save_report(_baseline_metadata(module="beta"), tiny_png))
     items, total = _run(sqlite_storage.list_reports({"module": "alpha"}, page=1, page_size=20))
+    assert total == 1
+
+
+def test_list_filter_environment(sqlite_storage: SQLiteStorage, tiny_png: bytes) -> None:
+    # The `environment` column exists on the row but the SQL filter loop
+    # used to skip it, so this filter was a silent no-op.
+    _run(sqlite_storage.save_report(_baseline_metadata(environment="production"), tiny_png))
+    _run(sqlite_storage.save_report(_baseline_metadata(environment="staging"), tiny_png))
+    items, total = _run(
+        sqlite_storage.list_reports({"environment": "production"}, page=1, page_size=20)
+    )
     assert total == 1
 
 

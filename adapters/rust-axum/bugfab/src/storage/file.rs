@@ -23,13 +23,12 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
-use super::{ListFilters, Storage, StorageError};
+use super::{report, ListFilters, Storage, StorageError};
 use crate::schemas::{BugReportDetail, BugReportSummary};
 
 const INDEX_FILENAME: &str = "index.json";
@@ -60,13 +59,6 @@ impl FileStorage {
             id_prefix: id_prefix.into(),
             lock: Mutex::new(()),
         })
-    }
-
-    fn now_iso() -> String {
-        let now: DateTime<Utc> = Utc::now();
-        // Match the Python adapter's `datetime.now(timezone.utc).isoformat()`
-        // shape (e.g., `2026-04-27T15:30:00.123456+00:00`).
-        now.to_rfc3339_opts(chrono::SecondsFormat::Micros, false)
     }
 
     async fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), StorageError> {
@@ -152,77 +144,6 @@ impl FileStorage {
         format!("bug-{}{:03}", self.id_prefix, n)
     }
 
-    fn build_report(report_id: &str, metadata: &Value, now: &str) -> Value {
-        let context = metadata
-            .get("context")
-            .cloned()
-            .unwrap_or_else(|| Value::Object(Map::new()));
-        let reporter_in = metadata
-            .get("reporter")
-            .cloned()
-            .unwrap_or_else(|| Value::Object(Map::new()));
-        let module = metadata
-            .get("module")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .or_else(|| {
-                context
-                    .get("module")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-            })
-            .unwrap_or_default();
-        let environment = metadata
-            .get("environment")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-            .or_else(|| {
-                context
-                    .get("environment")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-            })
-            .unwrap_or_default();
-
-        json!({
-            "id": report_id,
-            "protocol_version": metadata.get("protocol_version").cloned().unwrap_or_else(|| Value::String("0.1".into())),
-            "title": metadata.get("title").cloned().unwrap_or_else(|| Value::String(String::new())),
-            "client_ts": metadata.get("client_ts").cloned().unwrap_or_else(|| Value::String(String::new())),
-            "report_type": metadata.get("report_type").cloned().unwrap_or_else(|| Value::String("bug".into())),
-            "description": metadata.get("description").cloned().unwrap_or_else(|| Value::String(String::new())),
-            "expected_behavior": metadata.get("expected_behavior").cloned().unwrap_or_else(|| Value::String(String::new())),
-            "severity": metadata.get("severity").cloned().unwrap_or_else(|| Value::String("medium".into())),
-            "status": "open",
-            "tags": metadata.get("tags").cloned().unwrap_or_else(|| Value::Array(vec![])),
-            "reporter": json!({
-                "name": reporter_in.get("name").cloned().unwrap_or_else(|| Value::String(String::new())),
-                "email": reporter_in.get("email").cloned().unwrap_or_else(|| Value::String(String::new())),
-                "user_id": reporter_in.get("user_id").cloned().unwrap_or_else(|| Value::String(String::new())),
-            }),
-            "context": context,
-            "module": module,
-            "created_at": now,
-            "updated_at": now,
-            "has_screenshot": true,
-            "server_user_agent": metadata.get("server_user_agent").cloned().unwrap_or_else(|| Value::String(String::new())),
-            "client_reported_user_agent": metadata
-                .get("client_reported_user_agent")
-                .cloned()
-                .unwrap_or_else(|| Value::String(String::new())),
-            "environment": environment,
-            "github_issue_url": Value::Null,
-            "github_issue_number": Value::Null,
-            "lifecycle": [json!({
-                "action": "created",
-                "by": metadata.get("submitted_by").cloned().unwrap_or_else(|| Value::String(String::new())),
-                "at": now,
-                "fix_commit": "",
-                "fix_description": "",
-            })],
-        })
-    }
-
     fn build_index_entry(report: &Value) -> Value {
         json!({
             "id": report.get("id").cloned().unwrap_or(Value::Null),
@@ -279,8 +200,8 @@ impl Storage for FileStorage {
         let _guard = self.lock.lock().await;
         let mut index = self.read_index().await?;
         let report_id = self.next_id(&index);
-        let now = Self::now_iso();
-        let report = Self::build_report(&report_id, &metadata, &now);
+        let now = report::now_iso();
+        let report = report::build_report(&report_id, &metadata, &now);
 
         self.write_screenshot(&report_id, &screenshot_bytes).await?;
         self.write_report(&report_id, &report).await?;
@@ -385,7 +306,7 @@ impl Storage for FileStorage {
         let Some(mut data) = self.read_report(report_id).await? else {
             return Ok(None);
         };
-        let now = Self::now_iso();
+        let now = report::now_iso();
         if let Some(obj) = data.as_object_mut() {
             obj.insert("status".to_string(), Value::String(status.to_string()));
             obj.insert("updated_at".to_string(), Value::String(now.clone()));

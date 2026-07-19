@@ -1,0 +1,3 @@
+# Keeps the directory in git so `docker build` succeeds on a clean clone.
+# The real content (the SITE-BUG-FAB Astro dist/) is synced in before
+# deploy and is never committed.

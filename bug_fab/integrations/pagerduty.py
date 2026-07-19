@@ -65,9 +65,18 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
-import httpx
+from bug_fab.integrations._base import DeliveryEvents, post_json, truncate
 
 logger = logging.getLogger(__name__)
+
+#: WARN event names emitted when a PagerDuty trigger fails. Passed to
+#: :func:`bug_fab.integrations._base.post_json` so the shared delivery
+#: helper logs under this module's logger with these names.
+_DELIVERY_EVENTS = DeliveryEvents(
+    error="bug_fab_pagerduty_send_error",
+    unexpected="bug_fab_pagerduty_send_unexpected_error",
+    failed="bug_fab_pagerduty_send_failed",
+)
 
 #: Default per-request timeout in seconds. PagerDuty's Events API v2
 #: enqueue endpoint normally responds in well under a second, but a
@@ -118,13 +127,6 @@ SEVERITY_MAP: dict[str, str] = {
 #: PagerDuty severity used when the inbound report's ``severity`` is
 #: missing or outside the Bug-Fab vocabulary.
 DEFAULT_PAGERDUTY_SEVERITY = "info"
-
-
-def _truncate(text: str, limit: int) -> str:
-    """Hard-cap ``text`` at ``limit`` chars, appending an ellipsis on overflow."""
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1].rstrip() + "…"
 
 
 def _normalize_severities(values: Any) -> tuple[str, ...]:
@@ -298,7 +300,7 @@ class PagerDutySync:
         custom_details: dict[str, Any] = {
             "report_id": report_id,
             "reporter": reporter_name,
-            "description": _truncate(description, MAX_DESCRIPTION_CHARS) if description else "",
+            "description": truncate(description, MAX_DESCRIPTION_CHARS) if description else "",
             "created_at": created_at,
         }
         if self._viewer_base_url and report_id:
@@ -361,48 +363,15 @@ class PagerDutySync:
             return False
 
         body = self.build_payload(report)
-        try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.post(
-                    self._api_url,
-                    json=body,
-                    headers={"Content-Type": "application/json"},
-                )
-        except httpx.HTTPError as exc:
-            logger.warning(
-                "bug_fab_pagerduty_send_error",
-                extra={
-                    "report_id": report.get("id"),
-                    "url": self._api_url,
-                    "error": str(exc),
-                },
-            )
-            return False
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning(
-                "bug_fab_pagerduty_send_unexpected_error",
-                extra={
-                    "report_id": report.get("id"),
-                    "url": self._api_url,
-                    "error": str(exc),
-                },
-            )
-            return False
-        if resp.status_code // 100 != 2:
-            body_text = resp.text
-            if len(body_text) > 200:
-                body_text = body_text[:197] + "..."
-            logger.warning(
-                "bug_fab_pagerduty_send_failed",
-                extra={
-                    "report_id": report.get("id"),
-                    "url": self._api_url,
-                    "status_code": resp.status_code,
-                    "body": body_text,
-                },
-            )
-            return False
-        return True
+        return await post_json(
+            url=self._api_url,
+            payload=body,
+            timeout=self._timeout,
+            log=logger,
+            events=_DELIVERY_EVENTS,
+            report_id=report.get("id"),
+            log_url=self._api_url,
+        )
 
 
 __all__ = [

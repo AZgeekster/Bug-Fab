@@ -40,6 +40,8 @@ from typing import Any
 
 import httpx
 
+from bug_fab.integrations._base import truncate
+
 logger = logging.getLogger(__name__)
 
 #: Default Linear GraphQL endpoint. Overridable for self-hosted /
@@ -85,13 +87,6 @@ mutation IssueCreate($input: IssueCreateInput!) {
   }
 }
 """
-
-
-def _truncate(text: str, limit: int) -> str:
-    """Trim ``text`` to ``limit`` chars, appending an ellipsis when cut."""
-    if len(text) <= limit:
-        return text
-    return text[: max(limit - 3, 0)] + "..."
 
 
 def _priority_for_severity(severity: Any) -> int:
@@ -343,7 +338,7 @@ class LinearSync:
                 extra={
                     "report_id": report.get("id"),
                     "status_code": resp.status_code,
-                    "body": _truncate(resp.text, 200),
+                    "body": truncate(resp.text, 200),
                 },
             )
             return None, None
@@ -366,7 +361,7 @@ class LinearSync:
                 "bug_fab_linear_create_issue_graphql_errors",
                 extra={
                     "report_id": report.get("id"),
-                    "errors": _truncate(str(data.get("errors")), 200),
+                    "errors": truncate(str(data.get("errors")), 200),
                 },
             )
             return None, None

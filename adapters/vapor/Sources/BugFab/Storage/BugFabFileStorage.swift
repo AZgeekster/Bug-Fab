@@ -227,6 +227,10 @@ public final class BugFabFileStorage: BugFabStorage, @unchecked Sendable {
         var createdAt: String
         var hasScreenshot: Bool
         var githubIssueUrl: String?
+        // Optional so an index.json written before this field existed still
+        // decodes (a missing key would otherwise fail the whole index read
+        // and lose every entry). Fresh writes always populate it.
+        var environment: String?
 
         enum CodingKeys: String, CodingKey {
             case id, title
@@ -235,6 +239,7 @@ public final class BugFabFileStorage: BugFabStorage, @unchecked Sendable {
             case createdAt = "created_at"
             case hasScreenshot = "has_screenshot"
             case githubIssueUrl = "github_issue_url"
+            case environment
         }
     }
 
@@ -343,12 +348,14 @@ public final class BugFabFileStorage: BugFabStorage, @unchecked Sendable {
     }
 
     private static func atomicWrite(data: Data, to url: URL) throws {
-        let tmp = url.appendingPathExtension("tmp")
-        try data.write(to: tmp, options: [.atomic])
-        if FileManager.default.fileExists(atPath: url.path) {
-            try FileManager.default.removeItem(at: url)
-        }
-        try FileManager.default.moveItem(at: tmp, to: url)
+        // `.atomic` writes to a sibling temp file and renames it into place
+        // in a single step, which is atomic on the same filesystem: a crash
+        // leaves either the old file intact or the fully-written new one.
+        // The previous remove-then-move opened a window where a crash after
+        // removeItem but before moveItem destroyed the destination (e.g.
+        // index.json) with no recovery, silently losing the whole listing.
+        // This is the same temp-plus-rename the Go and Rust adapters use.
+        try data.write(to: url, options: [.atomic])
     }
 
     private static func nowIso() -> String {
@@ -364,7 +371,7 @@ public final class BugFabFileStorage: BugFabStorage, @unchecked Sendable {
     }
 
     static func matches(entry: IndexEntry, filters: [String: String]) -> Bool {
-        for key in ["status", "severity", "module", "report_type"] {
+        for key in ["status", "severity", "module", "report_type", "environment"] {
             guard let wanted = filters[key], !wanted.isEmpty else { continue }
             let actual: String
             switch key {
@@ -372,14 +379,10 @@ public final class BugFabFileStorage: BugFabStorage, @unchecked Sendable {
             case "severity": actual = entry.severity
             case "module": actual = entry.module
             case "report_type": actual = entry.reportType
+            case "environment": actual = entry.environment ?? ""
             default: continue
             }
             if actual != wanted { return false }
-        }
-        if let env = filters["environment"], !env.isEmpty {
-            // environment isn't on the index — for FileStorage this filter
-            // is a no-op (matches all). SQL backends apply it properly.
-            _ = env
         }
         return true
     }
@@ -478,7 +481,7 @@ public final class BugFabFileStorage: BugFabStorage, @unchecked Sendable {
             reportType: s("report_type"), severity: s("severity"),
             status: s("status"), module: s("module"),
             createdAt: s("created_at"), hasScreenshot: true,
-            githubIssueUrl: nil
+            githubIssueUrl: nil, environment: s("environment")
         )
     }
 

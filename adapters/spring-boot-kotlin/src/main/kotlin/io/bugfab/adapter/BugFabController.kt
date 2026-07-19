@@ -34,11 +34,12 @@ import org.springframework.web.multipart.MultipartFile
  *
  * Validation order — mirrors `bug_fab/routers/submit.py`:
  *   1. Rate-limit check (cheap; reject early)
- *   2. Metadata JSON parse (`400 validation_error` on malformed JSON)
- *   3. Bean Validation on `BugReportCreate` (`422 schema_error`)
- *   4. Screenshot presence + size check (`400` / `413 payload_too_large`)
- *   5. PNG magic-byte sniff (`415 unsupported_media_type`)
- *   6. Save → respond
+ *   2. Metadata size cap (`413 payload_too_large`)
+ *   3. Metadata JSON parse (`400 validation_error` on malformed JSON)
+ *   4. Bean Validation on `BugReportCreate` (`422 schema_error`)
+ *   5. Screenshot presence + size check (`400` / `413 payload_too_large`)
+ *   6. PNG magic-byte sniff (`415 unsupported_media_type`)
+ *   7. Save → respond
  */
 @RestController
 class BugFabController(
@@ -87,7 +88,7 @@ class BugFabController(
         // every real submission with a framework-level 400.
         // 1. Rate limit (when enabled).
         if (rateLimiter != null) {
-            val clientIp = resolveClientIp(request)
+            val clientIp = resolveClientIp(request, properties.rateLimit.trustedProxies)
             if (!rateLimiter.check(clientIp)) {
                 val rl = properties.rateLimit
                 return ResponseEntity
@@ -103,7 +104,23 @@ class BugFabController(
             }
         }
 
-        // 2. Parse the metadata JSON. Malformed JSON is 400 (the consumer
+        // 2. Metadata size cap. `metadata` is a plain form field already
+        //    materialized by the servlet container, so cap its decoded byte
+        //    length before parsing — the documented bugfab.maxMetadataKb
+        //    limit, surfaced with the protocol's payload_too_large shape.
+        val maxMetadataBytes = properties.maxMetadataKb.toLong() * 1024
+        if (metadata.toByteArray(Charsets.UTF_8).size.toLong() > maxMetadataBytes) {
+            return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(
+                    ErrorEnvelope(
+                        error = "payload_too_large",
+                        detail = "metadata exceeds maximum size of ${properties.maxMetadataKb} KiB",
+                        limitBytes = maxMetadataBytes,
+                    )
+                )
+        }
+
+        // 3. Parse the metadata JSON. Malformed JSON is 400 (the consumer
         //    can distinguish "not parseable" from "parseable but invalid").
         val rawMetadata: Map<String, Any?> = try {
             mapper.readValue(metadata)
@@ -111,7 +128,7 @@ class BugFabController(
             return badRequest("metadata is not valid JSON: ${e.message ?: "unknown"}")
         }
 
-        // 3. Protocol version check — explicit because the contract uses
+        // 4. Protocol version check — explicit because the contract uses
         //    a distinct error code (`unsupported_protocol_version`).
         val protocolVersion = rawMetadata["protocol_version"] as? String
         if (protocolVersion == null) {
@@ -127,7 +144,7 @@ class BugFabController(
                 )
         }
 
-        // 4. Bean Validation. Convert to BugReportCreate first; Jackson's
+        // 5. Bean Validation. Convert to BugReportCreate first; Jackson's
         //    enum coercion already enforces severity vocabulary, so an
         //    invalid value lands in the IllegalArgumentException catch
         //    below (mapped to 422 in BugFabExceptionHandler).
@@ -143,7 +160,7 @@ class BugFabController(
             )
         }
 
-        // 5. Screenshot presence + size + magic-byte check. A submission
+        // 6. Screenshot presence + size + magic-byte check. A submission
         //    with no screenshot part arrives as
         //    application/x-www-form-urlencoded (hence the extra `consumes`
         //    type and the nullable bind above); a missing screenshot is a
@@ -176,7 +193,7 @@ class BugFabController(
                 )
         }
 
-        // 6. Build the metadata dict we hand to storage. The server is
+        // 7. Build the metadata dict we hand to storage. The server is
         //    authoritative for User-Agent, environment, and protocol
         //    version — the client's value is preserved as
         //    `client_reported_user_agent` separately.

@@ -31,7 +31,7 @@ public struct BugReportsController: RouteCollection, Sendable {
         let ctx = req.application.bugFab
 
         // Rate limit first — cheaper than parsing.
-        let ip = Self.clientIP(req)
+        let ip = Self.clientIP(req, trustedProxies: ctx.settings.rateLimitTrustedProxies)
         if let limiter = ctx.rateLimiter, ctx.settings.rateLimitEnabled {
             if !limiter.check(ip) {
                 throw BugFabAbort(
@@ -348,12 +348,23 @@ public struct BugReportsController: RouteCollection, Sendable {
         return raw
     }
 
-    static func clientIP(_ req: Request) -> String {
-        if let xff = req.headers.first(name: "x-forwarded-for") {
-            return xff.split(separator: ",").first.map { $0.trimmingCharacters(in: .whitespaces) }
-                ?? "unknown"
+    static func clientIP(_ req: Request, trustedProxies: Set<String>) -> String {
+        // X-Forwarded-For is client-controlled — rotating it would mint a
+        // fresh rate-limit bucket per request and defeat the limiter. Honor
+        // it only when the direct peer is a declared proxy ("*" trusts all);
+        // the secure default (empty set) meters by the direct peer.
+        let peer = req.remoteAddress?.ipAddress
+        let peerTrusted =
+            trustedProxies.contains("*")
+            || peer.map { trustedProxies.contains($0) } ?? false
+        if peerTrusted, let xff = req.headers.first(name: "x-forwarded-for"),
+            let first = xff.split(separator: ",").first
+                .map({ $0.trimmingCharacters(in: .whitespaces) }),
+            !first.isEmpty
+        {
+            return first
         }
-        return req.remoteAddress?.ipAddress ?? "unknown"
+        return peer ?? "unknown"
     }
 
     static func isPNG(_ bytes: Data) -> Bool {

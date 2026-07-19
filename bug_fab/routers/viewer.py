@@ -24,7 +24,6 @@ destructive actions without changing their auth middleware.
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -40,6 +39,7 @@ from bug_fab._observability import (
     EVENT_STATUS_CHANGED,
 )
 from bug_fab._observability import emit as emit_event
+from bug_fab._report_id import REPORT_ID_RE
 from bug_fab.config import Settings
 from bug_fab.integrations.github import GitHubSync
 from bug_fab.routers._errors import protocol_error
@@ -55,11 +55,11 @@ logger = logging.getLogger(__name__)
 
 viewer_router = APIRouter(tags=["bug-fab-viewer"])
 
-#: Path-traversal guard — the file backend uses ``bug-NNN`` IDs and the
-#: SQL backends use the same shape (with optional ``P`` / ``D`` env
-#: prefix). Any input outside this character class is rejected with a
-#: 404 before it reaches the storage layer.
-_REPORT_ID_RE = re.compile(r"^bug-[A-Za-z]?\d{1,12}$")
+#: Path-traversal guard. Re-exported from the single canonical definition —
+#: it must not diverge from the storage backends' copy, which is exactly the
+#: bug (`bug-1` passed here but was rejected by FileStorage) that consolidation
+#: fixed. See :mod:`bug_fab._report_id`.
+_REPORT_ID_RE = REPORT_ID_RE
 
 _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
@@ -192,7 +192,7 @@ async def list_reports_html(
         status=status_filter, severity=severity, module=module, environment=environment
     )
     items, total = await storage.list_reports(filters, page, effective_page_size)
-    stats = await _compute_stats(storage)
+    stats = await _compute_stats(storage, filters)
     total_pages = max((total + effective_page_size - 1) // effective_page_size, 1)
     context = {
         "items": items,
@@ -234,7 +234,7 @@ async def list_reports_json(
         status=status_filter, severity=severity, module=module, environment=environment
     )
     items, total = await storage.list_reports(filters, page, effective_page_size)
-    stats = await _compute_stats(storage)
+    stats = await _compute_stats(storage, filters)
     # Match the Flask adapter's wire shape — drop the "total" rollup key
     # (the envelope's top-level ``total`` is already authoritative) and
     # always emit the four lifecycle states, even when zero, so consumers
@@ -457,19 +457,28 @@ def _build_filters(
     return {key: value.strip() for key, value in raw.items() if value and value.strip()}
 
 
-async def _compute_stats(storage: Storage) -> dict[str, int]:
-    """Aggregate stat-card counts from the storage backend.
+async def _compute_stats(storage: Storage, filters: dict[str, str]) -> dict[str, int]:
+    """Aggregate stat-card counts over the **filtered** result set.
 
-    Walks the four lifecycle states with one ``list_reports`` call each
-    plus a final ``total`` query. Backends with cheap COUNT support can
-    short-circuit by overriding this helper via a subclass; the default
-    implementation is correct for the file backend's small-N workload.
+    Per ``schemas.BugReportListResponse``, ``stats`` is a count-by-status
+    aggregate over the active filter set, not the whole dataset. Each of
+    the four lifecycle states is counted within ``filters`` with its own
+    ``status`` substituted in — so a ``severity``/``module``/
+    ``environment`` filter narrows every card, while the per-card status
+    is what the card represents (mirroring the query the user would run by
+    clicking that card). The four states are always emitted, even at zero,
+    so consumers get a stable stat-card shape.
+
+    A fifth ``total`` key (the filtered count with no status constraint)
+    is included for the HTML viewer's "Total" stat card. The JSON list
+    endpoint strips it — the envelope's top-level ``total`` is the
+    authoritative filtered count there.
     """
     stats: dict[str, int] = {}
     for state in ("open", "investigating", "fixed", "closed"):
-        _, total = await storage.list_reports({"status": state}, page=1, page_size=1)
+        _, total = await storage.list_reports({**filters, "status": state}, page=1, page_size=1)
         stats[state] = total
-    _, total = await storage.list_reports({}, page=1, page_size=1)
+    _, total = await storage.list_reports(filters, page=1, page_size=1)
     stats["total"] = total
     return stats
 

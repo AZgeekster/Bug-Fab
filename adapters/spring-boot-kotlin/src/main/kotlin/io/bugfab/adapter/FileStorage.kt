@@ -6,8 +6,6 @@ import com.fasterxml.jackson.module.kotlin.readValue
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
-import java.time.OffsetDateTime
-import java.time.ZoneOffset
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.io.path.exists
 import kotlin.io.path.notExists
@@ -248,54 +246,6 @@ class FileStorage(
         return "bug-${idPrefix}${"%03d".format(n)}"
     }
 
-    private fun buildReport(
-        reportId: String,
-        metadata: Map<String, Any?>,
-        now: String,
-    ): MutableMap<String, Any?> {
-        @Suppress("UNCHECKED_CAST")
-        val context = (metadata["context"] as? Map<String, Any?>)?.toMutableMap()
-            ?: mutableMapOf()
-        @Suppress("UNCHECKED_CAST")
-        val reporter = (metadata["reporter"] as? Map<String, Any?>) ?: emptyMap()
-        return mutableMapOf(
-            "id" to reportId,
-            "protocol_version" to (metadata["protocol_version"] ?: "0.1"),
-            "title" to (metadata["title"] ?: ""),
-            "client_ts" to (metadata["client_ts"] ?: ""),
-            "report_type" to (metadata["report_type"] ?: "bug"),
-            "description" to (metadata["description"] ?: ""),
-            "expected_behavior" to (metadata["expected_behavior"] ?: ""),
-            "severity" to (metadata["severity"] ?: "medium"),
-            "status" to "open",
-            "tags" to ((metadata["tags"] as? List<*>) ?: emptyList<String>()),
-            "reporter" to mapOf(
-                "name" to (reporter["name"] ?: ""),
-                "email" to (reporter["email"] ?: ""),
-                "user_id" to (reporter["user_id"] ?: ""),
-            ),
-            "context" to context,
-            "module" to (metadata["module"] ?: context["module"] ?: ""),
-            "created_at" to now,
-            "updated_at" to now,
-            "has_screenshot" to true,
-            "server_user_agent" to (metadata["server_user_agent"] ?: ""),
-            "client_reported_user_agent" to (context["user_agent"] ?: ""),
-            "environment" to (metadata["environment"] ?: context["environment"] ?: ""),
-            "github_issue_url" to null,
-            "github_issue_number" to null,
-            "lifecycle" to mutableListOf(
-                mapOf(
-                    "action" to "created",
-                    "by" to (metadata["submitted_by"] ?: ""),
-                    "at" to now,
-                    "fix_commit" to "",
-                    "fix_description" to "",
-                )
-            ),
-        )
-    }
-
     private fun buildIndexEntry(report: Map<String, Any?>): Map<String, Any?> = mapOf(
         "id" to report["id"],
         "title" to (report["title"] ?: ""),
@@ -306,6 +256,7 @@ class FileStorage(
         "created_at" to (report["created_at"] ?: ""),
         "has_screenshot" to (report["has_screenshot"] ?: true),
         "github_issue_url" to report["github_issue_url"],
+        "environment" to (report["environment"] ?: ""),
     )
 
     private fun matchesFilters(entry: Map<String, Any?>, filters: Map<String, String>): Boolean {
@@ -413,9 +364,6 @@ class FileStorage(
         writeIndex(index)
         return true
     }
-
-    private fun nowIso(): String =
-        OffsetDateTime.now(ZoneOffset.UTC).toString()
 
     private fun atomicWriteText(path: Path, payload: String) {
         val tmp = path.resolveSibling("${path.fileName}.tmp")

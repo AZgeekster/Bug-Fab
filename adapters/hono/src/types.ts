@@ -201,6 +201,18 @@ export interface BugFabRateLimitOptions {
   maxRequests: number
   /** Sliding window in ms. */
   windowMs: number
+  /**
+   * Headers trusted to carry the real client IP, checked in order.
+   * Client-supplied forwarding headers are trivially spoofed — rotating
+   * one mints a fresh rate-limit bucket per request and defeats the
+   * limiter — so name ONLY a header your platform overwrites on every
+   * request (e.g. `'cf-connecting-ip'` on Cloudflare, `'x-real-ip'`
+   * behind nginx). Edge runtimes expose no socket peer address, so
+   * there is no safe automatic fallback. Default: none — all requests
+   * share one bucket, which cannot be evaded by header spoofing but
+   * throttles collectively.
+   */
+  clientIpHeaders?: string[]
 }
 
 export interface BugFabViewerPermissions {

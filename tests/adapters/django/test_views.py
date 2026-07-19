@@ -85,6 +85,28 @@ def test_intake_rejects_non_png_bytes(client, metadata_json):
     assert response.json()["error"] == "unsupported_media_type"
 
 
+def test_intake_rejects_oversized_content_length_before_parse(client, monkeypatch):
+    """S5: Content-Length over the total cap yields 413 before request.POST
+    parses the body.
+
+    The body is not valid multipart, so only the pre-parse guard produces a
+    413 here; a reverted guard would parse it (finding no fields) and return
+    the 400 "metadata and screenshot are both required" error.
+    """
+    monkeypatch.setenv("BUG_FAB_MAX_UPLOAD_BYTES", str(1 * 1024 * 1024))
+    oversized = b"x" * (2 * 1024 * 1024)  # under the 12 MiB DATA_UPLOAD cap
+    response = client.post(
+        "/bug-reports",
+        data=oversized,
+        content_type="multipart/form-data; boundary=zzz",
+    )
+    assert response.status_code == 413
+    body = response.json()
+    assert body["error"] == "payload_too_large"
+    expected = 1 * 1024 * 1024 + 256 * 1024 + 16 * 1024
+    assert body["limit_bytes"] == expected
+
+
 def test_intake_rejects_invalid_severity(client, png_bytes):
     payload = json.loads(
         '{"protocol_version":"0.1","title":"x","client_ts":"2026-04-27T00:00:00Z","severity":"urgent"}'
@@ -139,6 +161,9 @@ def test_list_json_returns_pagination_envelope(client, metadata_json, png_bytes)
     assert len(body["items"]) == 2
     assert "stats" in body
     assert body["stats"]["open"] == 2
+    # Exactly the four lifecycle states — no `total` rollup key, which the
+    # JSON list response used to leak (the reference and Flask strip it).
+    assert set(body["stats"]) == {"open", "investigating", "fixed", "closed"}
 
 
 def test_list_filters_by_status(client, metadata_json, png_bytes):
@@ -146,6 +171,40 @@ def test_list_filters_by_status(client, metadata_json, png_bytes):
     response = client.get("/reports", {"status": "fixed"})
     assert response.status_code == 200
     assert response.json()["total"] == 0
+
+
+def _with(metadata_json: str, **changes) -> str:
+    """Return the baseline metadata JSON with top-level keys overridden."""
+    data = json.loads(metadata_json)
+    data.update(changes)
+    return json.dumps(data)
+
+
+def test_list_filters_by_environment(client, metadata_json, png_bytes):
+    prod = json.loads(metadata_json)
+    staging = json.loads(metadata_json)
+    staging["context"] = {**staging["context"], "environment": "staging"}
+    _post_intake(client, json.dumps(prod), png_bytes)  # context.environment == "prod"
+    _post_intake(client, json.dumps(staging), png_bytes)
+    response = client.get("/reports", {"environment": "prod"})
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+
+
+def test_list_stats_honor_active_filters(client, metadata_json, png_bytes):
+    # Two `high` reports (one moved to `fixed`) plus a `low` `open` report.
+    # Filtering by severity=high must report open=1, not the unfiltered 2.
+    _post_intake(client, _with(metadata_json, severity="high"), png_bytes)
+    fixed_id = _post_intake(client, _with(metadata_json, severity="high"), png_bytes).json()["id"]
+    _post_intake(client, _with(metadata_json, severity="low"), png_bytes)
+    client.put(
+        f"/reports/{fixed_id}/status",
+        data=json.dumps({"status": "fixed"}),
+        content_type="application/json",
+    )
+    body = client.get("/reports", {"severity": "high"}).json()
+    assert body["total"] == 2
+    assert body["stats"] == {"open": 1, "investigating": 0, "fixed": 1, "closed": 0}
 
 
 def test_detail_json_returns_full_payload(client, metadata_json, png_bytes):
@@ -393,7 +452,11 @@ def test_webhook_disabled_makes_no_outbound_call(client, metadata_json, png_byte
 
 
 def test_webhook_send_returns_false_on_non_2xx(monkeypatch):
-    """The Django sync module returns False on a 5xx response (no raise)."""
+    """The Django sync module returns False on a 5xx response (no raise).
+
+    The module delegates to the shared ``WebhookSync`` (async httpx), so
+    the mock patches ``httpx.AsyncClient``.
+    """
     monkeypatch.setenv("BUG_FAB_WEBHOOK_ENABLED", "true")
     monkeypatch.setenv("BUG_FAB_WEBHOOK_URL", "https://hook.example.test/in")
 
@@ -405,14 +468,14 @@ def test_webhook_send_returns_false_on_non_2xx(monkeypatch):
         return httpx.Response(500, text="downstream broken")
 
     transport = httpx.MockTransport(handler)
-    real_client = httpx.Client
+    real_client = httpx.AsyncClient
 
     class _MockClient(real_client):  # type: ignore[misc]
         def __init__(self, *args, **kwargs):
             kwargs["transport"] = transport
             super().__init__(*args, **kwargs)
 
-    monkeypatch.setattr(httpx, "Client", _MockClient)
+    monkeypatch.setattr(httpx, "AsyncClient", _MockClient)
     assert webhook_sync.send({"id": "bug-test"}) is False
 
 
@@ -429,15 +492,109 @@ def test_webhook_send_returns_false_on_connection_error(monkeypatch):
         raise httpx.ConnectError("connection refused")
 
     transport = httpx.MockTransport(handler)
-    real_client = httpx.Client
+    real_client = httpx.AsyncClient
 
     class _MockClient(real_client):  # type: ignore[misc]
         def __init__(self, *args, **kwargs):
             kwargs["transport"] = transport
             super().__init__(*args, **kwargs)
 
-    monkeypatch.setattr(httpx, "Client", _MockClient)
+    monkeypatch.setattr(httpx, "AsyncClient", _MockClient)
     assert webhook_sync.send({"id": "bug-test"}) is False
+
+
+def test_github_create_issue_uses_the_shared_issue_shape(monkeypatch):
+    """Q5: Django delegates to the shared GitHubSync instead of its own POST.
+
+    The old Django-only sender built a minimal '[Bug-Fab] ...' issue with
+    no labels; the shared client builds the same titled + labeled issue
+    the FastAPI adapter produces. Pin the unified shape.
+    """
+    import json as _json
+
+    monkeypatch.setenv("BUG_FAB_GITHUB_REPO", "owner/repo")
+    monkeypatch.setenv("BUG_FAB_GITHUB_PAT", "ghp_test")
+
+    import httpx
+
+    from bug_fab.adapters.django import github_sync
+
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        if request.url.path.endswith("/labels"):
+            return httpx.Response(201, json={"name": "ok"})
+        if request.url.path.endswith("/issues"):
+            return httpx.Response(
+                201,
+                json={"number": 7, "html_url": "https://github.com/owner/repo/issues/7"},
+            )
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+
+    class _MockClient(real_client):  # type: ignore[misc]
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _MockClient)
+    link = github_sync.create_issue(
+        {
+            "id": "bug-001",
+            "title": "Save button is unresponsive",
+            "severity": "high",
+            "status": "open",
+            "description": "Click does nothing.",
+            "context": {},
+        }
+    )
+    assert link is not None
+    assert link.number == 7
+    issue_posts = [r for r in captured if r.method == "POST" and r.url.path.endswith("/issues")]
+    assert len(issue_posts) == 1
+    body = _json.loads(issue_posts[0].content)
+    assert body["title"].startswith("[Bug]")  # shared shape, not '[Bug-Fab]'
+    assert "bug" in body["labels"]
+    assert "severity:high" in body["labels"]
+
+
+def test_webhook_send_retries_transient_failures_when_configured(monkeypatch):
+    """Q7: Django delivery now has the same retry semantics as FastAPI/Flask.
+
+    Two 500s followed by a 200 succeeds when BUG_FAB_WEBHOOK_MAX_ATTEMPTS
+    allows three attempts — the old Django-only sender had no retry at all.
+    """
+    monkeypatch.setenv("BUG_FAB_WEBHOOK_ENABLED", "true")
+    monkeypatch.setenv("BUG_FAB_WEBHOOK_URL", "https://hook.example.test/in")
+    monkeypatch.setenv("BUG_FAB_WEBHOOK_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("BUG_FAB_WEBHOOK_RETRY_BACKOFF_SECONDS", "0.01")
+
+    import httpx
+
+    from bug_fab.adapters.django import webhook_sync
+
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) < 3:
+            return httpx.Response(500, text="transient")
+        return httpx.Response(200)
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+
+    class _MockClient(real_client):  # type: ignore[misc]
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _MockClient)
+    assert webhook_sync.send({"id": "bug-test"}) is True
+    assert len(calls) == 3
 
 
 # ---------------------------------------------------------------------------

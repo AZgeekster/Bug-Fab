@@ -90,7 +90,7 @@ export function renderListPage(props: RenderListProps): string {
   const rows = items.map((it) => (
     <tr key={it.id}>
       <td>
-        <a href={`${detailUrlBase}/${it.id}`}>{it.id}</a>
+        <a href={`${detailUrlBase}/${it.id}/view`}>{it.id}</a>
       </td>
       <td>{it.title}</td>
       <td>

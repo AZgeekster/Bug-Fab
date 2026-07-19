@@ -17,6 +17,14 @@ import (
 // client-trusted and easy to spoof.
 var pngSignature = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
 
+// multipartOverheadBytes is the fixed allowance added to the sum of the
+// field caps when computing the pre-parse Content-Length bound. Covers
+// the multipart boundary lines and per-part headers so a request sized
+// at exactly the field caps is not rejected by the coarse guard before
+// the precise per-field checks can run. Mirrors the Python reference's
+// intake.MULTIPART_OVERHEAD_BYTES.
+const multipartOverheadBytes = 16 * 1024
+
 // Adapter glues the eight Bug-Fab endpoints together. Build one with
 // New(); mount its handlers on any Gin engine with Register().
 type Adapter struct {
@@ -70,7 +78,7 @@ func (a *Adapter) Register(group *gin.RouterGroup) {
 // observed error code and breaks conformance tests.
 func (a *Adapter) handleSubmit(c *gin.Context) {
 	if a.Limiter != nil {
-		ip := clientIP(c)
+		ip := clientIP(c, a.Config.RateLimitTrustedProxies)
 		if !a.Limiter.Check(ip) {
 			retry := a.Limiter.WindowSeconds()
 			c.JSON(http.StatusTooManyRequests, ErrorEnvelope{
@@ -82,10 +90,36 @@ func (a *Adapter) handleSubmit(c *gin.Context) {
 		}
 	}
 
+	// Pre-parse size guard: reject by declared Content-Length before
+	// c.PostForm/c.FormFile trigger ParseMultipartForm, which buffers the
+	// whole body (32 MiB in memory, remainder spooled to temp files) —
+	// without this the caps ran too late to protect the resource they
+	// bound. The MaxBytesReader backstop bounds bodies sent without a
+	// Content-Length (chunked) by aborting the read at the cap.
+	maxRequest := a.Config.MaxScreenshotBytes + a.Config.MaxMetadataBytes + multipartOverheadBytes
+	if c.Request.ContentLength > maxRequest {
+		c.JSON(http.StatusRequestEntityTooLarge, ErrorEnvelope{
+			Error:      "payload_too_large",
+			Detail:     "request body exceeds configured maximum size",
+			LimitBytes: &maxRequest,
+		})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequest)
+
 	metadataStr := c.PostForm("metadata")
 	if metadataStr == "" {
 		writeValidationError(c, http.StatusBadRequest, "validation_error",
 			"missing required multipart field: metadata")
+		return
+	}
+	if int64(len(metadataStr)) > a.Config.MaxMetadataBytes {
+		limit := a.Config.MaxMetadataBytes
+		c.JSON(http.StatusRequestEntityTooLarge, ErrorEnvelope{
+			Error:      "payload_too_large",
+			Detail:     "metadata exceeds configured maximum size",
+			LimitBytes: &limit,
+		})
 		return
 	}
 
@@ -294,6 +328,10 @@ func (a *Adapter) handleGetScreenshot(c *gin.Context) {
 // schema (422 on bad enum), then storage (404 on unknown id, or 422
 // on a storage-layer rejection of an otherwise-legal value).
 func (a *Adapter) handleUpdateStatus(c *gin.Context) {
+	if !a.Config.CanEditStatus {
+		writeForbidden(c, "can_edit_status")
+		return
+	}
 	id := c.Param("id")
 	var update BugReportStatusUpdate
 	if err := c.ShouldBindJSON(&update); err != nil {
@@ -322,6 +360,10 @@ func (a *Adapter) handleUpdateStatus(c *gin.Context) {
 // body on success, 404 otherwise. No soft-delete here — that lives
 // on POST /bulk-archive-closed.
 func (a *Adapter) handleDeleteReport(c *gin.Context) {
+	if !a.Config.CanDelete {
+		writeForbidden(c, "can_delete")
+		return
+	}
 	id := c.Param("id")
 	deleted, err := a.Storage.DeleteReport(id)
 	if err != nil {
@@ -339,6 +381,10 @@ func (a *Adapter) handleDeleteReport(c *gin.Context) {
 // per-report level — reports already in `closed` aren't transitioned
 // and don't count against the response total.
 func (a *Adapter) handleBulkCloseFixed(c *gin.Context) {
+	if !a.Config.CanBulk {
+		writeForbidden(c, "can_bulk")
+		return
+	}
 	by := actorFromContext(c)
 	count, err := a.Storage.BulkCloseFixed(by)
 	if err != nil {
@@ -352,6 +398,10 @@ func (a *Adapter) handleBulkCloseFixed(c *gin.Context) {
 // — moves files into archive/, drops from the index, but doesn't
 // delete anything. Reversible with manual file moves.
 func (a *Adapter) handleBulkArchiveClosed(c *gin.Context) {
+	if !a.Config.CanBulk {
+		writeForbidden(c, "can_bulk")
+		return
+	}
 	count, err := a.Storage.BulkArchiveClosed()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorEnvelope{Error: "internal_error", Detail: err.Error()})
@@ -360,18 +410,36 @@ func (a *Adapter) handleBulkArchiveClosed(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"archived": count})
 }
 
-// clientIP honors X-Forwarded-For (first hop) so deployments behind a
-// reverse proxy still meter per-end-user. Falls back to the direct
-// peer address, then "unknown" so the limiter never sees an empty key.
-func clientIP(c *gin.Context) string {
-	if fwd := c.GetHeader("X-Forwarded-For"); fwd != "" {
-		if i := strings.Index(fwd, ","); i > 0 {
-			return strings.TrimSpace(fwd[:i])
+// clientIP resolves the rate-limit key. X-Forwarded-For is
+// client-controlled and spoofable — rotating it per request would mint a
+// fresh bucket each time and defeat the limiter — so the header is
+// honored only when the direct peer is in trustedProxies (or the list
+// contains "*"). The fallback is c.RemoteIP(), the network peer, NOT
+// c.ClientIP(): Gin's ClientIP is itself forwarded-header-aware and
+// trusts all proxies unless the engine is configured otherwise, which
+// would reopen the hole through the back door.
+func clientIP(c *gin.Context, trustedProxies []string) string {
+	peer := c.RemoteIP()
+	trusted := false
+	for _, p := range trustedProxies {
+		if p == "*" || (peer != "" && p == peer) {
+			trusted = true
+			break
 		}
-		return strings.TrimSpace(fwd)
 	}
-	if ip := c.ClientIP(); ip != "" {
-		return ip
+	if trusted {
+		if fwd := c.GetHeader("X-Forwarded-For"); fwd != "" {
+			first := fwd
+			if i := strings.Index(fwd, ","); i > 0 {
+				first = fwd[:i]
+			}
+			if s := strings.TrimSpace(first); s != "" {
+				return s
+			}
+		}
+	}
+	if peer != "" {
+		return peer
 	}
 	return "unknown"
 }
@@ -435,6 +503,16 @@ func stripEmpty(filters map[string]string) map[string]string {
 // identical across all six rejection sites.
 func writeValidationError(c *gin.Context, status int, code, msg string) {
 	c.JSON(status, ErrorEnvelope{Error: code, Detail: msg})
+}
+
+// writeForbidden rejects a destructive viewer action disabled by
+// configuration with 403 and the standard envelope, mirroring the Rust
+// and Vapor adapters. action is the permission key (e.g. "can_delete").
+func writeForbidden(c *gin.Context, action string) {
+	c.JSON(http.StatusForbidden, ErrorEnvelope{
+		Error:  "forbidden",
+		Detail: "viewer action '" + action + "' is disabled by configuration",
+	})
 }
 
 // ensure standard library imports are used so go vet doesn't trip

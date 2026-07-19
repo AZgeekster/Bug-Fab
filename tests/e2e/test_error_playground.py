@@ -23,80 +23,12 @@ chain.
 from __future__ import annotations
 
 import json
-import os
-import socket
-import subprocess
-import sys
-import time
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 from playwright.sync_api import Page, expect
-
-
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-@pytest.fixture(scope="function")
-def playground_server(tmp_path_factory):
-    """Boot ``examples/error-playground/main:app`` on a free loopback port."""
-    repo_root = Path(__file__).resolve().parents[2]
-    example_dir = repo_root / "examples" / "error-playground"
-    storage_dir = tmp_path_factory.mktemp("ep-storage")
-    port = _free_port()
-
-    env = os.environ.copy()
-    env["BUG_FAB_STORAGE_DIR"] = str(storage_dir)
-    env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
-
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "main:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-            "--log-level",
-            "warning",
-        ],
-        cwd=str(example_dir),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-
-    base_url = f"http://127.0.0.1:{port}"
-    deadline = time.monotonic() + 20
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            output = (proc.stdout.read() if proc.stdout else b"").decode(errors="replace")
-            raise RuntimeError(f"uvicorn exited early (rc={proc.returncode}); output:\n{output}")
-        try:
-            r = httpx.get(base_url + "/", timeout=1.0)
-            if r.status_code == 200:
-                break
-        except Exception:
-            pass
-        time.sleep(0.2)
-    else:
-        proc.terminate()
-        raise RuntimeError("error-playground server did not come up within 20s")
-
-    yield {"base_url": base_url, "storage_dir": storage_dir}
-
-    proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
 
 
 def _submit_via_fab(page: Page, *, title: str) -> str:

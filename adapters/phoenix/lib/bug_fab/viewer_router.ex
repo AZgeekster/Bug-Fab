@@ -131,7 +131,7 @@ defmodule BugFab.ViewerRouter do
       true ->
         case check_permission(:can_edit_status) do
           {:error, :forbidden, flag} ->
-            Errors.send(conn, 403, "validation_error", "viewer action '#{flag}' is disabled")
+            Errors.send(conn, 403, "forbidden", "viewer action '#{flag}' is disabled")
 
           :ok ->
             case Schemas.validate_status_update(conn.body_params || %{}) do
@@ -161,7 +161,7 @@ defmodule BugFab.ViewerRouter do
       true ->
         case check_permission(:can_delete) do
           {:error, :forbidden, flag} ->
-            Errors.send(conn, 403, "validation_error", "viewer action '#{flag}' is disabled")
+            Errors.send(conn, 403, "forbidden", "viewer action '#{flag}' is disabled")
 
           :ok ->
             {mod, state} = BugFab.storage_handle()
@@ -185,7 +185,7 @@ defmodule BugFab.ViewerRouter do
         json(conn, 200, %{"closed" => n})
 
       {:error, :forbidden, flag} ->
-        Errors.send(conn, 403, "validation_error", "viewer action '#{flag}' is disabled")
+        Errors.send(conn, 403, "forbidden", "viewer action '#{flag}' is disabled")
     end
   end
 
@@ -199,19 +199,19 @@ defmodule BugFab.ViewerRouter do
         json(conn, 200, %{"archived" => n})
 
       {:error, :forbidden, flag} ->
-        Errors.send(conn, 403, "validation_error", "viewer action '#{flag}' is disabled")
+        Errors.send(conn, 403, "forbidden", "viewer action '#{flag}' is disabled")
     end
   end
 
   match _ do
-    Errors.send(conn, 404, "validation_error", "Not Found")
+    Errors.send(conn, 404, "not_found", "Not Found")
   end
 
   # ----- helpers -----
 
   defp valid_id?(id), do: is_binary(id) and Regex.match?(@report_id_regex, id)
 
-  defp not_found(conn), do: Errors.send(conn, 404, "validation_error", "Bug report not found")
+  defp not_found(conn), do: Errors.send(conn, 404, "not_found", "Bug report not found")
 
   defp json(conn, status, body) do
     conn

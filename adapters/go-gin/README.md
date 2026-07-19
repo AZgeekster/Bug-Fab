@@ -92,11 +92,16 @@ api.Use(func(c *gin.Context) {
 | `BUG_FAB_STORAGE_DIR` | `./var/bug-fab` | Where FileStorage writes report files and index.json. |
 | `BUG_FAB_ID_PREFIX` | (empty) | One-letter env tag baked into ids (e.g. `P` -> `bug-P001`). |
 | `BUG_FAB_MAX_UPLOAD_MB` | `4` | Screenshot upload cap. Protocol allows up to 10 MiB. |
+| `BUG_FAB_MAX_METADATA_KB` | `256` | Metadata JSON cap in KiB; also feeds the pre-parse total-body bound. |
 | `BUG_FAB_RATE_LIMIT_ENABLED` | `false` | Toggle the per-IP fixed-window limiter. |
 | `BUG_FAB_RATE_LIMIT_MAX` | `30` | Events per window before 429. |
 | `BUG_FAB_RATE_LIMIT_WINDOW_SECONDS` | `60` | Window length in seconds. |
+| `BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES` | (empty) | Peers allowed to supply `X-Forwarded-For` as the rate-limit key; `*` trusts all. Empty meters by the direct peer. |
+| `BUG_FAB_VIEWER_CAN_EDIT_STATUS` | `true` | Allow `PUT /reports/{id}/status`; `false` returns 403. |
+| `BUG_FAB_VIEWER_CAN_DELETE` | `true` | Allow `DELETE /reports/{id}`; `false` returns 403. |
+| `BUG_FAB_VIEWER_CAN_BULK` | `true` | Allow the bulk-close / bulk-archive endpoints; `false` returns 403. |
 
-Booleans accept `1`, `true`, `yes` (case-insensitive); anything else is false.
+Booleans accept `1`, `true`, `yes` (case-insensitive); anything else is false. The `BUG_FAB_VIEWER_CAN_*` permissions are the exception: they default to `true` (all actions allowed) and accept `0`, `false`, `no` to turn a single destructive action off — the server then rejects that route with `403 forbidden` regardless of the caller.
 
 ---
 

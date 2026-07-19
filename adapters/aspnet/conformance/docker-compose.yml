@@ -1,0 +1,96 @@
+# Cross-stack conformance harness for the Bug-Fab ASP.NET Core adapter.
+#
+# Two services on a shared bridge network:
+#   - adapter:   dotnet/sdk:8.0, boots `examples/MinimalApi` from the adapter
+#                root, exposes the eight Bug-Fab endpoints under /bug-fab on :8080.
+#   - runner:    python:3.12, pip-installs the bug-fab wheel from the repo root,
+#                runs `pytest --bug-fab-conformance` against the adapter container.
+#
+# WHY the source is copied into the container instead of run from the mount:
+#   - MSBuild writes bin/ + obj/ into the project tree and the example writes
+#     bug-fab.db into its cwd. Running from the read-only repo mount would fail,
+#     and running from a writable mount would dirty the host working copy.
+#     A tar copy (excluding host bin/obj so stale Windows artifacts never leak
+#     into the Linux build) keeps the harness side-effect-free.
+#
+# Both services mount the Bug-Fab repo root (../../..) read-only; NuGet and pip
+# caches live in named volumes so re-runs are fast.
+
+services:
+  adapter:
+    image: mcr.microsoft.com/dotnet/sdk:8.0
+    container_name: bug-fab-aspnet-conformance-adapter
+    working_dir: /work
+    volumes:
+      - ../../..:/src:ro
+      - nuget-cache:/root/.nuget/packages
+    environment:
+      ASPNETCORE_URLS: "http://0.0.0.0:8080"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+    command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        # rm keeps the boot idempotent — /work persists across
+        # `docker compose restart`, and deleted-on-host files would
+        # otherwise linger in the copy.
+        rm -rf /work/aspnet
+        tar -C /src/adapters --exclude=bin --exclude=obj -cf - aspnet | tar -C /work -xf -
+        cd /work/aspnet
+        exec dotnet run --project examples/MinimalApi
+    ports:
+      - "18081:8080"
+    healthcheck:
+      # The SDK image has no wget/curl guarantee; a successful TCP connect is
+      # enough — Kestrel only accepts once app.Run() has mapped every route.
+      test: ["CMD-SHELL", "timeout 3 bash -c 'echo > /dev/tcp/localhost/8080'"]
+      interval: 2s
+      timeout: 5s
+      retries: 150
+      start_period: 20s
+    networks:
+      - bugfab-conformance
+
+  runner:
+    image: python:3.12
+    container_name: bug-fab-aspnet-conformance-runner
+    depends_on:
+      adapter:
+        condition: service_healthy
+    # Working dir is /work (NOT /src) so pytest does NOT pick up the repo's own
+    # `tests/conftest.py`; the conformance plugin injects the bundled test
+    # directory regardless of cwd.
+    working_dir: /work
+    volumes:
+      - ../../..:/src:ro
+      - ./out:/out
+      - pip-cache:/root/.cache/pip
+    environment:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        mkdir -p /work
+        cd /work
+        pip install --quiet /src pytest
+        pytest --bug-fab-conformance \
+               --base-url=http://adapter:8080/bug-fab \
+               --viewer-base-url=http://adapter:8080/bug-fab \
+               -v --tb=short \
+               --color=no \
+               -o cache_dir=/tmp/.pytest_cache \
+               --rootdir=/work \
+               2>&1 | tee /out/conformance-results.txt
+    networks:
+      - bugfab-conformance
+
+volumes:
+  nuget-cache:
+  pip-cache:
+
+networks:
+  bugfab-conformance:
+    driver: bridge

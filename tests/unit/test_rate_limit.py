@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from bug_fab._rate_limit import RateLimiter
+from bug_fab._rate_limit import RateLimiter, resolve_client_ip
 
 # -----------------------------------------------------------------------------
 # Basic enforcement
@@ -141,3 +141,89 @@ def test_real_clock_window_expires() -> None:
     # is acceptable here because it is bounded and the test value is small.
     time.sleep(1.05)
     assert limiter.check("ip") is True
+
+
+# -----------------------------------------------------------------------------
+# Idle-bucket eviction (C7 — unbounded-memory guard)
+# -----------------------------------------------------------------------------
+
+
+def test_idle_buckets_are_evicted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Buckets whose window fully expired are removed, not retained forever.
+
+    Without eviction, an attacker cycling through source keys (the trivial
+    outcome of a spoofed ``X-Forwarded-For``) would grow the map without
+    bound — the very DoS that enabling the limiter is meant to prevent.
+    """
+    fake_now = [1000.0]
+    monkeypatch.setattr("bug_fab._rate_limit.time.monotonic", lambda: fake_now[0])
+
+    limiter = RateLimiter(max_per_window=5, window_seconds=10)
+    assert limiter.check("1.1.1.1") is True
+    assert limiter.check("2.2.2.2") is True
+    assert set(limiter._events) == {"1.1.1.1", "2.2.2.2"}
+
+    # Slide past the window so both buckets are stale; a request from a third
+    # IP triggers the once-per-window sweep.
+    fake_now[0] = 1020.0
+    assert limiter.check("3.3.3.3") is True
+    assert set(limiter._events) == {"3.3.3.3"}
+
+
+def test_sweep_keeps_still_active_buckets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bucket with a live entry survives a sweep; only fully-expired ones go."""
+    fake_now = [1000.0]
+    monkeypatch.setattr("bug_fab._rate_limit.time.monotonic", lambda: fake_now[0])
+
+    limiter = RateLimiter(max_per_window=5, window_seconds=10)
+    assert limiter.check("keep") is True  # t=1000
+    fake_now[0] = 1008.0
+    assert limiter.check("keep") is True  # t=1008 — refreshes the bucket
+    # Sweep fires (1012 - 1000 >= 10); cutoff=1002, so the t=1008 entry is live.
+    fake_now[0] = 1012.0
+    assert limiter.check("other") is True
+    assert "keep" in limiter._events
+
+
+# -----------------------------------------------------------------------------
+# Trusted-proxy IP resolution (S3f — spoofable X-Forwarded-For)
+# -----------------------------------------------------------------------------
+
+
+def test_resolve_ignores_forwarded_for_from_untrusted_peer() -> None:
+    """Secure default: an empty trust set meters by peer and ignores the header."""
+    assert resolve_client_ip("203.0.113.5", "9.9.9.9", frozenset()) == "203.0.113.5"
+
+
+def test_resolve_honors_forwarded_for_from_trusted_peer() -> None:
+    """When the peer is a trusted proxy, the first forwarded hop is the key."""
+    key = resolve_client_ip("10.0.0.1", "9.9.9.9, 7.7.7.7", frozenset({"10.0.0.1"}))
+    assert key == "9.9.9.9"
+
+
+def test_resolve_wildcard_trusts_every_peer() -> None:
+    """``"*"`` restores the old always-trust behavior as an explicit opt-in."""
+    assert resolve_client_ip("203.0.113.5", "9.9.9.9", frozenset({"*"})) == "9.9.9.9"
+
+
+def test_resolve_trusted_peer_without_forwarded_for_uses_peer() -> None:
+    assert resolve_client_ip("10.0.0.1", None, frozenset({"10.0.0.1"})) == "10.0.0.1"
+
+
+def test_resolve_trusted_peer_blank_forwarded_for_uses_peer() -> None:
+    assert resolve_client_ip("10.0.0.1", "   ", frozenset({"10.0.0.1"})) == "10.0.0.1"
+
+
+def test_resolve_unknown_when_no_peer() -> None:
+    assert resolve_client_ip(None, None, frozenset()) == "unknown"
+
+
+def test_spoofed_forwarded_for_cannot_defeat_the_limiter() -> None:
+    """End-to-end intent: rotating a spoofed header from an untrusted peer
+    keeps landing in the same peer-keyed bucket, so the limit still bites."""
+    limiter = RateLimiter(max_per_window=1, window_seconds=60)
+    trusted: frozenset[str] = frozenset()
+    peer = "203.0.113.5"
+    assert limiter.check(resolve_client_ip(peer, "1.1.1.1", trusted)) is True
+    assert limiter.check(resolve_client_ip(peer, "2.2.2.2", trusted)) is False
+    assert limiter.check(resolve_client_ip(peer, "3.3.3.3", trusted)) is False

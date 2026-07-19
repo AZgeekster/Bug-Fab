@@ -19,8 +19,6 @@ suite without collection-time conflicts.
 from __future__ import annotations
 
 import json
-import struct
-import zlib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -43,30 +41,8 @@ from bug_fab.routers.viewer import viewer_router
 from bug_fab.storage.base import Storage
 from bug_fab.storage.files import FileStorage
 from bug_fab.storage.sqlite import SQLiteStorage
-
-
-def _make_test_png(width: int = 4, height: int = 4) -> bytes:
-    """Hand-rolled minimal valid PNG (solid red).
-
-    We do not import the conformance fixture helper here because pytest
-    plugin loading would pick it up as a conformance test on collection.
-    Re-implementing the few-byte PNG is cheaper than wiring around that.
-    """
-    if width < 1 or height < 1:
-        raise ValueError("width and height must be >= 1")
-    signature = b"\x89PNG\r\n\x1a\n"
-    ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-    ihdr_crc = zlib.crc32(b"IHDR" + ihdr_data)
-    ihdr = struct.pack(">I", len(ihdr_data)) + b"IHDR" + ihdr_data + struct.pack(">I", ihdr_crc)
-    raw = b""
-    for _ in range(height):
-        raw += b"\x00" + (b"\xff\x00\x00" * width)
-    idat_data = zlib.compress(raw)
-    idat_crc = zlib.crc32(b"IDAT" + idat_data)
-    idat = struct.pack(">I", len(idat_data)) + b"IDAT" + idat_data + struct.pack(">I", idat_crc)
-    iend_crc = zlib.crc32(b"IEND")
-    iend = struct.pack(">I", 0) + b"IEND" + struct.pack(">I", iend_crc)
-    return signature + ihdr + idat + iend
+from tests._helpers import baseline_metadata
+from tests._helpers import make_test_png as _make_test_png
 
 
 @pytest.fixture
@@ -140,29 +116,7 @@ def sqlite_storage_factory(
 @pytest.fixture
 def valid_metadata_dict() -> dict[str, Any]:
     """A canonical, all-fields-populated metadata dict (Python dict form)."""
-    return {
-        "protocol_version": "0.1",
-        "title": "Submit form does not clear after success",
-        "client_ts": "2026-04-29T12:00:00+00:00",
-        "report_type": "bug",
-        "description": "Steps: open page; submit; observe stale form fields.",
-        "expected_behavior": "Form clears on successful submission.",
-        "severity": "medium",
-        "tags": ["regression", "ui"],
-        "reporter": {"name": "", "email": "", "user_id": ""},
-        "context": {
-            "url": "http://localhost/sample/path",
-            "module": "sample",
-            "user_agent": "bug-fab-tests/0.1",
-            "viewport_width": 1280,
-            "viewport_height": 720,
-            "console_errors": [],
-            "network_log": [],
-            "source_mapping": {},
-            "app_version": "0.1.0",
-            "environment": "dev",
-        },
-    }
+    return baseline_metadata()
 
 
 @pytest.fixture
@@ -274,3 +228,18 @@ def app_factory(
     for client in clients:
         client.close()
     reset_router_module_state()
+
+
+@pytest.fixture(autouse=True)
+def _restore_httpx_async_client():
+    """Put the real ``httpx.AsyncClient`` back after every test.
+
+    The integration modules patch the global client through
+    :func:`tests._helpers.install_capturing_async_client`; one autouse
+    restore here replaces the seven per-module autouse fixtures the
+    modules used to carry (a no-op for tests that never install a mock).
+    """
+    yield
+    from tests._helpers import restore_async_client
+
+    restore_async_client()

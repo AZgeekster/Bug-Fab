@@ -237,3 +237,73 @@ describe('POST /api/bug-reports — intake', () => {
     expect(body.error).toBe('unsupported_media_type')
   })
 })
+
+describe('intake hardening — body cap + rate-limit key trust', () => {
+  it('rejects oversized declared Content-Length with 413 before parsing', async () => {
+    const app = createBugFabApp({ storage: new MemoryStorage() })
+    // The body is tiny and not valid multipart; only the pre-parse guard
+    // can 413 here. Without it the request would fall through to body
+    // parsing and return a different error.
+    const res = await app.fetch(
+      new Request('http://test/api/bug-reports', {
+        method: 'POST',
+        headers: {
+          'content-type': 'multipart/form-data; boundary=zzz',
+          'content-length': String(20 * 1024 * 1024),
+        },
+        body: 'tiny',
+      }),
+    )
+    expect(res.status).toBe(413)
+    const body = await res.json()
+    expect(body.error).toBe('payload_too_large')
+    expect(body.limit_bytes).toBe(11 * 1024 * 1024)
+  })
+
+  it('spoofed forwarding headers cannot mint fresh rate-limit buckets by default', async () => {
+    const app = createBugFabApp({
+      storage: new MemoryStorage(),
+      rateLimit: { enabled: true, maxRequests: 1, windowMs: 60_000 },
+    })
+    const send = (xff: string) =>
+      app.fetch(
+        new Request('http://test/api/bug-reports', {
+          method: 'POST',
+          headers: { 'x-forwarded-for': xff },
+          body: buildFormData(VALID_METADATA, PNG_BYTES),
+        }),
+      )
+    const first = await send('1.1.1.1')
+    expect(first.status).toBe(201)
+    // With no clientIpHeaders configured, every request shares one
+    // bucket — a rotated spoofed header used to mint a fresh bucket and
+    // evade the limit entirely.
+    const second = await send('2.2.2.2')
+    expect(second.status).toBe(429)
+  })
+
+  it('a configured trusted header keys buckets per client', async () => {
+    const app = createBugFabApp({
+      storage: new MemoryStorage(),
+      rateLimit: {
+        enabled: true,
+        maxRequests: 1,
+        windowMs: 60_000,
+        clientIpHeaders: ['x-real-ip'],
+      },
+    })
+    const send = (ip: string) =>
+      app.fetch(
+        new Request('http://test/api/bug-reports', {
+          method: 'POST',
+          headers: { 'x-real-ip': ip },
+          body: buildFormData(VALID_METADATA, PNG_BYTES),
+        }),
+      )
+    // Distinct trusted-header values get independent buckets…
+    expect((await send('7.7.7.1')).status).toBe(201)
+    expect((await send('7.7.7.2')).status).toBe(201)
+    // …and a repeat of the same value is throttled.
+    expect((await send('7.7.7.2')).status).toBe(429)
+  })
+})

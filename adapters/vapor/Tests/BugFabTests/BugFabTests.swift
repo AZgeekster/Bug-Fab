@@ -1,5 +1,6 @@
 import FluentSQLiteDriver
 import Foundation
+import NIOCore
 import XCTVapor
 
 @testable import BugFab
@@ -27,6 +28,12 @@ final class BugFabHappyPathTests: XCTestCase {
             XCTAssertEqual(res.status, .created)
             let body = try res.content.decode(BugFabIntakeResponse.self)
             XCTAssertTrue(body.id.hasPrefix("bug-"))
+            // PROTOCOL.md § Response requires the key even when null —
+            // JSONEncoder omits nil optionals unless encoded explicitly.
+            XCTAssertTrue(
+                res.body.string.contains("\"github_issue_url\""),
+                "201 body must carry github_issue_url explicitly (got: \(res.body.string))"
+            )
         }
         try await app.testable().test(.GET, "/admin/reports") { res async throws in
             XCTAssertEqual(res.status, .ok)
@@ -38,6 +45,71 @@ final class BugFabHappyPathTests: XCTestCase {
             XCTAssertEqual(res.status, .ok)
             XCTAssertEqual(res.headers.first(name: .contentType), "image/png")
         }
+    }
+}
+
+final class BugFabFilterTests: XCTestCase {
+    func testListFiltersByEnvironment() async throws {
+        // environment is denormalized into the index entry now — the filter
+        // used to be a documented no-op that matched every report.
+        let app = try await makeTestApp()
+        defer { Task { try? await app.asyncShutdown() } }
+        let png = pngBytes()
+        for env in ["production", "staging"] {
+            let metadata = """
+                {
+                  "protocol_version": "0.1",
+                  "title": "\(env) one",
+                  "client_ts": "2026-04-27T00:00:00Z",
+                  "severity": "high",
+                  "tags": ["test"],
+                  "context": {
+                    "url": "https://example.com/",
+                    "user_agent": "test-agent/1.0",
+                    "environment": "\(env)"
+                  }
+                }
+                """
+            try await app.testable().test(.POST, "/api/bug-reports") { req async throws in
+                try buildMultipart(req: &req, metadata: metadata, png: png)
+            } afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .created)
+            }
+        }
+        try await app.testable().test(.GET, "/admin/reports?environment=production") {
+            res async throws in
+            XCTAssertEqual(res.status, .ok)
+            let list = try res.content.decode(BugFabBugReportListResponse.self)
+            XCTAssertEqual(list.total, 1)
+            XCTAssertEqual(list.items.first?.title, "production one")
+        }
+    }
+
+    func testWriteIndexLeavesNoTempArtifact() async throws {
+        // atomicWrite now replaces index.json via a single temp-plus-rename
+        // (Data.write .atomic), so a crash can never leave the index missing.
+        // A crash can't be unit-tested; this asserts the observable invariant
+        // that the write path round-trips and drops no stray temp file next
+        // to the index (the old remove-then-move used a deterministic .tmp
+        // sibling).
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("bugfab-\(UUID().uuidString)", isDirectory: true)
+        let storage = try BugFabFileStorage(storageDirectory: dir)
+        let png = pngBytes()
+        let first = try await storage.saveReport(
+            metadata: BugFabFluentStorage.decodeJSON(validMetadata()), screenshotBytes: png)
+        _ = try await storage.saveReport(
+            metadata: BugFabFluentStorage.decodeJSON(validMetadata()), screenshotBytes: png)
+        _ = try await storage.deleteReport(id: first)
+
+        let (items, total) = try await storage.listReports(filters: [:], page: 1, pageSize: 50)
+        XCTAssertEqual(total, 1)
+        XCTAssertEqual(items.count, 1)
+
+        let contents = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        XCTAssertFalse(
+            contents.contains { $0.hasSuffix(".tmp") },
+            "atomicWrite must not leave a .tmp artifact; found \(contents)")
     }
 }
 
@@ -160,6 +232,79 @@ final class BugFabRateLimitTests: XCTestCase {
             XCTAssertNotNil(body.retryAfterSeconds)
         }
     }
+
+    func testSpoofedForwardedForCannotEvadeRateLimit() async throws {
+        // X-Forwarded-For is client-controlled. If the limiter keyed on it,
+        // rotating the header would mint a fresh bucket per request and the
+        // limit (1/window here) would never trip. With the default empty
+        // trusted-proxies set the header must be ignored.
+        let app = try await makeTestAppWithRateLimit()
+        defer { Task { try? await app.asyncShutdown() } }
+        try await app.testable().test(.POST, "/api/bug-reports") { req async throws in
+            try buildMultipart(req: &req, metadata: validMetadata(), png: pngBytes())
+            req.headers.replaceOrAdd(name: "x-forwarded-for", value: "203.0.113.1")
+        } afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .created)
+        }
+        try await app.testable().test(.POST, "/api/bug-reports") { req async throws in
+            try buildMultipart(req: &req, metadata: validMetadata(), png: pngBytes())
+            req.headers.replaceOrAdd(name: "x-forwarded-for", value: "203.0.113.2")
+        } afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .tooManyRequests)
+            let body = try res.content.decode(BugFabErrorBody.self)
+            XCTAssertEqual(body.error, "rate_limited")
+        }
+    }
+}
+
+final class BugFabClientIPTests: XCTestCase {
+    private func makeRequest(
+        _ app: Application, peer: String?, xff: String?
+    ) throws -> Request {
+        var headers = HTTPHeaders()
+        if let xff { headers.add(name: "x-forwarded-for", value: xff) }
+        return Request(
+            application: app,
+            method: .POST,
+            url: URI(path: "/api/bug-reports"),
+            headers: headers,
+            remoteAddress: peer.map { try! SocketAddress(ipAddress: $0, port: 80) },
+            on: app.eventLoopGroup.next()
+        )
+    }
+
+    func testForwardedHeaderIgnoredFromUntrustedPeer() async throws {
+        let app = try await Application.make(.testing)
+        defer { Task { try? await app.asyncShutdown() } }
+        let req = try makeRequest(app, peer: "10.0.0.1", xff: "203.0.113.7")
+        XCTAssertEqual(
+            BugReportsController.clientIP(req, trustedProxies: []), "10.0.0.1")
+    }
+
+    func testForwardedHeaderHonoredFromTrustedPeer() async throws {
+        let app = try await Application.make(.testing)
+        defer { Task { try? await app.asyncShutdown() } }
+        let req = try makeRequest(app, peer: "10.0.0.1", xff: "203.0.113.7, 10.0.0.1")
+        XCTAssertEqual(
+            BugReportsController.clientIP(req, trustedProxies: ["10.0.0.1"]),
+            "203.0.113.7")
+    }
+
+    func testWildcardTrustsEveryPeer() async throws {
+        let app = try await Application.make(.testing)
+        defer { Task { try? await app.asyncShutdown() } }
+        let req = try makeRequest(app, peer: "192.0.2.5", xff: "203.0.113.7")
+        XCTAssertEqual(
+            BugReportsController.clientIP(req, trustedProxies: ["*"]), "203.0.113.7")
+    }
+
+    func testNoHeaderFallsBackToPeer() async throws {
+        let app = try await Application.make(.testing)
+        defer { Task { try? await app.asyncShutdown() } }
+        let req = try makeRequest(app, peer: "192.0.2.5", xff: nil)
+        XCTAssertEqual(
+            BugReportsController.clientIP(req, trustedProxies: ["*"]), "192.0.2.5")
+    }
 }
 
 final class BugFabFluentTests: XCTestCase {
@@ -177,6 +322,29 @@ final class BugFabFluentTests: XCTestCase {
             let list = try res.content.decode(BugFabBugReportListResponse.self)
             XCTAssertEqual(list.total, 1)
         }
+    }
+
+    func testIdsAreNotReusedAfterDelete() async throws {
+        // The allocator was COUNT(*)+1: create three, delete the first, create
+        // a fourth, and the count-based id would be bug-003 — colliding with a
+        // live row on the primary key. The counter-row allocator must mint
+        // bug-004 instead.
+        let app = try await Application.make(.testing)
+        try setupFluentApp(app)
+        defer { Task { try? await app.asyncShutdown() } }
+        let storage = BugFabFluentStorage(app: app)
+        let png = pngBytes()
+        var ids: [String] = []
+        for _ in 0..<3 {
+            let id = try await storage.saveReport(
+                metadata: BugFabFluentStorage.decodeJSON(validMetadata()), screenshotBytes: png)
+            ids.append(id)
+        }
+        XCTAssertEqual(ids, ["bug-001", "bug-002", "bug-003"])
+        _ = try await storage.deleteReport(id: "bug-001")
+        let fourth = try await storage.saveReport(
+            metadata: BugFabFluentStorage.decodeJSON(validMetadata()), screenshotBytes: png)
+        XCTAssertEqual(fourth, "bug-004")
     }
 }
 
@@ -225,6 +393,7 @@ func makeTestAppWithRateLimit() async throws -> Application {
 func setupFluentApp(_ app: Application) throws {
     app.databases.use(.sqlite(.memory), as: .sqlite)
     app.migrations.add(CreateBugFabReport())
+    app.migrations.add(CreateBugFabIdCounter())
     try app.autoMigrate().wait()
     let storage = BugFabFluentStorage(app: app)
     try app.bugFab(storage: storage)

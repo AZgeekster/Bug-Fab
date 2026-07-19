@@ -11,6 +11,8 @@ out explicitly in each release entry.
 
 ## [Unreleased]
 
+## [0.1.0a2] - 2026-07-12
+
 ### Changed (Breaking)
 
 - **The FastAPI adapter now emits the protocol's `{"error", "detail"}` error
@@ -39,6 +41,40 @@ out explicitly in each release entry.
   FastAPI, Flask, and Django adapters. A *missing* `protocol_version` is
   unchanged and still surfaces as `422 schema_error`.
 
+### Changed
+
+- **The FastAPI adapter now validates intake through the same shared pipeline
+  as Flask and Django** (`bug_fab.intake.validate_payload`) instead of its own
+  inline checks, so all three Python adapters accept and reject identical
+  requests. Three observable differences on the FastAPI adapter:
+  size/content-type/magic-byte checks now run *before* JSON parsing and schema
+  validation (a request failing several checks may get a different status than
+  before — e.g. oversized screenshot + malformed JSON is now `413`, not
+  `400`); an empty screenshot file returns `415 unsupported_media_type` (was
+  `400`), matching Flask and Django; and a screenshot part whose declared
+  content type is not `image/png` is rejected with `415` even when the bytes
+  are valid PNG (it was previously accepted). Additionally, the `limit_bytes`
+  field on a metadata-cap `413` now reports the metadata cap on all three
+  adapters — Flask and Django previously reported the screenshot cap there.
+
+- **Outbound webhook and GitHub sync now behave identically on all three
+  Python adapters.** The Flask blueprint now wires the webhook retry/DLQ
+  settings (`BUG_FAB_WEBHOOK_MAX_ATTEMPTS`, `_RETRY_BACKOFF_SECONDS`,
+  `_DLQ_DIR`) it previously ignored, and the Django adapter's own
+  `requests`-based GitHub/webhook senders are now thin wrappers over the
+  shared integration clients — Django deliveries gain retry, backoff, and
+  dead-letter persistence, and Django-created GitHub issues switch from the
+  minimal `[Bug-Fab] …` shape to the same titled + labeled issue the FastAPI
+  adapter produces. Django no longer touches the optional `requests`
+  dependency.
+
+- **The GitHub and Linear integrations now truncate long text with the `…`
+  character instead of `...`.** All six built-in integrations shared six
+  copies of a truncation helper that had drifted into two forms; they now
+  share one, matching the Slack, Discord, Teams, and PagerDuty behavior. Only
+  the truncation marker on an over-length issue title or description changes;
+  nothing else about the posted content differs.
+
 ### Added
 
 - **The conformance suite now checks the error envelope and the
@@ -63,6 +99,257 @@ out explicitly in each release entry.
 
 ### Fixed
 
+- **`docker build` now succeeds on a clean clone.** The Dockerfile
+  unconditionally copied the gitignored `marketing-dist/` directory (built
+  out-of-band before deploys), so `git clone && docker build .` aborted at
+  that line. A tracked `.gitkeep` keeps the directory present; the app
+  already degrades gracefully and serves the playground at `/` when the
+  marketing site content is absent.
+
+- **`BugFab.destroy()` now restores `console.error`/`console.warn` and
+  detaches the global error listeners.** It previously restored only
+  `window.fetch`, so an SPA that unmounted Bug-Fab (e.g. on logout) kept
+  capturing console output and window errors into the buffers — which a
+  later re-init could submit alongside an unrelated report. `destroy()` also
+  clears the capture buffers, and a subsequent `init()` reinstalls the
+  interceptors cleanly.
+
+- **A corrupt or missing `index.json` no longer causes the file backend to
+  overwrite live reports.** The index is a denormalized cache of the
+  per-report JSON files, but a crash-truncated (or deleted) index was
+  silently replaced with a fresh `next_number: 1` — so the next submission
+  re-minted `bug-001` and overwrote the existing report and screenshot. The
+  index is now rebuilt from the report files on disk (archived reports keep
+  reserving their numbers), and — defense in depth — the allocator refuses
+  to mint an id whose files already exist, advancing past them instead.
+
+- **`FileStorage` now rejects an invalid `id_prefix` at construction.** The
+  prefix is embedded into report ids and filesystem paths; anything longer
+  than a single ASCII letter mints ids the canonical shape guard later
+  rejects (after the files were already written), and a separator-bearing
+  prefix escapes the flat path layout. Construction now raises `ValueError`
+  for anything but `[A-Za-z]?`.
+
+- **The Vapor adapter's intake response now always carries
+  `github_issue_url`.** Swift's `JSONEncoder` omits nil optionals, so the
+  `201` body dropped the key whenever GitHub sync was off — the protocol
+  requires the key present with an explicit `null`. Caught by the adapter's
+  new cross-stack conformance harness.
+
+- **The ASP.NET adapter's `GET /reports` no longer 500s on SQLite.** The list
+  query ordered by a `DateTimeOffset` column, which EF Core's SQLite provider
+  cannot translate — every list call threw `NotSupportedException` at query
+  compilation, so the endpoint had never worked against a SQLite database
+  (the InMemory-provider unit tests were green throughout). The query now
+  orders by the monotonically-minted `IdSequence`, which is received order on
+  every provider. Caught by the adapter's new cross-stack conformance
+  harness; a SQLite-backed regression test now runs in the unit suite.
+
+- **The ASP.NET adapter's screenshot endpoint no longer 500s when
+  `StorageDirectory` is a relative path.** `Results.File` treats a non-rooted
+  path as a virtual path under the web root and throws at execution time; the
+  path is now rooted before serving, so the configured `./var/bug-fab` style
+  default works.
+
+- **The ASP.NET adapter now returns `400 validation_error` for a submission
+  with no screenshot part.** A urlencoded form body (what HTTP clients send
+  when the file part is omitted) was rejected by endpoint `Accepts` metadata
+  with an empty-body `415` before the handler could apply the
+  protocol-mandated 400. Non-form bodies (e.g. JSON) still return 415.
+
+- **The Vapor adapter's rate limiter no longer trusts raw
+  `X-Forwarded-For`.** Same spoofable-bucket defect as the Laravel and
+  ASP.NET entries below. Vapor has no framework-level forwarded-header trust
+  gate, so the adapter grew the same knob as Go/Rust/Spring: a new
+  `rateLimitTrustedProxies` setting (`BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES`,
+  default empty = trust none, `"*"` = trust all) that gates the header on the
+  direct peer's address. Behind an undeclared proxy, metering is per-proxy
+  until the proxy is listed.
+
+- **The Laravel adapter's rate limiter no longer keys on raw
+  `X-Forwarded-For`.** Same defect as the ASP.NET entry below: rotating the
+  client-controlled header minted a fresh bucket per request. The key is now
+  `$request->ip()`, which honors the forwarding chain only when the
+  consumer's TrustProxies configuration declares the peer. Behind an
+  undeclared proxy, metering is per-proxy.
+
+- **The ASP.NET adapter's rate limiter no longer keys on raw
+  `X-Forwarded-For`.** The header is client-controlled: rotating it minted a
+  fresh rate-limit bucket per request, so with the limiter enabled a client
+  could evade it entirely with a spoofed header. The partition key is now the
+  connection's resolved client address. Deployments behind a reverse proxy
+  should register ASP.NET Core's `ForwardedHeadersMiddleware` with
+  `KnownProxies`/`KnownNetworks` to meter per-end-user; without it, metering
+  is per-proxy.
+
+- **The Spring adapter now enforces its `bugfab.max-metadata-kb` cap.** The
+  property (default 256 KiB) was declared, documented, and set in
+  `application.yml`, but intake read the metadata part unbounded and never
+  consulted it. An oversized metadata part now returns
+  `413 payload_too_large` with `limit_bytes`, checked against the part's
+  declared size before the bytes are copied into JVM heap.
+
+- **The ASP.NET adapter no longer reuses report ids after a delete.** Its EF Core
+  storage derived the next id from `MAX(IdSequence) + 1`; delete the highest report
+  and the next insert recomputed that same number, colliding with (or reissuing the
+  retired id of) `bug-003`. Ids now come from a single-row `bug_fab_id_counter`
+  table — bumped by an atomic `UPDATE ... SET last_value = last_value + 1`
+  (`ExecuteUpdate`) on relational providers, so a delete can't rewind it and
+  concurrent intake can't lose an increment. Ships an `AddIdCounter` EF migration;
+  consumers using `EnsureCreated` need no action.
+
+- **The Vapor and Spring adapters no longer reuse report ids after a delete.**
+  Both allocated ids from a row count / process-local counter: delete `bug-001`
+  from three reports and the next insert computed `bug-003`, colliding with a
+  live row on the primary key and losing the report (Spring's `AtomicLong` also
+  couldn't coordinate across JVM instances). Both now mint ids from a single-row
+  counter that a delete can't rewind — Vapor via an atomic
+  `UPDATE ... SET last_value = last_value + 1` (raw SQL, portable across its
+  SQLite test driver and Postgres prod driver; never `SELECT ... FOR UPDATE`, a
+  SQLite syntax error), Spring via a counter entity fetched under
+  `@Lock(PESSIMISTIC_WRITE)` inside the insert transaction (valid on both H2 and
+  Postgres). **Consumers wiring the Vapor Fluent backend must add the new
+  `CreateBugFabIdCounter` migration** alongside `CreateBugFabReport`; the Spring
+  counter table is created by the adapter's JPA schema management.
+
+- **The `environment` filter on `GET /reports` now works.** It was a silent
+  no-op on the file backend (the field was never denormalized into the index
+  and the matcher never checked it) and on the SQL backend (the column existed
+  but the filter loop skipped it). Filtering by `environment` returned the full
+  unfiltered list. Fixed on the Python reference (FastAPI/Flask/Django, both
+  storage backends) and on the Go, Spring (Kotlin `FileStorage`), and Vapor file
+  backends, each of which listed `environment` in its matcher but never wrote it
+  to the index. Existing file-backend reports are matched once re-indexed by any
+  write; Vapor's index entry keeps the field optional so older `index.json`
+  files still load.
+
+- **The viewer `stats` block now aggregates over the active filters.** The
+  contract in `BugReportListResponse` says `stats` counts the filtered result
+  set, but every Python adapter computed the counts over the whole dataset.
+  Filtering by `severity=critical` now reports each status count *within* that
+  filter. The four lifecycle states are still always present.
+
+- **Enabling the rate limiter is no longer a memory-exhaustion sink.** The
+  per-IP limiter (FastAPI + Flask) never removed a key once it was created, so
+  a client cycling through source addresses grew the tracking map without
+  bound. Idle buckets are now evicted by a sweep that runs at most once per
+  window. Behavior for a steady set of clients is unchanged.
+
+- **`X-Forwarded-For` is no longer trusted unconditionally as the rate-limit
+  key.** The header is client-controlled and spoofable: rotating it per request
+  minted a fresh bucket each time and defeated the limiter entirely. It is now
+  honored only when the direct peer is listed in the new
+  `rate_limit_trusted_proxies` setting (env `BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES`,
+  comma-separated; `*` trusts all). **Behavior change:** the default is empty,
+  so a deployment behind a reverse proxy that relied on per-end-user metering
+  now meters per-proxy until it lists its proxy IPs. Set the variable to restore
+  per-client metering. Applies to the FastAPI and Flask adapters; the
+  non-Python adapters carry the same raw-header trust and are tracked
+  separately.
+
+- **Oversized uploads are now rejected by `Content-Length` before the body is
+  parsed.** The size caps previously ran only after the framework had buffered
+  the whole multipart body, so the cap couldn't protect the memory it bounds. A
+  request whose declared `Content-Length` exceeds the combined screenshot +
+  metadata cap now returns `413 payload_too_large` before the body is read, on
+  the FastAPI, Flask, and Django adapters. The precise per-field `413`s are
+  unchanged. A body sent without `Content-Length` (chunked transfer) still
+  reaches the per-field checks — hard transport-level limits belong at the
+  reverse proxy / ASGI/WSGI server.
+
+- **The Go (gin) adapter now enforces viewer permissions.** It shipped none, so
+  `DELETE /reports/{id}`, `PUT /reports/{id}/status`, and the bulk endpoints were
+  reachable by anyone who could reach the viewer — a fail-open gap the Rust and
+  Vapor adapters already closed. `Config` gains `CanEditStatus`, `CanDelete`, and
+  `CanBulk` (all default `true`; env `BUG_FAB_VIEWER_CAN_EDIT_STATUS` /
+  `_CAN_DELETE` / `_CAN_BULK`), and the matching route returns `403 forbidden`
+  when its permission is disabled. Default behavior is unchanged.
+
+- **The Vapor adapter's file storage no longer risks losing the whole report
+  index on a crash.** Its `atomicWrite` wrote to a temp file and then did
+  remove-destination-then-move; a crash in that gap left `index.json` missing
+  with no recovery, silently dropping every report from the listing. It now
+  replaces the file with a single atomic temp-plus-rename, the same primitive
+  the Go and Rust adapters use. No API or behavior change on the success path.
+
+- **The Hono viewer's report rows are clickable again.** The HTML list linked
+  each row to `{id}`, but the detail page is served at `{id}/view`, so every row
+  click returned 404. The links now point at the detail route.
+
+- **The Hono adapter enforces its total-body cap and no longer trusts spoofable
+  forwarding headers.** Its `MAX_TOTAL_REQUEST_BYTES` constant was defined but
+  never imported — no body limit actually ran. A declared `Content-Length` over
+  the 11 MiB cap now returns `413 payload_too_large` before the body is parsed.
+  The rate limiter also keyed on raw `cf-connecting-ip` / `x-forwarded-for` /
+  `x-real-ip`; it now reads only headers the consumer names in the new
+  `rateLimit.clientIpHeaders` option (edge runtimes expose no socket peer, so
+  there is no safe automatic fallback). **Behavior change:** with none
+  configured, all requests share one bucket — spoof-proof, but collective; name
+  your platform's guaranteed header (e.g. `cf-connecting-ip` on Cloudflare) to
+  restore per-client metering. Idle rate-limit keys are also evicted now.
+
+- **The Go (gin) adapter now bounds the request body and gates
+  `X-Forwarded-For` trust.** Intake had no body limit at all — the multipart
+  parser buffered the whole body (32 MiB in memory, remainder spooled to temp
+  files) before any size check, and the `metadata` field was uncapped. A
+  request whose declared `Content-Length` exceeds the combined caps now
+  returns `413 payload_too_large` before the body is read, an
+  `http.MaxBytesReader` backstop bounds chunked bodies, and `metadata` is
+  capped (`BUG_FAB_MAX_METADATA_KB`, default 256 KiB). The rate limiter also
+  trusted the raw first `X-Forwarded-For` hop; the header is now honored only
+  when the direct peer is listed in `BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES`
+  (`*` trusts all; default empty meters by direct peer — the same behavior
+  change as the other adapters).
+
+- **The Rust adapter's rate limiter no longer trusts a spoofable header or
+  grows without bound.** It preferred the raw first `X-Forwarded-For` hop as
+  the rate-limit key — and it is the only adapter that ships the limiter
+  enabled by default, so a rotating spoofed header defeated an on-by-default
+  control. The header is now honored only when the direct peer is listed in
+  the new `Settings.rate_limit_trusted_proxies` field (`"*"` trusts all;
+  default empty), and idle buckets are evicted by a once-per-window sweep.
+  **Behavior change:** behind a reverse proxy, metering is per-proxy until the
+  consumer lists its proxy IPs.
+
+- **The Spring adapter's rate limiter no longer grows without bound or trusts a
+  spoofable header.** Its bucket map never evicted a key, and it keyed on the
+  raw first `X-Forwarded-For` hop — so rotating a spoofed header both defeated
+  the limit and grew the map indefinitely. Idle buckets are now swept once per
+  window, and the header is honored only when the direct peer is listed in the
+  new `bugfab.rate-limit.trusted-proxies` property (`*` trusts all).
+  **Behavior change:** the default is empty, so a deployment behind a reverse
+  proxy meters per-proxy until it lists its proxy IPs — mirroring the Python
+  reference's `rate_limit_trusted_proxies`.
+
+- **The SvelteKit file backend no longer strands archived reports.** Archiving
+  dropped the report from the in-memory index and the startup loader skipped
+  `archive/`, so `include_archived=true` could never return an archived report
+  — and after a restart the ID counter re-seeded without them, so a new report
+  could re-mint an archived report's id and a later archive would overwrite the
+  original's files. Archived reports now stay indexed (hidden by default,
+  returned with `include_archived=true`, screenshots served from `archive/`),
+  and the counter seeds from both live and archived reports.
+
+- **The ASP.NET adapter no longer 500s on wrong-typed JSON scalars.** A payload
+  like `{"title": 123}` threw an unhandled exception out of the validator
+  (`GetValue<string>()` throws on non-string nodes) and surfaced as a 500. Every
+  string field — `protocol_version`, `title`, `client_ts`, `report_type`,
+  `severity`, the `reporter` sub-fields, and the status-update body — now
+  reports a `422 schema_error` with a "must be a string" failure instead.
+
+- **The Phoenix adapter returns the correct error codes for 403 and 404.** Its
+  `403` and `404` responses carried `error: "validation_error"` instead of
+  `"forbidden"` / `"not_found"`, so clients branching on the error code
+  mis-classified a permission denial or a missing report as a validation
+  failure. The status codes were already correct; only the envelope `error`
+  field changes, matching the Rails and Laravel adapters and the reference.
+
+- **The Django adapter no longer leaks a `total` key in the JSON `stats`
+  block.** `GET /reports` emitted a fifth `total` key the reference and Flask
+  adapters strip; the JSON contract is the four lifecycle states only. (The
+  HTML viewer's "Total" stat card is unaffected — it reads a filtered total the
+  server still computes for the page.)
+
 - **The SvelteKit adapter builds and typechecks again.** `svelte.config.js`
   imported `vitePreprocess` from the moved `@sveltejs/kit/vite` and set a
   `package` config key that `@sveltejs/package` v2 removed, so `npm run build`
@@ -84,6 +371,14 @@ out explicitly in each release entry.
   status-code aliases.
 
 ### Security
+
+- **Intake now caps the `metadata` field size** (`BUG_FAB_MAX_METADATA_KB`,
+  default 256 KiB). Only the screenshot was bounded before, so a tiny valid
+  PNG paired with a several-hundred-MB metadata string was parsed into memory
+  and persisted. Enforced on the FastAPI, Flask, and Django adapters and in
+  the shared `bug_fab.intake.validate_payload` helper, so any adapter built on
+  it inherits the bound. Over-size metadata returns `413 payload_too_large`
+  with `limit_bytes`.
 
 - **`BUG_FAB_REDACT_PII` now actually redacts on the Flask and Django
   adapters.** The redactor was only ever called from the FastAPI intake
@@ -107,6 +402,19 @@ out explicitly in each release entry.
   screenshot route.
 
 ### Fixed
+
+- **The webhook dead-letter queue no longer grows geometrically on replay.**
+  `replay_dead_letters` re-drove each envelope through `send()`, which wrote a
+  *new* dead letter on terminal failure while the original was unlinked only on
+  success. Replaying against a still-down receiver turned N dead letters into
+  2N, then 4N. Replay now suppresses re-persistence, so the count stays flat.
+
+- **The report-id shape guard is now one definition instead of four.** The
+  route/viewer guards used `\d{1,12}` while the file and SQL storage backends
+  used `\d{3,}`, so `bug-1` passed the route guard then 404'd inside storage,
+  and a 13-digit id did the reverse. The audit calls this regex "the primary
+  path-traversal defense"; it is now a single `^bug-[A-Za-z]?\d{3,12}$` shared
+  by every layer.
 
 - **The Phoenix adapter no longer loses reports after a delete.**
   `EctoStorage.save_report/3` derived the next report id from
@@ -711,6 +1019,16 @@ out explicitly in each release entry.
   security backport — advisories still open against the 14 line have no
   patch short of a Next 15/16 migration.
 
+- **Migrate the `examples/nextjs-minimal` POC from Next 14 (EOL) to Next
+  15.5.20 + React 19.** Next 14 was end-of-life, so its remaining
+  advisories had no fix short of this migration; `npm audit` in the
+  example drops from 14 advisories to 2 moderate (both transitive
+  `postcss`-via-`next`, not the example's to fix). The only breaking
+  change that touched the example was Next 15's Promise-wrapped dynamic
+  route `params` — the three `[id]` route handlers now `await` them.
+  Example app only; the shipped `bug_fab` package has no Next.js
+  dependency.
+
 ## [0.1.0a1] - 2026-04-27
 
 Initial alpha release. Reserves the `bug-fab` name on PyPI and validates
@@ -744,5 +1062,6 @@ the publish workflow end-to-end before the `v0.1.0` final release.
 - Wire-protocol contract is not yet locked. Do not build production
   integrations against this alpha.
 
-[Unreleased]: https://github.com/AZgeekster/Bug-Fab/compare/v0.1.0a1...HEAD
+[Unreleased]: https://github.com/AZgeekster/Bug-Fab/compare/v0.1.0a2...HEAD
+[0.1.0a2]: https://github.com/AZgeekster/Bug-Fab/compare/v0.1.0a1...v0.1.0a2
 [0.1.0a1]: https://github.com/AZgeekster/Bug-Fab/releases/tag/v0.1.0a1

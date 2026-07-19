@@ -1,10 +1,13 @@
 """Best-effort GitHub Issues sync for the Django adapter.
 
-A standalone module so the views layer can import it lazily — consumers
-without GitHub credentials never load :mod:`requests`. Failures are
-logged and swallowed; an outage upstream MUST NOT cause the local
-intake response to be non-2xx (per ``docs/PROTOCOL.md`` § Failure modes
-that MUST NOT yield non-2xx).
+A thin synchronous wrapper over :class:`bug_fab.integrations.github.GitHubSync`
+— the same client the FastAPI adapter uses, so Django-submitted reports
+produce identical issues (title format, labels, body sections) instead of
+the divergent minimal shape this module used to build itself. Plain
+Django views are sync, so the async client is driven with
+:func:`asyncio.run`. Failures are logged and swallowed; an outage
+upstream MUST NOT cause the local intake response to be non-2xx (per
+``docs/PROTOCOL.md`` § Failure modes that MUST NOT yield non-2xx).
 
 Configuration via three env vars (Django settings overrides take
 precedence when present)::
@@ -20,6 +23,7 @@ helpers no-op so the views can call them unconditionally.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from dataclasses import dataclass
@@ -59,27 +63,15 @@ def _enabled() -> bool:
     return bool(_setting("BUG_FAB_GITHUB_REPO") and _setting("BUG_FAB_GITHUB_PAT"))
 
 
-def _post_issue(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """Send the create-issue request, returning the parsed JSON on 2xx."""
-    import requests  # imported lazily — optional dep at runtime
+def _client() -> Any:
+    """Build the shared GitHubSync client from resolved settings."""
+    from bug_fab.integrations.github import GitHubSync
 
-    repo = _setting("BUG_FAB_GITHUB_REPO")
-    pat = _setting("BUG_FAB_GITHUB_PAT")
-    api_base = _setting("BUG_FAB_GITHUB_API_BASE", "https://api.github.com")
-    url = f"{api_base.rstrip('/')}/repos/{repo}/issues"
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "Authorization": f"Bearer {pat}",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    response = requests.post(url, json=payload, headers=headers, timeout=10)
-    if response.status_code // 100 != 2:
-        logger.warning(
-            "bug_fab_django_github_create_failed",
-            extra={"status": response.status_code, "body": response.text[:500]},
-        )
-        return None
-    return response.json()
+    return GitHubSync(
+        pat=_setting("BUG_FAB_GITHUB_PAT"),
+        repo=_setting("BUG_FAB_GITHUB_REPO"),
+        api_base=_setting("BUG_FAB_GITHUB_API_BASE", "https://api.github.com"),
+    )
 
 
 def create_issue(report: dict[str, Any]) -> GitHubLink | None:
@@ -87,32 +79,19 @@ def create_issue(report: dict[str, Any]) -> GitHubLink | None:
 
     The ``report`` mapping is the JSON-mode dump of
     :class:`bug_fab.schemas.BugReportDetail`. Non-2xx responses, missing
-    config, or import-time failures all surface as ``None`` after a
+    config, or transport failures all surface as ``None`` after a
     structured log entry — callers MUST treat absence as a soft signal.
     """
     if not _enabled():
         return None
-    title = report.get("title", "Bug report")
-    body_lines = [
-        f"**ID:** {report.get('id')}",
-        f"**Severity:** {report.get('severity')}",
-        f"**Environment:** {report.get('environment') or '(unspecified)'}",
-        "",
-        report.get("description", "") or "(no description)",
-    ]
-    payload = {
-        "title": f"[Bug-Fab] {title}",
-        "body": "\n".join(body_lines),
-    }
     try:
-        result = _post_issue(payload)
+        # Plain Django views run sync (WSGI, or ASGI's sync-view
+        # threadpool), so no event loop is running in this thread and
+        # asyncio.run is safe.
+        number, url = asyncio.run(_client().create_issue(report))
     except Exception:  # pragma: no cover - defensive
         logger.exception("bug_fab_django_github_create_exception")
         return None
-    if not result:
-        return None
-    number = result.get("number")
-    url = result.get("html_url")
     if not (isinstance(number, int) and isinstance(url, str)):
         return None
     return GitHubLink(number=number, url=url)
@@ -121,33 +100,13 @@ def create_issue(report: dict[str, Any]) -> GitHubLink | None:
 def sync_issue_state(issue_number: int, status: str) -> None:
     """Patch an existing issue's open/closed state from a Bug-Fab status.
 
-    ``fixed`` and ``closed`` close the upstream issue; ``open`` and
-    ``investigating`` reopen it. Failures log and swallow.
+    The shared client's state map decides the upstream state (``fixed``
+    and ``closed`` close the issue; other statuses reopen it). Failures
+    log and swallow.
     """
     if not _enabled():
         return
     try:
-        import requests  # imported lazily
-
-        repo = _setting("BUG_FAB_GITHUB_REPO")
-        pat = _setting("BUG_FAB_GITHUB_PAT")
-        api_base = _setting("BUG_FAB_GITHUB_API_BASE", "https://api.github.com")
-        url = f"{api_base.rstrip('/')}/repos/{repo}/issues/{issue_number}"
-        state = "closed" if status in ("fixed", "closed") else "open"
-        response = requests.patch(
-            url,
-            json={"state": state},
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {pat}",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-            timeout=10,
-        )
-        if response.status_code // 100 != 2:
-            logger.warning(
-                "bug_fab_django_github_state_sync_failed",
-                extra={"status": response.status_code, "body": response.text[:500]},
-            )
+        asyncio.run(_client().sync_issue_state(issue_number, status))
     except Exception:  # pragma: no cover - defensive
         logger.exception("bug_fab_django_github_state_sync_exception")

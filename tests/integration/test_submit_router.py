@@ -16,30 +16,19 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
+import bug_fab.routers.submit as submit_module
 from bug_fab._rate_limit import RateLimiter
+from tests._helpers import baseline_metadata
 
 
 def _baseline_metadata() -> dict[str, Any]:
-    return {
-        "protocol_version": "0.1",
-        "title": "Submit form does not clear after success",
-        "client_ts": "2026-04-29T12:00:00+00:00",
-        "report_type": "bug",
-        "description": "Steps: open page; submit; observe stale form fields.",
-        "expected_behavior": "Form clears on successful submission.",
-        "severity": "medium",
-        "tags": ["regression", "ui"],
-        "context": {
-            "url": "http://localhost/sample/path",
-            "module": "sample",
+    return baseline_metadata(
+        context={
             "user_agent": "client-supplied-ua/1.0",
-            "viewport_width": 1280,
-            "viewport_height": 720,
-            "console_errors": [],
-            "network_log": [],
-            "environment": "dev",
         },
-    }
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -204,14 +193,18 @@ def test_missing_title_returns_422(app_factory, tiny_png: bytes) -> None:
     assert response.status_code == 422
 
 
-def test_empty_screenshot_returns_400(app_factory) -> None:
+def test_empty_screenshot_returns_415(app_factory) -> None:
+    # Since the router unified onto intake.validate_payload, an empty file
+    # fails the PNG magic-byte check like any other non-PNG payload — the
+    # same 415 the Flask and Django adapters have always returned.
     client = app_factory()
     response = client.post(
         "/bug-reports",
         data={"metadata": json.dumps(_baseline_metadata())},
         files={"screenshot": ("shot.png", b"", "image/png")},
     )
-    assert response.status_code == 400
+    assert response.status_code == 415
+    assert response.json()["error"] == "unsupported_media_type"
 
 
 # -----------------------------------------------------------------------------
@@ -230,6 +223,39 @@ def test_oversize_screenshot_returns_413(app_factory, settings_factory, make_png
         files={"screenshot": ("shot.png", too_big, "image/png")},
     )
     assert response.status_code == 413
+
+
+def test_oversize_metadata_returns_413(app_factory, settings_factory, tiny_png: bytes) -> None:
+    """A tiny screenshot with a giant metadata string must be rejected before json.loads.
+
+    Only the screenshot was bounded before, so a valid PNG plus a
+    several-hundred-MB metadata string was parsed into memory and persisted.
+    """
+    settings = settings_factory(max_metadata_kb=8)
+    md = _baseline_metadata()
+    md["description"] = "A" * (16 * 1024)  # 16 KiB — over the 8 KiB cap
+    client = app_factory(settings=settings)
+    response = client.post(
+        "/bug-reports",
+        data={"metadata": json.dumps(md)},
+        files={"screenshot": ("shot.png", tiny_png, "image/png")},
+    )
+    assert response.status_code == 413
+    body = response.json()
+    assert body["error"] == "payload_too_large"
+    assert body["limit_bytes"] == 8 * 1024
+
+
+def test_metadata_at_the_cap_is_accepted(app_factory, settings_factory, tiny_png: bytes) -> None:
+    """The bound is a ceiling, not an off-by-one reject of legitimate reports."""
+    settings = settings_factory(max_metadata_kb=256)
+    client = app_factory(settings=settings)
+    response = client.post(
+        "/bug-reports",
+        data={"metadata": json.dumps(_baseline_metadata())},
+        files={"screenshot": ("shot.png", tiny_png, "image/png")},
+    )
+    assert response.status_code == 201
 
 
 # -----------------------------------------------------------------------------
@@ -266,6 +292,24 @@ def test_jpeg_magic_bytes_rejected_as_415(app_factory) -> None:
     )
     assert response.status_code == 415
     assert "png" in response.text.lower()
+
+
+def test_png_bytes_with_wrong_content_type_rejected_as_415(app_factory, tiny_png: bytes) -> None:
+    """Valid PNG bytes declared as a non-PNG content type must be 415.
+
+    Enforced since the router unified onto ``intake.validate_payload`` —
+    the shared pipeline checks the declared content type before the magic
+    bytes, exactly as the Flask and Django adapters always have. The old
+    inline validation ignored the declared type entirely.
+    """
+    client = app_factory()
+    response = client.post(
+        "/bug-reports",
+        data={"metadata": json.dumps(_baseline_metadata())},
+        files={"screenshot": ("shot.png", tiny_png, "application/octet-stream")},
+    )
+    assert response.status_code == 415
+    assert response.json()["error"] == "unsupported_media_type"
 
 
 def test_json_only_post_rejected(app_factory) -> None:
@@ -306,6 +350,69 @@ def test_rate_limit_returns_429_when_exceeded(
     response = client.post("/bug-reports", data={"metadata": payload}, files=files)
     assert response.status_code == 429
     assert "rate limit" in response.text.lower()
+
+
+def test_spoofed_forwarded_for_does_not_evade_rate_limit(
+    app_factory, settings_factory, tiny_png: bytes
+) -> None:
+    """S3f: with no trusted proxies, a rotating ``X-Forwarded-For`` cannot mint
+    a fresh bucket per request — the untrusted peer address keys the limiter."""
+    settings = settings_factory(
+        rate_limit_enabled=True,
+        rate_limit_max=1,
+        rate_limit_window_seconds=60,
+    )
+    limiter = RateLimiter(max_per_window=1, window_seconds=60)
+    client = app_factory(settings=settings, rate_limiter=limiter)
+
+    payload = json.dumps(_baseline_metadata())
+    files = {"screenshot": ("shot.png", tiny_png, "image/png")}
+    first = client.post(
+        "/bug-reports",
+        data={"metadata": payload},
+        files=files,
+        headers={"X-Forwarded-For": "10.0.0.1"},
+    )
+    assert first.status_code == 201
+    # A different spoofed header from the same (untrusted) peer is still capped.
+    second = client.post(
+        "/bug-reports",
+        data={"metadata": payload},
+        files=files,
+        headers={"X-Forwarded-For": "10.0.0.2"},
+    )
+    assert second.status_code == 429
+
+
+def test_oversized_content_length_rejected_before_parse(
+    app_factory, settings_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """S5: a body whose Content-Length exceeds the total cap is rejected 413
+    before the multipart body is parsed.
+
+    Proven by sending a body that is NOT valid multipart: only the
+    pre-parse guard can produce a 413 here — the per-field size checks
+    never run because the body would fail parsing first (a reverted guard
+    yields a 4xx parse/validation error, not 413).
+    """
+    settings = settings_factory(max_upload_mb=1)  # total cap ~1.27 MiB
+    # The custom route reads settings via the module-level get_settings(),
+    # which the configure() path populates in production; dependency
+    # overrides (used by app_factory) don't reach it, so set it directly.
+    monkeypatch.setattr(submit_module, "_SETTINGS", settings)
+    client = app_factory(settings=settings)
+
+    oversized = b"x" * (2 * 1024 * 1024)
+    response = client.post(
+        "/bug-reports",
+        content=oversized,
+        headers={"content-type": "multipart/form-data; boundary=zzz"},
+    )
+    assert response.status_code == 413
+    body = response.json()
+    assert body["error"] == "payload_too_large"
+    expected = 1 * 1024 * 1024 + settings.max_metadata_kb * 1024 + 16 * 1024
+    assert body["limit_bytes"] == expected
 
 
 # -----------------------------------------------------------------------------
@@ -392,17 +499,6 @@ def test_non_png_envelope_uses_unsupported_media_type(app_factory) -> None:
     )
     assert response.status_code == 415
     assert response.json()["error"] == "unsupported_media_type"
-
-
-def test_empty_screenshot_envelope_uses_validation_error(app_factory) -> None:
-    client = app_factory()
-    response = client.post(
-        "/bug-reports",
-        data={"metadata": json.dumps(_baseline_metadata())},
-        files={"screenshot": ("shot.png", b"", "image/png")},
-    )
-    assert response.status_code == 400
-    assert response.json()["error"] == "validation_error"
 
 
 def test_rate_limited_envelope_includes_retry_after_seconds(

@@ -3,6 +3,7 @@ package bugfab
 import (
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config captures the runtime knobs Bug-Fab consumers may tune. Build
@@ -25,6 +26,12 @@ type Config struct {
 	// high-DPI captures.
 	MaxScreenshotBytes int64
 
+	// MaxMetadataBytes caps the metadata JSON string. Default 256 KiB —
+	// far above any legitimate report, but closing the amplification
+	// where a tiny PNG plus a huge metadata string is parsed into
+	// memory. Mirrors the Python reference's max_metadata_kb.
+	MaxMetadataBytes int64
+
 	// RateLimitEnabled toggles the per-IP limiter. Off by default
 	// because most Bug-Fab consumers are behind auth and an internal
 	// abuse vector is unlikely; the toggle exists so public POCs can
@@ -32,6 +39,23 @@ type Config struct {
 	RateLimitEnabled bool
 	RateLimitMax     int
 	RateLimitWindow  int // seconds
+
+	// RateLimitTrustedProxies lists direct-peer addresses allowed to
+	// supply X-Forwarded-For as the rate-limit key. The header is
+	// client-controlled and spoofable, so it is honored only when the
+	// connecting peer is in this list; empty (the secure default)
+	// meters by the direct peer address. "*" trusts every peer.
+	// Mirrors the Python reference's rate_limit_trusted_proxies.
+	RateLimitTrustedProxies []string
+
+	// Viewer permissions gate the destructive viewer actions. Each
+	// defaults to true (all actions allowed); set one to false to make
+	// the matching route return 403 forbidden regardless of the caller.
+	// Mirrors the Python reference's viewer_permissions and the Laravel
+	// BUG_FAB_VIEWER_CAN_* env vars.
+	CanEditStatus bool // PUT /reports/{id}/status
+	CanDelete     bool // DELETE /reports/{id}
+	CanBulk       bool // POST /bulk-close-fixed, /bulk-archive-closed
 }
 
 // DefaultConfig returns the documented v0.1 defaults — safe for
@@ -41,9 +65,13 @@ func DefaultConfig() Config {
 		StorageDir:         "./var/bug-fab",
 		IDPrefix:           "",
 		MaxScreenshotBytes: 4 * 1024 * 1024,
+		MaxMetadataBytes:   256 * 1024,
 		RateLimitEnabled:   false,
 		RateLimitMax:       30,
 		RateLimitWindow:    60,
+		CanEditStatus:      true,
+		CanDelete:          true,
+		CanBulk:            true,
 	}
 }
 
@@ -64,6 +92,18 @@ func NewConfigFromEnv() Config {
 			c.MaxScreenshotBytes = int64(mb) * 1024 * 1024
 		}
 	}
+	if v := os.Getenv("BUG_FAB_MAX_METADATA_KB"); v != "" {
+		if kb, err := strconv.Atoi(v); err == nil && kb > 0 {
+			c.MaxMetadataBytes = int64(kb) * 1024
+		}
+	}
+	if v := os.Getenv("BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES"); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			if p := strings.TrimSpace(part); p != "" {
+				c.RateLimitTrustedProxies = append(c.RateLimitTrustedProxies, p)
+			}
+		}
+	}
 	c.RateLimitEnabled = envBool("BUG_FAB_RATE_LIMIT_ENABLED")
 	if v := os.Getenv("BUG_FAB_RATE_LIMIT_MAX"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -75,6 +115,9 @@ func NewConfigFromEnv() Config {
 			c.RateLimitWindow = n
 		}
 	}
+	c.CanEditStatus = envBoolDefault("BUG_FAB_VIEWER_CAN_EDIT_STATUS", true)
+	c.CanDelete = envBoolDefault("BUG_FAB_VIEWER_CAN_DELETE", true)
+	c.CanBulk = envBoolDefault("BUG_FAB_VIEWER_CAN_BULK", true)
 	return c
 }
 
@@ -85,4 +128,22 @@ func envBool(key string) bool {
 		return true
 	}
 	return false
+}
+
+// envBoolDefault reads a boolean env var that defaults to def when unset
+// or empty. Used for the viewer permissions, which are allowed unless a
+// consumer explicitly turns one off — the opposite polarity from the
+// opt-in flags envBool serves.
+func envBoolDefault(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	switch v {
+	case "1", "true", "TRUE", "True", "yes", "YES":
+		return true
+	case "0", "false", "FALSE", "False", "no", "NO":
+		return false
+	}
+	return def
 }

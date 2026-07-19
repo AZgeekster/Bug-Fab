@@ -2,6 +2,8 @@ package io.bugfab.adapter
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.bugfab.adapter.jpatest.JpaBootApp
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
@@ -43,6 +45,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 class BugFabJpaStorageTest @Autowired constructor(
     private val mockMvc: MockMvc,
     private val mapper: ObjectMapper,
+    private val storage: Storage,
 ) {
 
     private val pngSig = byteArrayOf(
@@ -73,5 +76,24 @@ class BugFabJpaStorageTest @Autowired constructor(
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.title").value("JPA roundtrip"))
             .andExpect(jsonPath("$.severity").value("low"))
+    }
+
+    @Test
+    fun `ids are not reused after a delete`() {
+        // The old AtomicLong allocator seeded from max(id); a counter row
+        // incremented atomically must never rewind. Create three, delete the
+        // first, create a fourth — it must be bug-004, not the colliding
+        // bug-003 a COUNT/max scheme would mint.
+        val png = pngSig.copyOf(64)
+        fun meta(title: String): Map<String, Any?> = mapOf(
+            "protocol_version" to "0.1",
+            "title" to title,
+            "client_ts" to "2026-04-27T00:00:00Z",
+            "severity" to "low",
+        )
+        val ids = (1..3).map { storage.saveReport(meta("r$it"), png) }
+        assertEquals(listOf("bug-001", "bug-002", "bug-003"), ids)
+        assertTrue(storage.deleteReport("bug-001"))
+        assertEquals("bug-004", storage.saveReport(meta("r4"), png))
     }
 }

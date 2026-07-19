@@ -1,6 +1,6 @@
 # Bug-Fab Vapor adapter
 
-> **Status:** First-party adapter — promoted 2026-05-21. Verified 9/9 tests passing under `swift:6.0` (Vapor 4.92+). See `MIGRATION_NOTES.md` for the Swift 6 strict-concurrency migration story.
+> **Status:** First-party adapter — promoted 2026-05-21. Unit suite verified under `swift:6.0` (Vapor 4.92+); the upstream `pytest --bug-fab-conformance` suite passes 32/32 as of 2026-07-12 via [`conformance/run-conformance.sh`](./conformance/). See `MIGRATION_NOTES.md` for the Swift 6 strict-concurrency migration story.
 
 A Swift / Vapor 4 adapter for the [Bug-Fab](https://github.com/AZgeekster/Bug-Fab) wire protocol (v0.1).
 
@@ -91,6 +91,7 @@ All eight follow `repo/docs/PROTOCOL.md` (v0.1).
 | `BUG_FAB_RATE_LIMIT_ENABLED` | `rateLimitEnabled` | `false` | Toggle the per-IP limiter. |
 | `BUG_FAB_RATE_LIMIT_MAX` | `rateLimitMax` | `30` | Requests per window per IP. |
 | `BUG_FAB_RATE_LIMIT_WINDOW_SECONDS` | `rateLimitWindowSeconds` | `60` | Sliding window. |
+| `BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES` | `rateLimitTrustedProxies` | `""` | Comma-separated direct-peer addresses allowed to supply `X-Forwarded-For` as the rate-limit key; `*` trusts all. Empty (the default) ignores the header — behind an undeclared proxy, metering is per-proxy. |
 | `BUG_FAB_ID_PREFIX` | `idPrefix` | `""` | Optional `P` / `D` style env prefix on assigned IDs. |
 | `BUG_FAB_CAN_EDIT_STATUS` | `canEditStatus` | `true` | Disables `PUT /reports/{id}/status` when false (403). |
 | `BUG_FAB_CAN_DELETE` | `canDelete` | `true` | Disables `DELETE /reports/{id}`. |

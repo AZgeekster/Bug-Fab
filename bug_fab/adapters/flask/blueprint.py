@@ -31,14 +31,15 @@ from __future__ import annotations
 
 import json
 import logging
-import re
+from collections.abc import Container
 from typing import Any
 
 from flask import Blueprint, Response, abort, jsonify, render_template, request, send_from_directory
 from pydantic import ValidationError
 
-from bug_fab._rate_limit import RateLimiter
+from bug_fab._rate_limit import RateLimiter, resolve_client_ip
 from bug_fab._redact import redact_report
+from bug_fab._report_id import REPORT_ID_RE
 from bug_fab.adapters.flask._runtime import (
     resolve_static_dir,
     resolve_template_dir,
@@ -49,6 +50,7 @@ from bug_fab.intake import (
     IntakeError,
     PayloadTooLarge,
     UnsupportedMediaType,
+    max_request_bytes,
     validate_payload,
 )
 from bug_fab.intake import (
@@ -65,23 +67,20 @@ logger = logging.getLogger(__name__)
 #: Path-traversal guard — mirrors :data:`bug_fab.routers.viewer._REPORT_ID_RE`.
 #: Any input outside this character class is rejected with 404 before it
 #: reaches the storage layer.
-_REPORT_ID_RE = re.compile(r"^bug-[A-Za-z]?\d{1,12}$")
+_REPORT_ID_RE = REPORT_ID_RE
 
 
-def _client_ip() -> str:
-    """Best-effort source-IP extraction — mirrors FastAPI router's helper.
+def _client_ip(trusted_proxies: Container[str]) -> str:
+    """Best-effort source-IP extraction — mirrors the FastAPI router's helper.
 
-    Honors ``X-Forwarded-For`` (first hop) when present so deployments
-    behind a reverse proxy still meter per-end-user. Falls back to
-    Flask's ``request.remote_addr``. Returns ``"unknown"`` when nothing
-    is available so the limiter still sees a stable key.
+    Delegates the ``X-Forwarded-For`` trust decision to
+    :func:`bug_fab._rate_limit.resolve_client_ip`: the header is honored
+    only when Flask's ``request.remote_addr`` is a configured trusted
+    proxy, so a spoofed header cannot mint a fresh bucket per request.
     """
-    forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
-        first = forwarded.split(",", 1)[0].strip()
-        if first:
-            return first
-    return request.remote_addr or "unknown"
+    return resolve_client_ip(
+        request.remote_addr, request.headers.get("X-Forwarded-For"), trusted_proxies
+    )
 
 
 def _error(code: str, detail: Any, status_code: int, **extra: Any) -> tuple[Response, int]:
@@ -119,19 +118,22 @@ def _build_filters(
     return {key: value.strip() for key, value in raw.items() if value and value.strip()}
 
 
-def _compute_stats(storage: Storage) -> dict[str, int]:
-    """Aggregate stat-card counts from the storage backend.
+def _compute_stats(storage: Storage, filters: dict[str, str]) -> dict[str, int]:
+    """Aggregate stat-card counts over the **filtered** result set.
 
-    Mirrors :func:`bug_fab.routers.viewer._compute_stats` so the Flask
-    viewer renders the same five-card stat row the FastAPI reference
-    does. Each filter is one ``list_reports`` call with ``page_size=1``
-    purely for the total — the items are discarded.
+    Mirrors :func:`bug_fab.routers.viewer._compute_stats`: each of the
+    four lifecycle states is counted within the active ``filters`` with
+    its own ``status`` substituted in, so a severity/module/environment
+    filter narrows every card. The fifth ``total`` key (the filtered
+    count with no status constraint) feeds the HTML viewer's "Total"
+    card; the JSON list endpoint strips it. Each call uses
+    ``page_size=1`` purely for the total — the items are discarded.
     """
     stats: dict[str, int] = {}
     for state in ("open", "investigating", "fixed", "closed"):
-        _, total = run_sync(storage.list_reports({"status": state}, page=1, page_size=1))
+        _, total = run_sync(storage.list_reports({**filters, "status": state}, page=1, page_size=1))
         stats[state] = total
-    _, total = run_sync(storage.list_reports({}, page=1, page_size=1))
+    _, total = run_sync(storage.list_reports(filters, page=1, page_size=1))
     stats["total"] = total
     return stats
 
@@ -245,10 +247,15 @@ def make_blueprint(
     # injecting a fake or for consumers wrapping the call site with
     # custom retry logic).
     if webhook_sync is None and settings.webhook_enabled and settings.webhook_url:
+        # Full retry/DLQ wiring, mirroring the FastAPI router's configure()
+        # — the delivery guarantees must not change by host framework.
         webhook_sync = WebhookSync(
             settings.webhook_url,
             headers=settings.webhook_headers,
             timeout_seconds=settings.webhook_timeout_seconds,
+            max_attempts=settings.webhook_max_attempts,
+            retry_backoff_seconds=settings.webhook_retry_backoff_seconds,
+            dlq_dir=settings.webhook_dlq_dir or None,
         )
 
     # Per-IP rate limiter — opt-in via ``settings.rate_limit_enabled``.
@@ -298,7 +305,9 @@ def make_blueprint(
     @bp.post("/bug-reports")
     def submit_bug_report() -> tuple[Response, int]:
         """Persist a new bug report per ``docs/PROTOCOL.md`` § Intake."""
-        if rate_limiter is not None and not rate_limiter.check(_client_ip()):
+        if rate_limiter is not None and not rate_limiter.check(
+            _client_ip(settings.rate_limit_trusted_proxies)
+        ):
             return _error(
                 "rate_limited",
                 (
@@ -308,6 +317,24 @@ def make_blueprint(
                 429,
                 retry_after_seconds=settings.rate_limit_window_seconds,
             )
+
+        # Pre-parse size guard: reject by declared Content-Length before
+        # touching request.form/request.files, which parse the body lazily
+        # on first access. A missing header falls through to the precise
+        # per-field caps in validate_payload.
+        declared_length = request.content_length
+        if declared_length is not None:
+            max_request = max_request_bytes(
+                settings.max_upload_mb * 1024 * 1024,
+                settings.max_metadata_kb * 1024,
+            )
+            if declared_length > max_request:
+                return _error(
+                    "payload_too_large",
+                    f"Request body exceeds maximum size of {max_request} bytes",
+                    413,
+                    limit_bytes=max_request,
+                )
 
         metadata_raw = request.form.get("metadata")
         screenshot_file = request.files.get("screenshot")
@@ -330,9 +357,17 @@ def make_blueprint(
                 screenshot_content_type=(screenshot_file.mimetype or "image/png"),
                 request_user_agent=request.headers.get("User-Agent"),
                 max_screenshot_bytes=max_bytes,
+                max_metadata_bytes=settings.max_metadata_kb * 1024,
             )
         except PayloadTooLarge as exc:
-            return _error("payload_too_large", exc.message, 413, limit_bytes=max_bytes)
+            # The exception says which cap tripped — the metadata cap and
+            # the screenshot cap differ.
+            return _error(
+                "payload_too_large",
+                exc.message,
+                413,
+                limit_bytes=exc.limit_bytes if exc.limit_bytes is not None else max_bytes,
+            )
         except UnsupportedMediaType as exc:
             return _error("unsupported_media_type", exc.message, 415)
         except IntakeValidationError as exc:
@@ -437,7 +472,7 @@ def make_blueprint(
             environment=request.args.get("environment"),
         )
         items, total = run_sync(storage.list_reports(filters, page, effective_page_size))
-        stats = _compute_stats(storage)
+        stats = _compute_stats(storage, filters)
         total_pages = max((total + effective_page_size - 1) // effective_page_size, 1)
         return render_template(
             "list.html",
@@ -476,7 +511,7 @@ def make_blueprint(
         )
         items, total = run_sync(storage.list_reports(filters, page, effective_page_size))
         # Compute stats for the protocol's documented response shape.
-        stats = _compute_stats(storage)
+        stats = _compute_stats(storage, filters)
         # The protocol's list response includes ``stats`` — see
         # PROTOCOL.md § GET /reports. The FastAPI reference's
         # BugReportListResponse model omits it (a v0.1 known-gap); the

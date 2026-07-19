@@ -42,7 +42,6 @@ from django.http import (
     FileResponse,
     HttpRequest,
     HttpResponse,
-    HttpResponseNotAllowed,
     JsonResponse,
 )
 from django.shortcuts import render
@@ -57,6 +56,7 @@ from bug_fab.intake import (
     PayloadTooLarge,
     UnsupportedMediaType,
     UnsupportedProtocolVersion,
+    max_request_bytes,
     validate_payload,
 )
 from bug_fab.intake import (
@@ -96,6 +96,18 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_SCREENSHOT_BYTES = 10 * 1024 * 1024
 
 
+def _max_metadata_bytes() -> int:
+    """Resolve the metadata byte cap from ``BUG_FAB_MAX_METADATA_KB`` (or 256 KiB).
+
+    Delegates to ``Settings.from_env`` so the default and parse rules stay
+    identical to the FastAPI and Flask adapters — a cap that differs per
+    adapter is the class of bug this phase exists to close.
+    """
+    from bug_fab.config import Settings
+
+    return Settings.from_env().max_metadata_kb * 1024
+
+
 def _max_upload_bytes() -> int:
     """Resolve the screenshot byte cap from env (or the default)."""
     raw = os.environ.get("BUG_FAB_MAX_UPLOAD_BYTES")
@@ -121,11 +133,16 @@ def _redact_pii_enabled() -> bool:
     return Settings.from_env().redact_pii
 
 
-def _err(code: str, detail: Any, http_status: int) -> JsonResponse:
-    """Return the protocol-standard ``{"error", "detail"}`` envelope."""
+def _err(code: str, detail: Any, http_status: int, limit_bytes: int | None = None) -> JsonResponse:
+    """Return the protocol-standard ``{"error", "detail"}`` envelope.
+
+    ``limit_bytes`` overrides the value attached to a ``payload_too_large``
+    body — the pre-parse total-request guard reports the whole-body cap,
+    while the per-field screenshot check reports the screenshot cap.
+    """
     body: dict[str, Any] = {"error": code, "detail": detail}
     if code == "payload_too_large":
-        body["limit_bytes"] = _max_upload_bytes()
+        body["limit_bytes"] = limit_bytes if limit_bytes is not None else _max_upload_bytes()
     return JsonResponse(body, status=http_status)
 
 
@@ -185,13 +202,22 @@ VIEWER_PERMISSIONS: dict[str, bool] = {
 }
 
 
-def _compute_stats(storage: DjangoORMStorage) -> dict[str, int]:
-    """Aggregate stat-card counts by status across non-archived reports."""
+def _compute_stats(storage: DjangoORMStorage, filters: dict[str, str]) -> dict[str, int]:
+    """Aggregate stat-card counts over the **filtered** result set.
+
+    Matches the reference (`bug_fab.routers.viewer._compute_stats`): each
+    of the four lifecycle states is counted within the active ``filters``
+    with its own ``status`` substituted in, so a severity/module/
+    environment filter narrows every card. A fifth ``total`` key (the
+    filtered count with no status constraint) feeds the HTML viewer's
+    "Total" stat card; the JSON list endpoint strips it, since the
+    envelope's top-level ``total`` is already authoritative there.
+    """
     stats: dict[str, int] = {}
     for state in ("open", "investigating", "fixed", "closed"):
-        _, total = storage.list_reports({"status": state}, page=1, page_size=1)
+        _, total = storage.list_reports({**filters, "status": state}, page=1, page_size=1)
         stats[state] = total
-    _, total = storage.list_reports({}, page=1, page_size=1)
+    _, total = storage.list_reports(filters, page=1, page_size=1)
     stats["total"] = total
     return stats
 
@@ -217,6 +243,25 @@ def intake_view(request: HttpRequest) -> HttpResponse:
     :func:`bug_fab.adapters.django.github_sync.create_issue` (best-effort,
     failures logged not raised).
     """
+    # Pre-parse size guard: reject by declared Content-Length before
+    # request.POST/request.FILES trigger body parsing. A missing or
+    # non-integer header falls through to the precise per-field caps.
+    declared_length = request.META.get("CONTENT_LENGTH")
+    if declared_length:
+        try:
+            declared = int(declared_length)
+        except ValueError:
+            declared = -1
+        if declared >= 0:
+            max_request = max_request_bytes(_max_upload_bytes(), _max_metadata_bytes())
+            if declared > max_request:
+                return _err(
+                    "payload_too_large",
+                    f"Request body exceeds maximum size of {max_request} bytes",
+                    413,
+                    limit_bytes=max_request,
+                )
+
     metadata_raw = request.POST.get("metadata")
     screenshot_file = request.FILES.get("screenshot")
     if not metadata_raw or screenshot_file is None:
@@ -230,9 +275,12 @@ def intake_view(request: HttpRequest) -> HttpResponse:
             screenshot_content_type=getattr(screenshot_file, "content_type", None) or "image/png",
             request_user_agent=request.META.get("HTTP_USER_AGENT", ""),
             max_screenshot_bytes=_max_upload_bytes(),
+            max_metadata_bytes=_max_metadata_bytes(),
         )
     except PayloadTooLarge as exc:
-        return _err("payload_too_large", str(exc), 413)
+        # The exception says which cap tripped — the metadata cap and the
+        # screenshot cap differ; _err falls back to the screenshot cap.
+        return _err("payload_too_large", str(exc), 413, limit_bytes=exc.limit_bytes)
     except UnsupportedMediaType as exc:
         return _err("unsupported_media_type", str(exc), 415)
     except UnsupportedProtocolVersion as exc:
@@ -329,7 +377,7 @@ def report_list_html(request: HttpRequest) -> HttpResponse:
     page_size = max(min(int(request.GET.get("page_size", "20") or 20), 200), 1)
     filters = _build_filters(request)
     items, total = storage.list_reports(filters, page, page_size)
-    stats = _compute_stats(storage)
+    stats = _compute_stats(storage, filters)
     total_pages = max((total + page_size - 1) // page_size, 1)
     context = {
         "items": [item.model_dump() for item in items],
@@ -357,14 +405,17 @@ def report_list_json(request: HttpRequest) -> HttpResponse:
     page_size = max(min(int(request.GET.get("page_size", "20") or 20), 200), 1)
     filters = _build_filters(request)
     items, total = storage.list_reports(filters, page, page_size)
-    stats = _compute_stats(storage)
+    stats = _compute_stats(storage, filters)
     return JsonResponse(
         {
             "items": [item.model_dump() for item in items],
             "total": total,
             "page": page,
             "page_size": page_size,
-            "stats": stats,
+            # Strip to the four lifecycle states — the ``total`` key that
+            # ``_compute_stats`` computes for the HTML "Total" card is not
+            # part of the JSON list contract (matches the reference + Flask).
+            "stats": {k: stats.get(k, 0) for k in ("open", "investigating", "fixed", "closed")},
         }
     )
 
@@ -559,8 +610,3 @@ def viewer_root(request: HttpRequest) -> HttpResponse:
     function-based view's import path.
     """
     return report_list_html(request)
-
-
-def _method_not_allowed(*methods: str) -> HttpResponseNotAllowed:
-    """Tiny wrapper so the URLconf can express ``HttpResponseNotAllowed`` cleanly."""
-    return HttpResponseNotAllowed(methods)

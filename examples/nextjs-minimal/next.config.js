@@ -3,9 +3,12 @@
 // WHY bodySizeLimit = '11mb': PROTOCOL.md caps screenshots at 10 MiB and
 // total request size at 11 MiB (10 MiB PNG + ~1 MiB metadata + multipart
 // overhead). Next.js's default server-action body-size limit is 1 MB,
-// which would silently 413 a normal high-DPI screenshot before our
-// Route Handler ever sees the bytes. The setting also affects formData()
-// parsing in Route Handlers under recent Next.js builds.
+// which would silently 413 a screenshot submitted through a Server
+// Action. NOTE: this knob bounds Server Actions ONLY — it does NOT
+// affect formData() parsing in App Router Route Handlers, which have no
+// framework body limit. The intake handler's own 10 MiB check is what
+// enforces the cap there; do not remove that guard on the strength of
+// this setting.
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {

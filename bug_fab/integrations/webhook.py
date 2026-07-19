@@ -185,7 +185,7 @@ class WebhookSync:
         """Dead-letter directory, or ``None`` when DLQ is disabled."""
         return self._dlq_dir
 
-    async def send(self, report: Mapping[str, Any]) -> bool:
+    async def send(self, report: Mapping[str, Any], *, persist_dead_letter: bool = True) -> bool:
         """POST the report payload to the configured webhook URL.
 
         ``report`` is expected to be the JSON-mode dump of
@@ -201,6 +201,13 @@ class WebhookSync:
         fails fast without retry. After all attempts are exhausted,
         the report is optionally persisted to ``dlq_dir`` so a later
         replay can re-drive it.
+
+        ``persist_dead_letter`` — set ``False`` when re-driving an
+        envelope that already lives in the DLQ (see
+        :func:`replay_dead_letters`). A failed replay must NOT write a
+        second dead letter: the original is still on disk and would be
+        joined by a new copy on every failed pass, so the DLQ grows
+        N → 2N → 4N against a receiver that stays down.
 
         Returns ``True`` on a 2xx response, ``False`` on terminal
         failure. The call always returns — exceptions are caught and
@@ -222,8 +229,9 @@ class WebhookSync:
             if attempt < self._max_attempts:
                 await asyncio.sleep(self._backoff * (2 ** (attempt - 1)))
         # All attempts exhausted (or permanent failure on first try):
-        # write to DLQ if configured.
-        self._persist_dead_letter(report, last_error)
+        # write to DLQ if configured and not already replaying from it.
+        if persist_dead_letter:
+            self._persist_dead_letter(report, last_error)
         return False
 
     async def _attempt_once(self, report: Mapping[str, Any], attempt: int) -> tuple[str, str]:
@@ -351,7 +359,9 @@ async def replay_dead_letters(
             )
             stats["malformed"] += 1
             continue
-        ok = await sync.send(report)
+        # persist_dead_letter=False: this envelope is already in the DLQ.
+        # Re-persisting on a failed replay is the C6 geometric-growth bug.
+        ok = await sync.send(report, persist_dead_letter=False)
         if ok:
             stats["succeeded"] += 1
             if delete_on_success:

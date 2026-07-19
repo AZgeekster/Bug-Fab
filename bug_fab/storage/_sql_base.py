@@ -18,15 +18,15 @@ import contextlib
 import json
 import logging
 import os
-import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 from sqlalchemy import Engine, func, select, text, update
 from sqlalchemy.orm import Session
 
+from bug_fab._report_id import REPORT_ID_RE
 from bug_fab.schemas import (
     BugReportContext,
     BugReportDetail,
@@ -49,7 +49,7 @@ from ._models import (
 
 logger = logging.getLogger(__name__)
 
-_REPORT_ID_RE = re.compile(r"^bug-[A-Za-z]?\d{3,}$")
+_REPORT_ID_RE = REPORT_ID_RE
 _ARCHIVE_SUBDIR = "archive"
 
 
@@ -59,11 +59,6 @@ class StorageError(Exception):
 
 def _utcnow() -> datetime:
     return datetime.now(tz=timezone.utc)
-
-
-def _utcnow_iso() -> str:
-    """ISO-8601 UTC string used for lifecycle ``at`` and timestamp fields."""
-    return _utcnow().isoformat()
 
 
 def _validate_severity_for_write(severity: str | None) -> None:
@@ -104,12 +99,6 @@ class SqlStorageBase(Storage):
     dialect-specific next-id strategy. Everything else — CRUD, lifecycle
     audit, bulk operations, status workflow — lives here.
     """
-
-    #: Whether the dialect supports ``RETURNING`` from ``INSERT`` /
-    #: ``UPDATE`` clauses. Postgres yes; SQLite >= 3.35 yes; we keep it
-    #: portable by sticking to ORM patterns and avoiding ``RETURNING`` in
-    #: hand-rolled SQL.
-    supports_returning: ClassVar[bool] = False
 
     def __init__(self, engine: Engine, screenshot_dir: Path) -> None:
         self.engine = engine
@@ -363,7 +352,7 @@ class SqlStorageBase(Storage):
                 select(func.count()).select_from(BugReport).where(BugReport.archived_at.is_(None))
             )
 
-            for key in ("status", "severity", "module"):
+            for key in ("status", "severity", "module", "environment"):
                 wanted = (filters or {}).get(key)
                 if wanted:
                     column = getattr(BugReport, key)
@@ -385,10 +374,15 @@ class SqlStorageBase(Storage):
                     | func.lower(BugReport.id).like(needle)
                 )
 
-            # Note: ``report_type`` is not stored as a typed column in v0.1 —
-            # it lives in ``metadata_json``. Filtering on it would force a
-            # full scan + JSON parse, so we silently ignore the filter at the
-            # SQL layer (matches FileStorage tolerance).
+            # Divergence, documented: ``report_type`` is not a typed column
+            # in v0.1 — it lives in ``metadata_json``. Filtering on it would
+            # force a full scan + JSON parse, so the SQL backend ignores a
+            # ``report_type`` filter. The file backend DOES honor it (it is a
+            # denormalized index field there), so the two backends differ on
+            # this one key. ``report_type`` is not exposed as a viewer query
+            # parameter, so this divergence is unreachable from the HTTP
+            # surface; a consumer calling ``list_reports`` directly should not
+            # rely on ``report_type`` filtering against a SQL backend.
 
             total = int(session.execute(count_stmt).scalar_one())
 

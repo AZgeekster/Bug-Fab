@@ -102,6 +102,7 @@ class BugFabJpaConfiguration {
     @Bean
     fun jpaStorage(
         repository: BugFabReportRepository,
+        counterRepository: BugFabIdCounterRepository,
         properties: BugFabProperties,
-    ): Storage = JpaStorage(repository, properties.idPrefix)
+    ): Storage = JpaStorage(repository, counterRepository, properties.idPrefix)
 }

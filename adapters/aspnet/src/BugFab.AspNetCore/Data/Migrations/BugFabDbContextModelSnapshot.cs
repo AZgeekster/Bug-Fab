@@ -17,6 +17,22 @@ namespace BugFab.AspNetCore.Data.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "8.0.10");
 
+            modelBuilder.Entity("BugFab.AspNetCore.Data.Entities.BugFabIdCounter", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("id");
+
+                    b.Property<long>("LastValue")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("last_value");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("bug_fab_id_counter");
+                });
+
             modelBuilder.Entity("BugFab.AspNetCore.Data.Entities.BugReport", b =>
                 {
                     b.Property<string>("Id")

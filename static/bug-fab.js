@@ -144,6 +144,17 @@
   /** Whether buffer monkey-patches have been installed. */
   let bufferInstalled = false;
 
+  /**
+   * Pre-patch originals + listener references, kept so destroy() can put
+   * everything back. Without these, an SPA that unmounts Bug-Fab on
+   * logout keeps capturing console output and window errors into the
+   * buffers, which a later re-init would then submit.
+   */
+  let __origConsoleError = null;
+  let __origConsoleWarn = null;
+  let __onWindowError = null;
+  let __onUnhandledRejection = null;
+
   /** Resolved base URL (where this script was loaded from). */
   let resolvedBaseUrl = null;
 
@@ -802,6 +813,8 @@
 
     const origError = console.error;
     const origWarn = console.warn;
+    __origConsoleError = origError;
+    __origConsoleWarn = origWarn;
 
     console.error = function (...args) {
       pushError({
@@ -823,16 +836,17 @@
       return origWarn.apply(console, args);
     };
 
-    window.addEventListener("error", (event) => {
+    __onWindowError = (event) => {
       pushError({
         level: "error",
         message: `${event.message || "Unknown error"} at ${event.filename || "unknown"}:${event.lineno || 0}`,
         stack: (event.error && event.error.stack) || "",
         timestamp: new Date().toISOString(),
       });
-    });
+    };
+    window.addEventListener("error", __onWindowError);
 
-    window.addEventListener("unhandledrejection", (event) => {
+    __onUnhandledRejection = (event) => {
       const reason = event.reason;
       let message = "Unhandled promise rejection: ";
       let stack = "";
@@ -851,7 +865,8 @@
         stack,
         timestamp: new Date().toISOString(),
       });
-    });
+    };
+    window.addEventListener("unhandledrejection", __onUnhandledRejection);
 
     // Wrap fetch for network logging. The submit POST uses __origFetch
     // directly, so it won't be captured here.
@@ -2327,6 +2342,27 @@
     badge = null;
     closeOverlay();
     if (__origFetch) window.fetch = __origFetch;
+    // Restore console.* and detach the global error listeners too —
+    // leaving them patched kept capturing output after an SPA unmounted
+    // Bug-Fab, and a later re-init could submit it.
+    if (__origConsoleError) {
+      console.error = __origConsoleError;
+      __origConsoleError = null;
+    }
+    if (__origConsoleWarn) {
+      console.warn = __origConsoleWarn;
+      __origConsoleWarn = null;
+    }
+    if (__onWindowError) {
+      window.removeEventListener("error", __onWindowError);
+      __onWindowError = null;
+    }
+    if (__onUnhandledRejection) {
+      window.removeEventListener("unhandledrejection", __onUnhandledRejection);
+      __onUnhandledRejection = null;
+    }
+    clearBuffers();
+    bufferInstalled = false;
     userDisabled = false;
     initialized = false;
   };

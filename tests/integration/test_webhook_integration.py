@@ -20,7 +20,6 @@ uses. The tests verify that:
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any
 
@@ -33,10 +32,12 @@ from bug_fab.integrations.webhook import (
     WebhookSync,
     parse_headers_env,
 )
-
-
-def _run(coro):  # type: ignore[no-untyped-def]
-    return asyncio.new_event_loop().run_until_complete(coro)
+from tests._helpers import (
+    install_capturing_async_client,
+)
+from tests._helpers import (
+    run_coro as _run,
+)
 
 
 def _make_sync_with_transport(
@@ -52,36 +53,9 @@ def _make_sync_with_transport(
     ``(sync, captured_requests)``; the captured list is appended to in
     order so post-hoc assertions can inspect headers and body.
     """
-    captured: list[httpx.Request] = []
-
-    def _wrapped(request: httpx.Request) -> httpx.Response:
-        captured.append(request)
-        return handler(request)
-
-    transport = httpx.MockTransport(_wrapped)
-
-    import bug_fab.integrations.webhook as webhook_module
-
-    real_client = httpx.AsyncClient
-
-    class _MockClient(real_client):  # type: ignore[misc, valid-type]
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            kwargs["transport"] = transport
-            super().__init__(*args, **kwargs)
-
-    webhook_module.httpx.AsyncClient = _MockClient  # type: ignore[attr-defined]
+    captured = install_capturing_async_client(handler)
     sync = WebhookSync(url, headers=headers, timeout_seconds=timeout_seconds)
     return sync, captured
-
-
-@pytest.fixture(autouse=True)
-def _restore_httpx_async_client():  # type: ignore[no-untyped-def]
-    """Restore ``httpx.AsyncClient`` after every test (defensive)."""
-    import bug_fab.integrations.webhook as webhook_module
-
-    original = webhook_module.httpx.AsyncClient
-    yield
-    webhook_module.httpx.AsyncClient = original
 
 
 def _sample_report() -> dict[str, Any]:
@@ -421,17 +395,7 @@ def test_send_logs_warning_on_non_2xx(caplog: pytest.LogCaptureFixture) -> None:
 
 def _install_transport(handler) -> None:  # type: ignore[no-untyped-def]
     """Patch httpx.AsyncClient to use the given handler. Restored by fixture."""
-    transport = httpx.MockTransport(handler)
-    import bug_fab.integrations.webhook as webhook_module
-
-    real_client = webhook_module.httpx.AsyncClient
-
-    class _MockClient(real_client):  # type: ignore[misc, valid-type]
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            kwargs["transport"] = transport
-            super().__init__(*args, **kwargs)
-
-    webhook_module.httpx.AsyncClient = _MockClient  # type: ignore[attr-defined]
+    install_capturing_async_client(handler)
 
 
 def test_max_attempts_default_is_one_no_retry() -> None:
@@ -640,6 +604,13 @@ def test_replay_dead_letters_keeps_failed_envelopes(tmp_path) -> None:  # type: 
     assert stats == {"attempted": 1, "succeeded": 0, "failed": 1, "malformed": 0}
     # Envelope stays — operator must decide whether to retry later or purge.
     assert (dlq / fname).exists()
+    # C6: a failed replay must NOT write a *second* dead letter. Asserting the
+    # original survives is not enough — the bug left it in place and added a
+    # new file. Two more replays against the still-down receiver must keep the
+    # count at exactly one, or the DLQ grows N → 2N → 4N.
+    for _ in range(2):
+        _run(replay_dead_letters(sync))
+    assert sorted(p.name for p in dlq.glob("*.json")) == [fname]
 
 
 def test_replay_dead_letters_returns_zero_stats_when_dir_missing() -> None:

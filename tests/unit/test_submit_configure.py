@@ -19,7 +19,6 @@ from bug_fab._rate_limit import RateLimiter
 from bug_fab.config import Settings
 from bug_fab.routers.submit import (
     _client_ip,
-    _is_png,
     configure,
     get_github_sync,
     get_rate_limiter,
@@ -130,14 +129,21 @@ def test_configure_explicit_github_sync_wins() -> None:
 # -----------------------------------------------------------------------------
 
 
-def test_client_ip_uses_x_forwarded_for_first_hop() -> None:
+def test_client_ip_honors_forwarded_for_from_trusted_peer() -> None:
     request = _make_request(headers={"x-forwarded-for": "1.2.3.4, 5.6.7.8"})
-    assert _client_ip(request) == "1.2.3.4"
+    # The default peer is 127.0.0.1; trusting it lets the header through.
+    assert _client_ip(request, frozenset({"127.0.0.1"})) == "1.2.3.4"
+
+
+def test_client_ip_ignores_forwarded_for_from_untrusted_peer() -> None:
+    request = _make_request(headers={"x-forwarded-for": "1.2.3.4, 5.6.7.8"})
+    # Secure default: an untrusted peer's forwarded header is ignored.
+    assert _client_ip(request, frozenset()) == "127.0.0.1"
 
 
 def test_client_ip_falls_back_to_request_client_host() -> None:
     request = _make_request(host="9.9.9.9")
-    assert _client_ip(request) == "9.9.9.9"
+    assert _client_ip(request, frozenset({"*"})) == "9.9.9.9"
 
 
 def test_client_ip_returns_unknown_when_no_data() -> None:
@@ -149,20 +155,4 @@ def test_client_ip_returns_unknown_when_no_data() -> None:
         "client": None,
     }
     request = Request(scope)
-    assert _client_ip(request) == "unknown"
-
-
-@pytest.mark.parametrize(
-    "payload,expected",
-    [
-        (b"\x89PNG\r\n\x1a\nrest", True),
-        (b"\xff\xd8\xff\x00rest", False),  # JPEG — rejected per PROTOCOL.md v0.1
-        (b"GIF89a", False),
-        (b"", False),
-        (b"random bytes", False),
-    ],
-)
-def test_is_png(payload: bytes, expected: bool) -> None:
-    """Only the PNG magic signature returns True; everything else (including
-    JPEG) is rejected. v0.1 locks the wire format to ``image/png``."""
-    assert _is_png(payload) is expected
+    assert _client_ip(request, frozenset({"*"})) == "unknown"

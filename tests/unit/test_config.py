@@ -28,6 +28,7 @@ def test_defaults_when_no_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
         "BUG_FAB_RATE_LIMIT_ENABLED",
         "BUG_FAB_RATE_LIMIT_MAX",
         "BUG_FAB_RATE_LIMIT_WINDOW_SECONDS",
+        "BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES",
         "BUG_FAB_VIEWER_ENABLED",
         "BUG_FAB_VIEWER_PAGE_SIZE",
         "BUG_FAB_GITHUB_ENABLED",
@@ -43,6 +44,7 @@ def test_defaults_when_no_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.rate_limit_enabled is False
     assert settings.rate_limit_max == 50
     assert settings.rate_limit_window_seconds == 3600
+    assert settings.rate_limit_trusted_proxies == frozenset()
     assert settings.viewer_enabled is True
     assert settings.viewer_page_size == 20
     assert settings.github_enabled is False
@@ -114,6 +116,15 @@ def test_str_env_empty_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BUG_FAB_GITHUB_PAT", "")
     settings = Settings.from_env()
     assert settings.github_pat == ""
+
+
+def test_trusted_proxies_parses_comma_separated_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Comma-separated proxies parse into a set with surrounding blanks trimmed."""
+    monkeypatch.setenv("BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES", " 10.0.0.1 , 10.0.0.2 ,, ")
+    settings = Settings.from_env()
+    assert settings.rate_limit_trusted_proxies == frozenset({"10.0.0.1", "10.0.0.2"})
 
 
 def test_full_env_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -45,6 +45,14 @@ def _env_str(name: str, default: str) -> str:
     return raw
 
 
+def _env_str_set(name: str) -> frozenset[str]:
+    """Parse a comma-separated env var into a set, dropping blank entries."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return frozenset()
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
+
+
 def _env_float(name: str, default: float) -> float:
     """Parse a float env var, falling back to the default on missing/invalid."""
     raw = os.environ.get(name)
@@ -74,6 +82,14 @@ class Settings:
     storage_dir: Path = field(default_factory=lambda: Path("./bug_reports"))
     id_prefix: str = ""
     max_upload_mb: int = 10
+    #: Hard cap on the ``metadata`` JSON string, in kibibytes. Only the
+    #: screenshot was bounded before; ``metadata`` went straight to
+    #: ``json.loads`` with no limit, so a tiny PNG plus a several-hundred-MB
+    #: metadata string was parsed into memory and persisted. 256 KiB is far
+    #: above any legitimate report (the largest fields are the console-error
+    #: and network-log buffers) while closing the amplification. Raise it if
+    #: a consumer genuinely captures larger buffers.
+    max_metadata_kb: int = 256
     #: Opt-in PII redaction over the auto-captured buffers + free-text
     #: fields. Off by default to preserve back-compat; flip on for any
     #: public-facing deployment. See ``bug_fab._redact`` for the
@@ -84,6 +100,14 @@ class Settings:
     rate_limit_enabled: bool = False
     rate_limit_max: int = 50
     rate_limit_window_seconds: int = 3600
+    #: Direct-peer addresses allowed to supply ``X-Forwarded-For`` for the
+    #: rate-limit key. ``X-Forwarded-For`` is client-controlled and spoofable,
+    #: so it is honored only when the connecting peer is in this set; empty
+    #: (the secure default) meters by the direct peer address and ignores the
+    #: header entirely. The wildcard ``"*"`` trusts every peer — set it only
+    #: when every request is terminated behind a proxy you control. See
+    #: ``bug_fab._rate_limit.resolve_client_ip``.
+    rate_limit_trusted_proxies: frozenset[str] = frozenset()
     viewer_enabled: bool = True
     viewer_page_size: int = 20
     github_enabled: bool = False
@@ -142,10 +166,12 @@ class Settings:
             "storage_dir": Path(_env_str("BUG_FAB_STORAGE_DIR", "./bug_reports")),
             "id_prefix": _env_str("BUG_FAB_ID_PREFIX", ""),
             "max_upload_mb": _env_int("BUG_FAB_MAX_UPLOAD_MB", 10),
+            "max_metadata_kb": _env_int("BUG_FAB_MAX_METADATA_KB", 256),
             "redact_pii": _env_bool("BUG_FAB_REDACT_PII", False),
             "rate_limit_enabled": _env_bool("BUG_FAB_RATE_LIMIT_ENABLED", False),
             "rate_limit_max": _env_int("BUG_FAB_RATE_LIMIT_MAX", 50),
             "rate_limit_window_seconds": _env_int("BUG_FAB_RATE_LIMIT_WINDOW_SECONDS", 3600),
+            "rate_limit_trusted_proxies": _env_str_set("BUG_FAB_RATE_LIMIT_TRUSTED_PROXIES"),
             "viewer_enabled": _env_bool("BUG_FAB_VIEWER_ENABLED", True),
             "viewer_page_size": _env_int("BUG_FAB_VIEWER_PAGE_SIZE", 20),
             "github_enabled": _env_bool("BUG_FAB_GITHUB_ENABLED", False),

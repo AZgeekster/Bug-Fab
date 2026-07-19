@@ -125,20 +125,14 @@ def client():
 
 @pytest.fixture()
 def png_bytes() -> bytes:
-    """Return a minimal valid PNG (8-byte signature + IHDR + IDAT + IEND).
+    """Return a minimal valid PNG (delegates to the shared test builder).
 
-    Hand-crafted so the tests don't depend on Pillow being installed.
+    Hand-crafted so the tests don't depend on Pillow being installed —
+    this module used to carry its own 1x1 literal, one of three copies.
     """
-    # 1x1 transparent PNG — standard reference bytes.
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        b"\x00\x00\x00\rIHDR"
-        b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
-        b"\x1f\x15\xc4\x89"
-        b"\x00\x00\x00\rIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
-        b"\r\n-\xb4"
-        b"\x00\x00\x00\x00IEND\xaeB`\x82"
-    )
+    from tests._helpers import make_test_png
+
+    return make_test_png(1, 1)
 
 
 @pytest.fixture()

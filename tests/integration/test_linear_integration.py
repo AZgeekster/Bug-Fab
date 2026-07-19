@@ -18,9 +18,7 @@ tests.
 
 from __future__ import annotations
 
-import asyncio
 import json
-import os
 from typing import Any
 
 import httpx
@@ -36,14 +34,17 @@ from bug_fab.integrations.linear import (
     _build_description,
     _priority_for_severity,
 )
+from tests._helpers import (
+    clear_env_prefix,
+    install_capturing_async_client,
+)
+from tests._helpers import (
+    run_coro as _run,
+)
 
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
-
-
-def _run(coro):  # type: ignore[no-untyped-def]
-    return asyncio.new_event_loop().run_until_complete(coro)
 
 
 def _sample_report() -> dict[str, Any]:
@@ -97,13 +98,7 @@ def _make_sync_with_transport(
     viewer_base_url: str = "",
     default_label_ids: list[str] | None = None,
 ) -> tuple[LinearSync, list[httpx.Request]]:
-    captured: list[httpx.Request] = []
-
-    def _wrapped(request: httpx.Request) -> httpx.Response:
-        captured.append(request)
-        return handler(request)
-
-    transport = httpx.MockTransport(_wrapped)
+    captured = install_capturing_async_client(handler)
     sync = LinearSync(
         api_key=api_key,
         team_id=team_id,
@@ -111,36 +106,13 @@ def _make_sync_with_transport(
         viewer_base_url=viewer_base_url,
         default_label_ids=default_label_ids,
     )
-
-    import bug_fab.integrations.linear as linear_module
-
-    real_client = httpx.AsyncClient
-
-    class _MockClient(real_client):  # type: ignore[misc, valid-type]
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            kwargs["transport"] = transport
-            super().__init__(*args, **kwargs)
-
-    linear_module.httpx.AsyncClient = _MockClient  # type: ignore[attr-defined]
     return sync, captured
-
-
-@pytest.fixture(autouse=True)
-def _restore_httpx_async_client():  # type: ignore[no-untyped-def]
-    """Restore ``httpx.AsyncClient`` after every test."""
-    import bug_fab.integrations.linear as linear_module
-
-    original = linear_module.httpx.AsyncClient
-    yield
-    linear_module.httpx.AsyncClient = original
 
 
 @pytest.fixture
 def _clear_linear_env(monkeypatch):  # type: ignore[no-untyped-def]
     """Strip every ``BUG_FAB_LINEAR_*`` env var before the test runs."""
-    for key in list(os.environ):
-        if key.startswith("BUG_FAB_LINEAR_"):
-            monkeypatch.delenv(key, raising=False)
+    clear_env_prefix(monkeypatch, "BUG_FAB_LINEAR_")
     yield
 
 

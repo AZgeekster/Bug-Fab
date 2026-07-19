@@ -31,11 +31,18 @@ public static class IntakeEndpoint
 {
     public static RouteHandlerBuilder Map(IEndpointRouteBuilder app, BugFabOptions options)
     {
+        // Accepts metadata is ENFORCED for minimal APIs: a request whose
+        // Content-Type matches neither entry is rejected with an empty-body
+        // 415 before the handler runs. Both form envelopes are listed so a
+        // urlencoded body (which can never carry a file) reaches the handler
+        // and gets the protocol-mandated 400 "screenshot part is required"
+        // instead; anything else (e.g. application/json) still 415s in the
+        // handler's HasFormContentType check with the protocol envelope.
         return app.MapPost("/bug-reports", HandleAsync)
             .WithName("BugFab_Intake")
             .WithDisplayName("Bug-Fab Intake")
             .DisableAntiforgery()
-            .Accepts<IFormFile>("multipart/form-data");
+            .Accepts<IFormFile>("multipart/form-data", "application/x-www-form-urlencoded");
     }
 
     public static async Task<IResult> HandleAsync(

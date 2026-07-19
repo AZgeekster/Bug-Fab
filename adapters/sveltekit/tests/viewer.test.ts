@@ -233,3 +233,69 @@ describe('viewer handlers', () => {
   // tmpdir prefix avoids needing explicit teardown
   it.skip('cleanup', () => {});
 });
+
+describe('archived reports (FileStorage)', () => {
+  let dir: string;
+  let storage: FileStorage;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'bug-fab-sveltekit-archive-'));
+    storage = new FileStorage({ storageDir: dir });
+  });
+
+  it('archived reports stay reachable via include_archived', async () => {
+    const [id] = await seed(storage, 1);
+    await storage.updateStatus(id!, 'closed', 'test');
+    await storage.archiveReport(id!);
+
+    // Default listing hides archived reports…
+    const hidden = await storage.listReports({}, 1, 50);
+    expect(hidden.total).toBe(0);
+
+    // …but include_archived returns them. Archiving used to drop the
+    // report from the index entirely, so this returned nothing.
+    const shown = await storage.listReports({ include_archived: true }, 1, 50);
+    expect(shown.total).toBe(1);
+    expect(shown.items[0]!.id).toBe(id);
+
+    const detail = await storage.getReport(id!);
+    expect(detail).not.toBeNull();
+
+    // The screenshot must resolve into archive/ — the live copy is gone.
+    const shot = await storage.getScreenshotPath(id!);
+    expect(shot).not.toBeNull();
+    expect(shot!).toContain('archive');
+  });
+
+  it('a restart does not re-mint an archived report id', async () => {
+    const ids = await seed(storage, 3); // bug-001 … bug-003
+    await storage.updateStatus(ids[2]!, 'closed', 'test');
+    await storage.archiveReport(ids[2]!);
+
+    // Fresh instance on the same directory simulates a process restart.
+    // The loader used to skip archive/, so the counter re-seeded to 2 and
+    // the next save re-minted bug-003 — colliding with the archived one.
+    const restarted = new FileStorage({ storageDir: dir });
+    const { id: fourth } = await restarted.saveReport({
+      submission: {
+        protocol_version: '0.1',
+        title: 'After restart',
+        client_ts: '2026-04-30T12:00:00Z',
+        severity: 'low',
+        context: {}
+      },
+      serverUserAgent: 'TestUA',
+      screenshotBytes: PNG
+    });
+    expect(fourth).toBe('bug-004');
+  });
+
+  it('deleting an archived report removes its archive files', async () => {
+    const [id] = await seed(storage, 1);
+    await storage.updateStatus(id!, 'closed', 'test');
+    await storage.archiveReport(id!);
+    await storage.deleteReport(id!);
+    expect(await storage.getReport(id!)).toBeNull();
+    expect(await storage.getScreenshotPath(id!)).toBeNull();
+  });
+});

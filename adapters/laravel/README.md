@@ -92,7 +92,7 @@ Implements the v0.1 wire protocol surface end-to-end. Tested against the protoco
 - Server User-Agent captured from request header independently of any client-supplied value.
 - Lifecycle audit log: append-only, with `created` on submit and `status_changed` on every PUT.
 - Path-traversal guard on `{id}` route param (regex constrained at route + storage layers).
-- Per-IP rate limiting via `RateLimiter` facade (off by default).
+- Per-IP rate limiting via `RateLimiter` facade (off by default). The key is `$request->ip()` — raw `X-Forwarded-For` is deliberately not read, since a client rotating that header would mint a fresh bucket per request and defeat the limiter. Behind a reverse proxy, declare your proxies with Laravel's [trusted-proxy configuration](https://laravel.com/docs/requests#configuring-trusted-proxies) so `$request->ip()` resolves the real client; without it, metering is per-proxy.
 - File + Eloquent backends round-trip identically against the same endpoints.
 
 Not yet covered (out of v0.1 scope per `PROTOCOL.md`): `AuthAdapter` ABC, `Idempotency-Key`, GitHub Issues sync (stubbed). See `MIGRATION_NOTES.md` for trade-offs.

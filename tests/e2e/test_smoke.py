@@ -21,6 +21,8 @@ import httpx
 import pytest
 from playwright.sync_api import Page, expect
 
+from tests._helpers import make_test_png
+
 # Five seeded reports give the filter pills, bulk actions, and pagination
 # something to act on. Severities cover both ends of the enum.
 SEEDED = [
@@ -36,12 +38,7 @@ SEEDED = [
 def seeded_reports(app_server):
     base = app_server["base_url"]
     ids: list[str] = []
-    # Tiny 1x1 PNG.
-    png = (
-        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-        b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\xdac\xf8\x0f"
-        b"\x00\x01\x05\x01\x02 \x00\x01\x18\x05\x90\x14\x00\x00\x00\x00IEND\xaeB`\x82"
-    )
+    png = make_test_png(1, 1)
     with httpx.Client(base_url=base, timeout=10) as client:
         for s in SEEDED:
             metadata = {
@@ -448,3 +445,38 @@ def test_annotation_rect_tool_differs_from_freedraw(page: Page, app_server: dict
     page.keyboard.press("d")
     expect(page.locator("[data-bug-fab-tool='draw']")).to_have_attribute("aria-pressed", "true")
     assert not console_errors, console_errors
+
+
+def test_destroy_restores_console_and_stops_capture(page: Page, app_server) -> None:
+    """destroy() must unpatch console.* and detach the window error listeners.
+
+    Previously only ``window.fetch`` was restored — an SPA that unmounted
+    Bug-Fab on logout kept feeding console output into the capture buffers,
+    and a later re-init could submit it with an unrelated report. Output
+    emitted while destroyed must not surface in the re-initialized badge.
+    """
+    page.goto(app_server["base_url"] + "/")
+    expect(page.locator("button.bug-fab").first).to_be_visible(timeout=10_000)
+
+    assert page.evaluate("() => String(console.error).includes('pushError')"), (
+        "precondition: init() patches console.error with the capture wrapper"
+    )
+
+    restored = page.evaluate(
+        "() => { window.BugFab.destroy(); "
+        "return !String(console.error).includes('pushError') "
+        "&& !String(console.warn).includes('pushError'); }"
+    )
+    assert restored, "destroy() must restore the original console.error/console.warn"
+
+    # Anything logged while destroyed must not be captured by a later init.
+    page.evaluate(
+        "() => { console.error('leaked-while-destroyed'); "
+        "window.BugFab.init({ submitUrl: '/api/bug-reports' }); }"
+    )
+    expect(page.locator("button.bug-fab").first).to_be_visible(timeout=5_000)
+    badge_visible = page.evaluate(
+        "() => { const b = document.querySelector('.bug-fab-badge'); "
+        "return !!b && b.style.display !== 'none' && b.textContent !== ''; }"
+    )
+    assert not badge_visible, "console output emitted while destroyed leaked into the buffers"

@@ -14,33 +14,23 @@ intake endpoint stays at ``/bug-reports``.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import pytest
 
+from tests._helpers import baseline_metadata
+
 
 def _baseline_metadata(**overrides: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "protocol_version": "0.1",
+    defaults: dict[str, Any] = {
         "title": "Test viewer report",
-        "client_ts": "2026-04-29T12:00:00+00:00",
-        "report_type": "bug",
         "description": "viewer test seed",
-        "severity": "medium",
         "tags": ["viewer-test"],
-        "context": {
-            "url": "/x",
-            "module": "modA",
-            "user_agent": "client-ua/1.0",
-            "viewport_width": 1024,
-            "viewport_height": 768,
-            "console_errors": [],
-            "network_log": [],
-            "environment": "dev",
-        },
+        "context": {"url": "/x", "module": "modA", "user_agent": "client-ua/1.0"},
     }
-    payload.update(overrides)
-    return payload
+    defaults.update(overrides)
+    return baseline_metadata(**defaults)
 
 
 def _seed(client, tiny_png: bytes, **overrides: Any) -> str:
@@ -121,8 +111,11 @@ def test_detail_view_blocks_unsafe_url_schemes(
     # inside an HTML-escaped <span> per the safe-URL allowlist UX, but never
     # inside a clickable href="...".
     assert f'href="{context_url}"' not in body
-    # The Reproduce button is suppressed when the URL is unsafe.
-    assert ">Reproduce<" not in body and ">\n          Reproduce" not in body
+    # The Reproduce button is suppressed when the URL is unsafe. Match the
+    # element text whitespace-agnostically — the old exact-indentation match
+    # turned into a tautology on any template reindent, passing even if a
+    # live javascript: link regressed.
+    assert not re.search(r">\s*Reproduce\s*<", body)
 
 
 def test_detail_view_renders_safe_url_as_href(app_factory, tiny_png: bytes) -> None:
@@ -255,6 +248,60 @@ def test_reports_filter_by_severity(app_factory, tiny_png: bytes) -> None:
     response = client.get(f"{vp}/reports", params={"severity": "critical"})
     assert response.status_code == 200
     assert response.json()["total"] == 1
+
+
+def _context(environment: str) -> dict[str, Any]:
+    """A valid intake ``context`` with a chosen ``environment``.
+
+    ``environment`` reaches the stored report through ``context`` on the
+    real intake path (the top-level metadata field is not part of the
+    intake schema), so filter tests must set it here rather than on the
+    metadata root.
+    """
+    return {
+        "url": "/x",
+        "module": "modA",
+        "user_agent": "client-ua/1.0",
+        "viewport_width": 1024,
+        "viewport_height": 768,
+        "console_errors": [],
+        "network_log": [],
+        "environment": environment,
+    }
+
+
+def test_reports_filter_by_environment(app_factory, tiny_png: bytes) -> None:
+    """The `environment` filter narrows the list — it used to be a silent no-op."""
+    client = app_factory()
+    vp = _vp(client)
+    _seed(client, tiny_png, title="prod one", context=_context("production"))
+    _seed(client, tiny_png, title="staging one", context=_context("staging"))
+    response = client.get(f"{vp}/reports", params={"environment": "production"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["title"] == "prod one"
+
+
+def test_reports_stats_honor_active_filters(app_factory, tiny_png: bytes) -> None:
+    """`stats` counts the filtered result set, not the whole dataset.
+
+    Seed two `critical` reports (one moved to `fixed`) plus a `low` `open`
+    report. Filtering by `severity=critical` must report `open=1`, not the
+    unfiltered `open=2` — the contract in `schemas.BugReportListResponse`
+    says `stats` aggregates over the filtered set.
+    """
+    client = app_factory()
+    vp = _vp(client)
+    _seed(client, tiny_png, title="crit open", severity="critical")
+    crit_fixed = _seed(client, tiny_png, title="crit fixed", severity="critical")
+    _seed(client, tiny_png, title="low open", severity="low")
+    client.put(f"{vp}/reports/{crit_fixed}/status", json={"status": "fixed"})
+
+    body = client.get(f"{vp}/reports", params={"severity": "critical"}).json()
+    assert body["total"] == 2
+    stats = body["stats"]
+    assert stats == {"open": 1, "investigating": 0, "fixed": 1, "closed": 0}
 
 
 def test_reports_pagination(app_factory, tiny_png: bytes) -> None:

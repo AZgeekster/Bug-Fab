@@ -163,7 +163,7 @@ Adapters MUST capture the request-header `User-Agent` independently and MUST NOT
 | Metadata JSON | 256 KiB recommended | Console / network buffers dominate. Adapters SHOULD truncate or cap individual buffer entries (e.g., last 50 console errors, last 50 network entries) before payload assembly on the client side. |
 | Total request | 11 MiB recommended | Sum of caps + multipart overhead. Adapters MAY enforce stricter limits. |
 
-When a limit is exceeded, the adapter MUST return `413` with the documented error shape, including a `limit_bytes` field that names the actual cap.
+When a limit is exceeded, the adapter MUST return `413` with the documented error shape, including a `limit_bytes` field that names the actual cap. Adapters SHOULD check the request's declared `Content-Length` against the total-request cap and reject *before* buffering the body, so the cap protects the resource it bounds; the per-field caps still apply after parsing. A request without `Content-Length` (chunked transfer) is bounded only by the per-field caps and by the front-door server (reverse proxy, ASGI/WSGI limits).
 
 ### Response — `201 Created`
 
@@ -565,16 +565,19 @@ The lifecycle array is append-only. Adapters MUST NOT mutate or remove entries.
 
 Bug-Fab v0.1 ships **no auth abstraction**. Adapter implementers expose two routers (intake + viewer); consumers protect routes by mounting each router under a URL prefix that their existing auth middleware already covers.
 
+> ⚠️ **Security posture — the viewer is unauthenticated and fully permissioned by default.** Every first-party adapter (including the reference) ships `viewer_permissions.can_edit_status`, `can_delete`, and `can_bulk` defaulting to `true`, and no adapter enforces any authentication of its own. If you mount the viewer router without your own auth middleware in front of it, **anyone who can reach the URL can list, edit, delete, and bulk-archive every report.** This is a deliberate v0.1 design choice — Bug-Fab delegates authentication entirely to the mount point so it composes with whatever auth you already run — but it means **securing the viewer is the consumer's responsibility, and the safe default is not the shipped default.** Mount the viewer behind auth; treat `viewer_permissions` as defense-in-depth on top of that, not as a substitute for it.
+
 | Pattern | Consequence |
 |---------|-------------|
-| Mount intake at `/api/`, viewer at `/admin/` | Open submit, admin-only viewer. The most common pattern. |
-| Mount both at `/admin/` | Auth required for both submit and view. Suitable for internal tools. |
-| Mount both unprotected | No auth. Suitable for public POCs and hobby projects. |
+| Mount intake at `/api/`, viewer at `/admin/` behind your auth | Open submit, admin-only viewer. The most common pattern, and the recommended one. |
+| Mount both at `/admin/` behind your auth | Auth required for both submit and view. Suitable for internal tools. |
+| Mount the viewer unprotected | **No auth — the whole report store is world-readable and world-mutable.** Acceptable ONLY for public POCs / hobby projects with nothing sensitive in them. |
 
 ### What this implies for v0.1
 
 - The viewer **cannot display submitter identity** because the protocol has no way to ask "who is logged in." Consumers wanting submitter info MUST include it in the `reporter` field of the submitted metadata.
-- The viewer's `viewer_permissions` config (`can_edit_status`, `can_delete`, `can_bulk`) gates which **endpoints** are mounted on the viewer router. It is not a per-user check — that arrives with `AuthAdapter` in v0.2.
+- The viewer's `viewer_permissions` config (`can_edit_status`, `can_delete`, `can_bulk`) gates which **endpoints** are mounted on the viewer router. It is a coarse feature flag, **not** a per-user check — that arrives with `AuthAdapter` in v0.2. Setting them `false` removes an endpoint for *everyone*; it does not distinguish an admin from an anonymous caller.
+- The defaults are `true` (all viewer endpoints enabled) so the viewer is fully functional out of the box once it is mounted behind auth. If you must expose the viewer without auth, set the destructive permissions to `false` to reduce blast radius — but understand this is a mitigation, not a fix.
 
 The proper `AuthAdapter` ABC is deferred to v0.2 — see [`ROADMAP.md`](./ROADMAP.md).
 

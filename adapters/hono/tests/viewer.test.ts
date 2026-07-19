@@ -279,6 +279,24 @@ describe('viewer routes', () => {
     expect(text).toMatch(/<!DOCTYPE html>/i)
     expect(text).toContain('Bug-Fab Reports')
   })
+
+  it('list row links resolve to the detail page (no 404 on click)', async () => {
+    const id = await seedReport(app)
+    const listRes = await app.fetch(new Request('http://test/admin/bug-reports/'))
+    const listHtml = await listRes.text()
+    // The row link must target the detail route `{id}/view`, not `{id}`,
+    // which has no route and 404s. `detailUrlBase` is `.`, so the rendered
+    // href is `./{id}/view` relative to the list page.
+    expect(listHtml).toContain(`./${id}/view`)
+
+    // Follow the link exactly as a browser would resolve it against the
+    // trailing-slash list URL.
+    const detailRes = await app.fetch(
+      new Request(`http://test/admin/bug-reports/${id}/view`),
+    )
+    expect(detailRes.status).toBe(200)
+    expect(detailRes.headers.get('content-type')).toMatch(/text\/html/)
+  })
 })
 
 describe('config validation', () => {

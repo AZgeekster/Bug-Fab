@@ -92,7 +92,7 @@ defmodule BugFab.IntakeRouter do
   end
 
   match _ do
-    Errors.send(conn, 404, "validation_error", "Not Found")
+    Errors.send(conn, 404, "not_found", "Not Found")
   end
 
   # ----- helpers -----

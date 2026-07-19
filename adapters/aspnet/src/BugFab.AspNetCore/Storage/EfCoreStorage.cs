@@ -143,7 +143,12 @@ public sealed class EfCoreStorage : IStorage
         var total = await query.CountAsync(ct).ConfigureAwait(false);
 
         var rows = await query
-            .OrderByDescending(x => x.ReceivedAt)
+            // IdSequence is minted monotonically at insert, so descending
+            // sequence IS received order. Ordering by ReceivedAt directly is
+            // not translatable on SQLite (EF cannot ORDER BY DateTimeOffset
+            // there) — GET /reports 500'd on the SQLite example while the
+            // InMemory-provider tests stayed green.
+            .OrderByDescending(x => x.IdSequence)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync(ct)
@@ -348,38 +353,67 @@ public sealed class EfCoreStorage : IStorage
     /// <summary>
     /// Name of the database sequence that backs the HiLo-managed ID
     /// <summary>
-    /// Reserve the next ID-sequence value via <c>MAX(IdSequence) + 1</c>.
+    /// Reserve the next ID-sequence value from the single-row
+    /// <see cref="BugFabIdCounter"/> allocator.
     /// The integer is formatted as the <c>bug-{prefix}{N:D3}</c> wire ID
     /// by the caller.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Provider-portable: works on SQL Server, PostgreSQL, SQLite, and the
-    /// InMemory test provider without provider-specific extensions or
-    /// sequence DDL. Bug-Fab's ID column is also auto-incremented at the
-    /// EF Core layer (<c>ValueGeneratedOnAdd</c> in
-    /// <see cref="BugFabDbContext.OnModelCreating"/>), so consumers
-    /// preferring identity-column behavior can drop this method and read
-    /// back the entity's <c>IdSequence</c> after <c>SaveChanges</c>.
+    /// The wire ID is the string primary key, so the number must be known
+    /// <em>before</em> the insert — the report can't read back a
+    /// database-assigned identity. The old <c>MAX(IdSequence) + 1</c> derived
+    /// it from live rows, which reissues the id of a deleted top row (delete
+    /// <c>bug-003</c>, the next insert computes <c>3</c> again) and races under
+    /// concurrent intake.
     /// </para>
     /// <para>
-    /// Concurrency caveat: <c>MAX + 1</c> races under highly concurrent
-    /// intake. Bug-Fab's expected volume (single-user / small-team) makes
-    /// this acceptable in practice — duplicate IDs trigger the PK uniqueness
-    /// constraint and the consumer retries. Tighter guarantees require a
-    /// provider-specific sequence (SQL Server <c>HiLo</c> via
-    /// <c>Microsoft.EntityFrameworkCore.SqlServer</c>, PostgreSQL identity
-    /// via <c>Npgsql.EntityFrameworkCore.PostgreSQL</c>) which the consumer
-    /// can enable in their own DbContext subclass.
+    /// The counter is monotonic, so a delete never rewinds it. On relational
+    /// providers it is bumped by an atomic <c>UPDATE ... SET last_value =
+    /// last_value + 1</c> (via <c>ExecuteUpdate</c>) so concurrent intake
+    /// cannot lose an increment either. The InMemory test provider has no
+    /// atomic SQL; there a read-modify-write still fixes id reuse (tests are
+    /// not concurrent). Mirrors the Python reference, Phoenix, and Rails.
     /// </para>
     /// </remarks>
     private static async Task<long> NextSequenceValueAsync(BugFabDbContext db, CancellationToken ct)
     {
-        var maxSeq = await db.BugReports
-            .Select(b => (long?)b.IdSequence)
-            .MaxAsync(ct)
+        // Seed the single counter row on first use, starting from the highest
+        // existing IdSequence so a database created under the old
+        // MAX(IdSequence)+1 scheme does not reissue a taken id.
+        var counter = await db.IdCounters
+            .FirstOrDefaultAsync(c => c.Id == 1, ct)
             .ConfigureAwait(false);
-        return (maxSeq ?? 0L) + 1L;
+        if (counter is null)
+        {
+            var maxSeq = await db.BugReports
+                .Select(b => (long?)b.IdSequence)
+                .MaxAsync(ct)
+                .ConfigureAwait(false) ?? 0L;
+            db.IdCounters.Add(new BugFabIdCounter { Id = 1, LastValue = maxSeq });
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+
+        if (db.Database.IsRelational())
+        {
+            await db.IdCounters
+                .Where(c => c.Id == 1)
+                .ExecuteUpdateAsync(s => s.SetProperty(c => c.LastValue, c => c.LastValue + 1), ct)
+                .ConfigureAwait(false);
+            return await db.IdCounters
+                .AsNoTracking()
+                .Where(c => c.Id == 1)
+                .Select(c => c.LastValue)
+                .FirstAsync(ct)
+                .ConfigureAwait(false);
+        }
+
+        // InMemory provider (tests): no atomic SQL, but read-modify-write still
+        // fixes id reuse — the counter never rewinds on delete.
+        var tracked = await db.IdCounters.FirstAsync(c => c.Id == 1, ct).ConfigureAwait(false);
+        tracked.LastValue += 1;
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        return tracked.LastValue;
     }
 
     private async Task<string> PersistScreenshotAsync(
